@@ -28,3 +28,30 @@ export interface AppEvent {
   timestampUnixMs: number;
   kind: string;
 }
+
+export type ThemePreference = "dark" | "light";
+export type DensityPreference = "comfortable" | "compact";
+
+export interface UiPreferences {
+  theme: ThemePreference;
+  density: DensityPreference;
+  editorFontSize: number;
+  navigationCollapsed: boolean;
+  inspectorCollapsed: boolean;
+  inspectorWidth: number;
+}
+
+export interface PreferencesRequest {
+  schemaVersion: number;
+  operationId: string;
+}
+
+export interface UpdatePreferencesRequest extends PreferencesRequest {
+  preferences: UiPreferences;
+}
+
+export interface PreferencesResponse {
+  schemaVersion: number;
+  operationId: string;
+  preferences: UiPreferences;
+}

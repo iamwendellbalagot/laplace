@@ -6,11 +6,17 @@ import {
   type IpcError,
   type PingRequest,
   type PingResponse,
+  type PreferencesRequest,
+  type PreferencesResponse,
+  type UiPreferences,
+  type UpdatePreferencesRequest,
 } from "./contracts";
 
 export interface AppService {
   ping(): Promise<PingResponse>;
   listen(listener: (event: AppEvent) => void): Promise<UnlistenFn>;
+  getPreferences(): Promise<UiPreferences>;
+  updatePreferences(preferences: UiPreferences): Promise<UiPreferences>;
 }
 
 export class AppServiceError extends Error implements IpcError {
@@ -42,6 +48,37 @@ export class TauriAppService implements AppService {
 
   listen(listener: (event: AppEvent) => void): Promise<UnlistenFn> {
     return listen<AppEvent>("app-event", (event) => listener(event.payload));
+  }
+
+  async getPreferences(): Promise<UiPreferences> {
+    const request: PreferencesRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+    };
+    try {
+      const response = await invoke<PreferencesResponse>("get_preferences", {
+        request,
+      });
+      return response.preferences;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async updatePreferences(preferences: UiPreferences): Promise<UiPreferences> {
+    const request: UpdatePreferencesRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      preferences,
+    };
+    try {
+      const response = await invoke<PreferencesResponse>("update_preferences", {
+        request,
+      });
+      return response.preferences;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 }
 

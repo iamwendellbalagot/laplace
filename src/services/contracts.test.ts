@@ -5,6 +5,7 @@ import type {
   IpcError,
   PingRequest,
   PingResponse,
+  UiPreferences,
 } from "./contracts";
 
 describe("shared Rust/TypeScript wire fixtures", () => {
@@ -13,10 +14,16 @@ describe("shared Rust/TypeScript wire fixtures", () => {
     const response: PingResponse = fixture.pingResponse;
     const error: IpcError = fixture.ipcError;
     const event: AppEvent = fixture.appEvent;
+    const preferences = fixture.uiPreferences as UiPreferences;
 
     expect(request.schemaVersion).toBe(1);
     expect(response.operationId).toBe(request.operationId);
     expect(error.code).toBe("invalid_operation_id");
     expect(event.operationId).toBe(request.operationId);
+    expect(preferences).toMatchObject({
+      theme: "dark",
+      density: "comfortable",
+      inspectorWidth: 286,
+    });
   });
 });

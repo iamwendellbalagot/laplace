@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppEvent, PingResponse } from "./contracts";
+import type { AppEvent, PingResponse, UiPreferences } from "./contracts";
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -16,6 +16,15 @@ const response: PingResponse = {
   operationId: "op-service-1",
   status: "ok",
   message: "Native command/event round trip succeeded.",
+};
+
+const preferences: UiPreferences = {
+  theme: "dark",
+  density: "comfortable",
+  editorFontSize: 12,
+  navigationCollapsed: false,
+  inspectorCollapsed: false,
+  inspectorWidth: 286,
 };
 
 beforeEach(() => {
@@ -77,5 +86,39 @@ describe("TauriAppService", () => {
       expect.any(Function),
     );
     expect(receive).toHaveBeenCalledWith(event);
+  });
+
+  it("loads persisted preferences through the native service boundary", async () => {
+    mocks.invoke.mockResolvedValue({
+      schemaVersion: 1,
+      operationId: "op-service-4",
+      preferences,
+    });
+
+    await expect(new TauriAppService().getPreferences()).resolves.toEqual(
+      preferences,
+    );
+    expect(mocks.invoke).toHaveBeenCalledWith("get_preferences", {
+      request: { schemaVersion: 1, operationId: expect.any(String) },
+    });
+  });
+
+  it("persists preferences through the native service boundary", async () => {
+    mocks.invoke.mockResolvedValue({
+      schemaVersion: 1,
+      operationId: "op-service-5",
+      preferences,
+    });
+
+    await expect(
+      new TauriAppService().updatePreferences(preferences),
+    ).resolves.toEqual(preferences);
+    expect(mocks.invoke).toHaveBeenCalledWith("update_preferences", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        preferences,
+      },
+    });
   });
 });

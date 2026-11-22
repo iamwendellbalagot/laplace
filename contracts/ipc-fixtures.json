@@ -23,5 +23,13 @@
     "sequence": 1,
     "timestampUnixMs": 1700000000000,
     "kind": "ping_completed"
+  },
+  "uiPreferences": {
+    "theme": "dark",
+    "density": "comfortable",
+    "editorFontSize": 12,
+    "navigationCollapsed": false,
+    "inspectorCollapsed": false,
+    "inspectorWidth": 286
   }
 }
