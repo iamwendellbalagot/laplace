@@ -14,7 +14,7 @@ Open a real local project and navigate its files safely. Repository trust and pa
 - [ ] Add trust/authorization UX before project tooling or setup is executed; opening files remains available without running code.
 - [x] Detect Git/project roots, including an already-open worktree with a `.git` file; do not assume every folder is a Git repository.
 - [x] Implement lazy one-directory-at-a-time explorer loading and keyboard-operable directory expansion.
-- [ ] Add `.gitignore`/user ignore policy, refresh, and selected-file navigation; current static exclusions are `.git`, `.rook`, `node_modules`, `target`, and `dist`.
+- [ ] Add `.gitignore`/user ignore policy; refresh and read-only selected-file preview are implemented. Current static exclusions are `.git`, `.rook`, `node_modules`, `target`, and `dist`.
 - [ ] Add file creation/rename/delete with confirmations appropriate to risk; protect open dirty documents.
 - [x] Implement bounded read-only file previews (1 MiB limit), binary/large-file detection, and explicit fallback states.
 - [ ] Centralize cross-platform URI/path conversion; backend path-component, canonical-path, and symlink root-boundary checks are implemented for directory listing.

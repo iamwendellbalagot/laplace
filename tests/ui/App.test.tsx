@@ -100,6 +100,15 @@ describe("reference application shell", () => {
     expect(screen.getByText("README.md")).toBeInTheDocument();
     expect(service.openProject).toHaveBeenCalledWith(project.path);
     expect(service.listProjectEntries).toHaveBeenCalledWith(project.id);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh project folder" }),
+    );
+    await waitFor(() =>
+      expect(service.listProjectEntries).toHaveBeenLastCalledWith(
+        project.id,
+        "",
+      ),
+    );
     fireEvent.click(screen.getByRole("button", { name: "src" }));
     await waitFor(() =>
       expect(service.listProjectEntries).toHaveBeenLastCalledWith(

@@ -811,6 +811,15 @@ function EditorScreen(props: ScreenContentProps) {
             <button
               className="icon-button"
               type="button"
+              aria-label="Refresh project folder"
+              title="Refresh this folder"
+              onClick={() => void onOpenProjectDirectory(projectDirectory)}
+            >
+              ↻
+            </button>
+            <button
+              className="icon-button"
+              type="button"
               aria-label="Open another project folder"
               disabled={projectPending}
               onClick={() => onOpenProject()}
