@@ -1,0 +1,11 @@
+.git/
+.rook/
+node_modules/
+dist/
+experiments/
+laplace-html-mockup/
+plan/
+src-tauri/
+status.md
+agents.md
+LICENSE

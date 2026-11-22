@@ -1,0 +1,27 @@
+{
+  "pingRequest": {
+    "schemaVersion": 1,
+    "operationId": "op-fixture-1"
+  },
+  "pingResponse": {
+    "schemaVersion": 1,
+    "operationId": "op-fixture-1",
+    "status": "ok",
+    "message": "Native command/event round trip succeeded."
+  },
+  "ipcError": {
+    "schemaVersion": 1,
+    "code": "invalid_operation_id",
+    "message": "operationId must contain 1–64 ASCII letters, digits, hyphens, or underscores.",
+    "operationId": "",
+    "retryable": false
+  },
+  "appEvent": {
+    "schemaVersion": 1,
+    "operationId": "op-fixture-1",
+    "workspaceId": null,
+    "sequence": 1,
+    "timestampUnixMs": 1700000000000,
+    "kind": "ping_completed"
+  }
+}

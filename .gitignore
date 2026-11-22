@@ -1,0 +1,10 @@
+.DS_Store
+.rook/
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+experiments/**/node_modules/
+experiments/**/dist/
+experiments/**/target/
+experiments/**/__pycache__/
