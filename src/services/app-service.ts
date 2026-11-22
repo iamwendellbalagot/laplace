@@ -15,6 +15,9 @@ import {
   type ProjectSummary,
   type ProjectsRequest,
   type RecentProjectsResponse,
+  type ProjectFileRead,
+  type ReadProjectFileRequest,
+  type ReadProjectFileResponse,
   type PreferencesRequest,
   type PreferencesResponse,
   type UiPreferences,
@@ -33,6 +36,10 @@ export interface AppService {
     projectId: string,
     relativePath?: string,
   ): Promise<ProjectDirectoryListing>;
+  readProjectFile(
+    projectId: string,
+    relativePath: string,
+  ): Promise<ProjectFileRead>;
 }
 
 export class AppServiceError extends Error implements IpcError {
@@ -154,6 +161,29 @@ export class TauriAppService implements AppService {
         { request },
       );
       return { entries: response.entries, truncated: response.truncated };
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async readProjectFile(
+    projectId: string,
+    relativePath: string,
+  ): Promise<ProjectFileRead> {
+    const request: ReadProjectFileRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      relativePath,
+    };
+    try {
+      const response = await invoke<ReadProjectFileResponse>(
+        "read_project_file",
+        {
+          request,
+        },
+      );
+      return response.file;
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

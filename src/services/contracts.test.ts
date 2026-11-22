@@ -7,6 +7,7 @@ import type {
   PingResponse,
   ProjectEntry,
   ProjectSummary,
+  ProjectFileRead,
   UiPreferences,
 } from "./contracts";
 
@@ -19,6 +20,7 @@ describe("shared Rust/TypeScript wire fixtures", () => {
     const preferences = fixture.uiPreferences as UiPreferences;
     const project: ProjectSummary = fixture.projectSummary;
     const entry = fixture.projectEntry as ProjectEntry;
+    const fileRead = fixture.projectFileRead as ProjectFileRead;
 
     expect(request.schemaVersion).toBe(1);
     expect(response.operationId).toBe(request.operationId);
@@ -31,5 +33,6 @@ describe("shared Rust/TypeScript wire fixtures", () => {
     });
     expect(project.id).toBe(project.path);
     expect(entry.kind).toBe("directory");
+    expect(fileRead.kind).toBe("text");
   });
 });

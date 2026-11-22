@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     fs,
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -16,6 +17,7 @@ static PREFERENCES_LOCK: Mutex<()> = Mutex::new(());
 static RECENT_PROJECTS_LOCK: Mutex<()> = Mutex::new(());
 const MAX_RECENT_PROJECTS: usize = 12;
 const MAX_DIRECTORY_ENTRIES: usize = 1_000;
+const MAX_PROJECT_FILE_BYTES: u64 = 1_048_576;
 const IGNORED_DIRECTORY_NAMES: &[&str] = &[".git", ".rook", "node_modules", "target", "dist"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,6 +192,39 @@ pub struct ProjectEntriesResponse {
     pub operation_id: String,
     pub entries: Vec<ProjectEntry>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectFileReadKind {
+    Text,
+    Binary,
+    TooLarge,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFileRead {
+    pub kind: ProjectFileReadKind,
+    pub size_bytes: u64,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadProjectFileRequest {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub project_id: String,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadProjectFileResponse {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub file: ProjectFileRead,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -759,6 +794,141 @@ fn read_project_entries(
     Ok((entries, truncated))
 }
 
+fn read_project_file_contents(
+    project_id: &str,
+    relative_path: &str,
+) -> Result<ProjectFileRead, IpcError> {
+    let relative = Path::new(relative_path);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(IpcError::new(
+            "invalid_relative_path",
+            "Select a file inside the open project.",
+            String::new(),
+            false,
+        ));
+    }
+    let root = fs::canonicalize(project_id).map_err(|_| {
+        IpcError::new(
+            "project_unavailable",
+            "The project folder is no longer available. Reopen it from the folder picker.",
+            String::new(),
+            true,
+        )
+    })?;
+    let mut path = root.clone();
+    for component in relative.components() {
+        if let Component::Normal(name) = component {
+            path.push(name);
+            let link_metadata = fs::symlink_metadata(&path).map_err(|_| {
+                IpcError::new(
+                    "project_file_unavailable",
+                    "That file is no longer available inside the project.",
+                    String::new(),
+                    true,
+                )
+            })?;
+            if link_metadata.file_type().is_symlink() {
+                return Err(IpcError::new(
+                    "project_file_symlink",
+                    "Symbolic links are not followed by the project preview.",
+                    String::new(),
+                    false,
+                ));
+            }
+        }
+    }
+    let canonical = fs::canonicalize(&path).map_err(|_| {
+        IpcError::new(
+            "project_file_unavailable",
+            "That file is no longer available inside the project.",
+            String::new(),
+            true,
+        )
+    })?;
+    if !canonical.starts_with(&root) {
+        return Err(IpcError::new(
+            "project_path_escape",
+            "The requested file resolves outside the open project.",
+            String::new(),
+            false,
+        ));
+    }
+    let metadata = fs::metadata(&canonical).map_err(|_| {
+        IpcError::new(
+            "project_file_read_failed",
+            "This project file could not be inspected.",
+            String::new(),
+            true,
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(IpcError::new(
+            "project_entry_not_file",
+            "Select a regular file to preview.",
+            String::new(),
+            false,
+        ));
+    }
+    if metadata.len() > MAX_PROJECT_FILE_BYTES {
+        return Ok(ProjectFileRead {
+            kind: ProjectFileReadKind::TooLarge,
+            size_bytes: metadata.len(),
+            content: None,
+        });
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut file = fs::File::open(canonical).map_err(|_| {
+        IpcError::new(
+            "project_file_read_failed",
+            "This project file could not be read.",
+            String::new(),
+            true,
+        )
+    })?;
+    file.by_ref()
+        .take(MAX_PROJECT_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            IpcError::new(
+                "project_file_read_failed",
+                "This project file could not be read.",
+                String::new(),
+                true,
+            )
+        })?;
+    if bytes.len() as u64 > MAX_PROJECT_FILE_BYTES {
+        return Ok(ProjectFileRead {
+            kind: ProjectFileReadKind::TooLarge,
+            size_bytes: bytes.len() as u64,
+            content: None,
+        });
+    }
+    if bytes.contains(&0) {
+        return Ok(ProjectFileRead {
+            kind: ProjectFileReadKind::Binary,
+            size_bytes: bytes.len() as u64,
+            content: None,
+        });
+    }
+    match String::from_utf8(bytes) {
+        Ok(content) => Ok(ProjectFileRead {
+            kind: ProjectFileReadKind::Text,
+            size_bytes: content.len() as u64,
+            content: Some(content),
+        }),
+        Err(error) => Ok(ProjectFileRead {
+            kind: ProjectFileReadKind::Binary,
+            size_bytes: error.as_bytes().len() as u64,
+            content: None,
+        }),
+    }
+}
+
 #[tauri::command]
 async fn open_project(
     app: tauri::AppHandle,
@@ -836,6 +1006,28 @@ async fn list_project_entries(
     })
 }
 
+#[tauri::command]
+async fn read_project_file(
+    request: ReadProjectFileRequest,
+) -> Result<ReadProjectFileResponse, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(IpcError::new(
+            "invalid_project_request",
+            "The project request is invalid or uses an unsupported schema.",
+            request.operation_id,
+            false,
+        ));
+    }
+    let file = read_project_file_contents(&request.project_id, &request.relative_path)
+        .map_err(|error| preferences_error_with_operation(error, &request.operation_id))?;
+    Ok(ReadProjectFileResponse {
+        schema_version: IPC_SCHEMA_VERSION,
+        operation_id: request.operation_id,
+        file,
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -845,7 +1037,8 @@ pub fn run() {
             update_preferences,
             open_project,
             get_recent_projects,
-            list_project_entries
+            list_project_entries,
+            read_project_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Laplace desktop application");
@@ -898,6 +1091,11 @@ mod tests {
             relative_path: "src".to_owned(),
             kind: ProjectEntryKind::Directory,
         };
+        let project_file_read = ProjectFileRead {
+            kind: ProjectFileReadKind::Text,
+            size_bytes: 11,
+            content: Some("export {};\n".to_owned()),
+        };
 
         assert_eq!(
             serde_json::to_value(request).unwrap(),
@@ -920,6 +1118,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(project_entry).unwrap(),
             fixture["projectEntry"]
+        );
+        assert_eq!(
+            serde_json::to_value(project_file_read).unwrap(),
+            fixture["projectFileRead"]
         );
     }
 
@@ -982,21 +1184,27 @@ mod tests {
     #[test]
     fn opens_non_git_folder_with_canonical_identity_and_remembers_recently() {
         let directory = std::env::temp_dir().join(format!(
-            "laplace-project-test-{}-unicode folder",
+            "laplace-project-test-{}-unicode café folder",
             std::process::id()
         ));
+        let missing_directory = directory.with_extension("missing");
         let history_path = directory.with_extension("history.json");
         let _ = fs::remove_dir_all(&directory);
+        let _ = fs::remove_dir_all(&missing_directory);
         let _ = fs::remove_file(&history_path);
         fs::create_dir_all(&directory).unwrap();
 
+        assert_eq!(
+            project_summary(&missing_directory, 0).unwrap_err().code,
+            "project_unavailable"
+        );
         let mut projects = Vec::new();
         let project = open_project_path(&directory, &mut projects).unwrap();
         assert_eq!(
             project.id,
             fs::canonicalize(&directory).unwrap().to_str().unwrap()
         );
-        assert!(project.name.ends_with("unicode folder"));
+        assert!(project.name.ends_with("unicode café folder"));
         assert!(!project.is_git_repository);
         assert_eq!(projects, vec![project.clone()]);
 
@@ -1103,6 +1311,12 @@ mod tests {
                 .code,
             "project_path_escape"
         );
+        assert_eq!(
+            read_project_file_contents(directory.to_str().unwrap(), "external/secret.txt")
+                .unwrap_err()
+                .code,
+            "project_file_symlink"
+        );
         let _ = fs::remove_dir_all(directory);
         let _ = fs::remove_dir_all(outside);
     }
@@ -1122,6 +1336,41 @@ mod tests {
         let (entries, truncated) = read_project_entries(directory.to_str().unwrap(), "").unwrap();
         assert_eq!(entries.len(), MAX_DIRECTORY_ENTRIES);
         assert!(truncated);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn reads_bounded_utf8_and_classifies_binary_and_oversized_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "laplace-project-file-read-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("source.ts"), "const café = true;\n").unwrap();
+        fs::write(directory.join("image.bin"), [0, 1, 2, 3]).unwrap();
+        fs::write(
+            directory.join("large.dat"),
+            vec![b'x'; (MAX_PROJECT_FILE_BYTES + 1) as usize],
+        )
+        .unwrap();
+
+        let text = read_project_file_contents(directory.to_str().unwrap(), "source.ts").unwrap();
+        assert_eq!(text.kind, ProjectFileReadKind::Text);
+        assert_eq!(text.content.as_deref(), Some("const café = true;\n"));
+        let binary = read_project_file_contents(directory.to_str().unwrap(), "image.bin").unwrap();
+        assert_eq!(binary.kind, ProjectFileReadKind::Binary);
+        assert_eq!(binary.content, None);
+        let large = read_project_file_contents(directory.to_str().unwrap(), "large.dat").unwrap();
+        assert_eq!(large.kind, ProjectFileReadKind::TooLarge);
+        assert_eq!(large.size_bytes, MAX_PROJECT_FILE_BYTES + 1);
+        assert_eq!(
+            read_project_file_contents(directory.to_str().unwrap(), "../outside")
+                .unwrap_err()
+                .code,
+            "invalid_relative_path"
+        );
+
         let _ = fs::remove_dir_all(directory);
     }
 }

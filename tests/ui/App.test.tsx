@@ -9,6 +9,7 @@ import type {
   AppEvent,
   PingResponse,
   ProjectEntry,
+  ProjectFileRead,
   ProjectSummary,
   UiPreferences,
 } from "../../src/services/contracts";
@@ -34,6 +35,12 @@ const entries: ProjectEntry[] = [
   { name: "README.md", relativePath: "README.md", kind: "file" },
 ];
 
+const textPreview: ProjectFileRead = {
+  kind: "text",
+  sizeBytes: 13,
+  content: "hello, Laplace!",
+};
+
 function serviceFixture(overrides: Partial<AppService> = {}) {
   let receiveEvent: ((event: AppEvent) => void) | undefined;
   const service: AppService = {
@@ -50,6 +57,7 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     openProject: vi.fn(async () => project),
     getRecentProjects: vi.fn(async () => []),
     listProjectEntries: vi.fn(async () => ({ entries, truncated: false })),
+    readProjectFile: vi.fn(async () => textPreview),
     ...overrides,
   };
   return { service, emit: (event: AppEvent) => receiveEvent?.(event) };
@@ -98,6 +106,14 @@ describe("reference application shell", () => {
         project.id,
         "src",
       ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }));
+    expect(
+      await screen.findByText("hello, Laplace!", { selector: "pre" }),
+    ).toBeInTheDocument();
+    expect(service.readProjectFile).toHaveBeenCalledWith(
+      project.id,
+      "src/README.md",
     );
     expect(service.ping).not.toHaveBeenCalled();
   });

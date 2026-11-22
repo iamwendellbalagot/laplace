@@ -1,6 +1,6 @@
 # 04 — Projects and filesystem
 
-Status: In progress — native folder-picker integration, canonical project/recent records, and a bounded read-only one-level explorer are implemented. Native picker smoke, cross-platform path cases, and remaining filesystem features are open.
+Status: In progress — native folder-picker integration, canonical project/recent records, bounded read-only explorer, and 1 MiB UTF-8 preview are implemented. Native picker smoke, cross-platform path cases, and remaining filesystem features are open.
 Depends on: [03](03-ui-shell.md)
 Next: [05 — Editor and TypeScript](05-editor-typescript.md)
 
@@ -16,7 +16,7 @@ Open a real local project and navigate its files safely. Repository trust and pa
 - [x] Implement lazy one-directory-at-a-time explorer loading and keyboard-operable directory expansion.
 - [ ] Add `.gitignore`/user ignore policy, refresh, and selected-file navigation; current static exclusions are `.git`, `.rook`, `node_modules`, `target`, and `dist`.
 - [ ] Add file creation/rename/delete with confirmations appropriate to risk; protect open dirty documents.
-- [ ] Implement bounded file reads with binary/large-file detection and actionable fallback states.
+- [x] Implement bounded read-only file previews (1 MiB limit), binary/large-file detection, and explicit fallback states.
 - [ ] Centralize cross-platform URI/path conversion; backend path-component, canonical-path, and symlink root-boundary checks are implemented for directory listing.
 - [ ] Integrate notify with debounce/coalescing, ignore rules, overflow/full-rescan recovery.
 - [ ] Expose external create/rename/delete/edit events without silently overwriting unsaved buffers.
@@ -38,4 +38,4 @@ Use Editor explorer/project selector/status bar. Replace atlas/api sample labels
 
 Record supported file encodings/layout limitations, trust behavior, and OS filesystem checks.
 
-Current limitations: the explorer shows at most 1,000 entries per directory and reports truncation; it does not follow symlinks, read file contents, or apply repository `.gitignore` rules. Project identity is the canonical Unicode path; non-Unicode filesystem paths are reported unsupported. The native folder picker, Windows drive/case behavior, Linux portals, and OS accessibility behavior still require native checks.
+Current limitations: the explorer shows at most 1,000 entries per directory and reports truncation; it does not follow symlinks or apply repository `.gitignore` rules. File preview reads at most 1 MiB, classifies NUL/invalid-UTF-8 data as binary, and does not edit or save. Project identity is the canonical Unicode path; non-Unicode filesystem paths are reported unsupported. The native folder picker, Windows drive/case behavior, Linux portals, and OS accessibility behavior still require native checks.

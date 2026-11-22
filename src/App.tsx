@@ -10,6 +10,7 @@ import { AppServiceError, type AppService } from "./services/app-service";
 import type {
   AppEvent,
   ProjectEntry,
+  ProjectFileRead,
   ProjectSummary,
   UiPreferences,
 } from "./services/contracts";
@@ -45,6 +46,8 @@ export function App({ service }: AppProps) {
   const [projectPending, setProjectPending] = useState(false);
   const [projectError, setProjectError] = useState<string>();
   const [projectDirectory, setProjectDirectory] = useState("");
+  const [selectedFilePath, setSelectedFilePath] = useState<string>();
+  const [selectedFile, setSelectedFile] = useState<ProjectFileRead>();
 
   useEffect(() => {
     let mounted = true;
@@ -105,6 +108,8 @@ export function App({ service }: AppProps) {
       setProjectEntries(listing.entries);
       setProjectEntriesTruncated(listing.truncated);
       setProjectDirectory("");
+      setSelectedFilePath(undefined);
+      setSelectedFile(undefined);
       setRecentProjects((projects) =>
         [
           project,
@@ -134,11 +139,35 @@ export function App({ service }: AppProps) {
       setProjectEntries(listing.entries);
       setProjectEntriesTruncated(listing.truncated);
       setProjectDirectory(relativePath);
+      setSelectedFilePath(undefined);
+      setSelectedFile(undefined);
     } catch (error) {
       setProjectError(
         error instanceof Error
           ? error.message
           : "That project folder could not be read.",
+      );
+    }
+  }
+
+  async function openProjectFile(relativePath: string) {
+    if (!activeProject) return;
+    const fullRelativePath = [projectDirectory, relativePath]
+      .filter(Boolean)
+      .join("/");
+    setProjectError(undefined);
+    setSelectedFilePath(fullRelativePath);
+    setSelectedFile(undefined);
+    try {
+      setSelectedFile(
+        await service.readProjectFile(activeProject.id, fullRelativePath),
+      );
+    } catch (error) {
+      setSelectedFilePath(undefined);
+      setProjectError(
+        error instanceof Error
+          ? error.message
+          : "This project file could not be previewed.",
       );
     }
   }
@@ -418,10 +447,13 @@ export function App({ service }: AppProps) {
             projectEntries={projectEntries}
             projectEntriesTruncated={projectEntriesTruncated}
             projectDirectory={projectDirectory}
+            selectedFilePath={selectedFilePath}
+            selectedFile={selectedFile}
             projectPending={projectPending}
             projectError={projectError}
             onOpenProject={openProject}
             onOpenProjectDirectory={openProjectDirectory}
+            onOpenProjectFile={openProjectFile}
           />
         </main>
       </div>
@@ -601,10 +633,13 @@ interface ScreenContentProps {
   projectEntries: ProjectEntry[];
   projectEntriesTruncated: boolean;
   projectDirectory: string;
+  selectedFilePath?: string;
+  selectedFile?: ProjectFileRead;
   projectPending: boolean;
   projectError?: string;
   onOpenProject: (path?: string) => void;
   onOpenProjectDirectory: (relativePath: string) => void;
+  onOpenProjectFile: (relativePath: string) => void;
 }
 
 function ScreenContent(props: ScreenContentProps) {
@@ -746,9 +781,12 @@ function EditorScreen(props: ScreenContentProps) {
     projectEntries,
     projectEntriesTruncated,
     projectDirectory,
+    selectedFilePath,
+    selectedFile,
     projectPending,
     onOpenProject,
     onOpenProjectDirectory,
+    onOpenProjectFile,
   } = props;
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
   const draftWidthRef = useRef(preferences.inspectorWidth);
@@ -817,20 +855,24 @@ function EditorScreen(props: ScreenContentProps) {
                   <span aria-hidden="true">▸</span>
                   <span>{entry.name}</span>
                 </button>
+              ) : entry.kind === "file" ? (
+                <button
+                  className={`explorer-entry explorer-file${selectedFilePath === [projectDirectory, entry.relativePath].filter(Boolean).join("/") ? " explorer-file-active" : ""}`}
+                  key={entry.relativePath}
+                  type="button"
+                  onClick={() => onOpenProjectFile(entry.relativePath)}
+                >
+                  <span aria-hidden="true">·</span>
+                  <span>{entry.name}</span>
+                </button>
               ) : (
                 <div
-                  className={`explorer-entry${entry.kind === "symlink" ? " explorer-symlink" : ""}`}
+                  className="explorer-entry explorer-symlink"
                   key={entry.relativePath}
                   role="listitem"
-                  title={
-                    entry.kind === "symlink"
-                      ? "Symbolic links are not followed in the explorer."
-                      : "File reading and editing arrive in Plan 05."
-                  }
+                  title="Symbolic links are not followed in the explorer."
                 >
-                  <span aria-hidden="true">
-                    {entry.kind === "symlink" ? "↗" : "·"}
-                  </span>
+                  <span aria-hidden="true">↗</span>
                   <span>{entry.name}</span>
                 </div>
               ),
@@ -861,37 +903,73 @@ function EditorScreen(props: ScreenContentProps) {
           </span>
         </div>
         <div className="editor-placeholder-center">
-          <span className="editor-placeholder-mark" aria-hidden="true">
-            ⌘
-          </span>
-          <h1 id="screen-title">
-            {activeProject
-              ? "Project files are ready."
-              : "Your source belongs here."}
-          </h1>
-          <p>
-            {activeProject
-              ? "Folders can be browsed without running project code. File reading and editing are the next step."
-              : "Open a local project to browse its folders. Opening never runs project code or agent tools."}
-          </p>
-          <button
-            className="button button-quiet"
-            type="button"
-            disabled={projectPending}
-            onClick={() => onOpenProject()}
-          >
-            {projectPending
-              ? "Opening…"
-              : activeProject
-                ? "Open another folder"
-                : "Open project folder"}
-          </button>
+          {selectedFilePath && selectedFile ? (
+            <article
+              className="file-preview"
+              aria-label="Read-only file preview"
+            >
+              <div className="file-preview-heading">
+                <span className="eyebrow">Read-only preview</span>
+                <span className="status-pill">
+                  {selectedFile.sizeBytes.toLocaleString()} bytes
+                </span>
+              </div>
+              <h1 id="screen-title">
+                {selectedFilePath.split(/[\\/]/).at(-1)}
+              </h1>
+              {selectedFile.kind === "text" ? (
+                <pre>{selectedFile.content}</pre>
+              ) : (
+                <p role="status">
+                  {selectedFile.kind === "binary"
+                    ? "This file appears to be binary and is not displayed as text."
+                    : "This file exceeds the 1 MiB preview limit. Narrow or inspect it with another tool."}
+                </p>
+              )}
+              <p className="file-preview-path">{selectedFilePath}</p>
+            </article>
+          ) : selectedFilePath ? (
+            <p role="status">Reading selected file…</p>
+          ) : (
+            <>
+              <span className="editor-placeholder-mark" aria-hidden="true">
+                ⌘
+              </span>
+              <h1 id="screen-title">
+                {activeProject
+                  ? "Project files are ready."
+                  : "Your source belongs here."}
+              </h1>
+              <p>
+                {activeProject
+                  ? "Folders can be browsed and small UTF-8 text files previewed without running project code. Editing arrives in Plan 05."
+                  : "Open a local project to browse its folders. Opening never runs project code or agent tools."}
+              </p>
+              <button
+                className="button button-quiet"
+                type="button"
+                disabled={projectPending}
+                onClick={() => onOpenProject()}
+              >
+                {projectPending
+                  ? "Opening…"
+                  : activeProject
+                    ? "Open another folder"
+                    : "Open project folder"}
+              </button>
+            </>
+          )}
         </div>
         <div className="editor-placeholder-footer">
           <span>
-            {projectDirectory || activeProject?.path || "No folder selected"}
+            {selectedFilePath ||
+              projectDirectory ||
+              activeProject?.path ||
+              "No folder selected"}
           </span>
-          <span>File reading/editing · Plan 05</span>
+          <span>
+            {selectedFilePath ? "Read-only preview" : "Editing · Plan 05"}
+          </span>
         </div>
       </div>
       {!preferences.inspectorCollapsed && (

@@ -109,3 +109,22 @@ export interface ProjectDirectoryListing {
   entries: ProjectEntry[];
   truncated: boolean;
 }
+
+export type ProjectFileReadKind = "text" | "binary" | "too_large";
+
+export interface ProjectFileRead {
+  kind: ProjectFileReadKind;
+  sizeBytes: number;
+  content: string | null;
+}
+
+export interface ReadProjectFileRequest extends ProjectsRequest {
+  projectId: string;
+  relativePath: string;
+}
+
+export interface ReadProjectFileResponse {
+  schemaVersion: number;
+  operationId: string;
+  file: ProjectFileRead;
+}

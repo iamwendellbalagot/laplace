@@ -43,5 +43,10 @@
     "name": "src",
     "relativePath": "src",
     "kind": "directory"
+  },
+  "projectFileRead": {
+    "kind": "text",
+    "sizeBytes": 11,
+    "content": "export {};\n"
   }
 }

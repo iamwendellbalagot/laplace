@@ -191,4 +191,29 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("reads one project file through the bounded native reader", async () => {
+    const file = {
+      kind: "text",
+      sizeBytes: 11,
+      content: "export {};\n",
+    } as const;
+    mocks.invoke.mockResolvedValue({
+      schemaVersion: 1,
+      operationId: "op-project-file-1",
+      file,
+    });
+
+    await expect(
+      new TauriAppService().readProjectFile("/tmp/example", "src/index.ts"),
+    ).resolves.toEqual(file);
+    expect(mocks.invoke).toHaveBeenCalledWith("read_project_file", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/tmp/example",
+        relativePath: "src/index.ts",
+      },
+    });
+  });
 });
