@@ -31,5 +31,17 @@
     "navigationCollapsed": false,
     "inspectorCollapsed": false,
     "inspectorWidth": 286
+  },
+  "projectSummary": {
+    "id": "/fixture/project",
+    "name": "project",
+    "path": "/fixture/project",
+    "isGitRepository": true,
+    "lastOpenedUnixMs": 1700000000000
+  },
+  "projectEntry": {
+    "name": "src",
+    "relativePath": "src",
+    "kind": "directory"
   }
 }

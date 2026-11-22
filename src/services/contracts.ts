@@ -55,3 +55,57 @@ export interface PreferencesResponse {
   operationId: string;
   preferences: UiPreferences;
 }
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  path: string;
+  isGitRepository: boolean;
+  lastOpenedUnixMs: number;
+}
+
+export type ProjectEntryKind = "directory" | "file" | "symlink";
+
+export interface ProjectEntry {
+  name: string;
+  relativePath: string;
+  kind: ProjectEntryKind;
+}
+
+export interface ProjectsRequest {
+  schemaVersion: number;
+  operationId: string;
+}
+
+export interface OpenProjectRequest extends ProjectsRequest {
+  path: string;
+}
+
+export interface ListProjectEntriesRequest extends ProjectsRequest {
+  projectId: string;
+  relativePath: string;
+}
+
+export interface OpenProjectResponse {
+  schemaVersion: number;
+  operationId: string;
+  project: ProjectSummary;
+}
+
+export interface RecentProjectsResponse {
+  schemaVersion: number;
+  operationId: string;
+  projects: ProjectSummary[];
+}
+
+export interface ProjectEntriesResponse {
+  schemaVersion: number;
+  operationId: string;
+  entries: ProjectEntry[];
+  truncated: boolean;
+}
+
+export interface ProjectDirectoryListing {
+  entries: ProjectEntry[];
+  truncated: boolean;
+}

@@ -7,7 +7,7 @@ UI reference: `laplace-html-mockup/` in the Laplace repository
 
 ## Plan organization
 
-This file, `plan/plan.md`, is the authoritative roadmap. Shared references define architecture and UI rules; numbered documents break implementation into sequential checkpoints.
+This file, `plan/plan.md`, is the authoritative roadmap. Shared references define architecture and UI rules; numbered documents break implementation into sequential checkpoints. Plan 04 began under the user's explicit instruction to continue through the roadmap while Plan 03's visual/native acceptance checks remain open; those gaps remain documented and are not treated as passing.
 
 The former root `plan.md` is preserved unchanged in [archive/original-plan.md](archive/original-plan.md) for historical reference, not as a second active plan. The [HTML UI mockup](../laplace-html-mockup/README.md) remains unchanged. Plan 02's scaffold-only gate passed on macOS; Plan 03's shell implementation is underway, with native visual/accessibility acceptance outstanding.
 
@@ -35,7 +35,7 @@ Each numbered document is an implementation checkpoint, not one giant commit. Br
 | 01 | [Feasibility and contracts](01-feasibility.md) | Platform proofs, Rook capability matrix, decisions | In progress — Rook package verified; platform gates pending |
 | 02 | [Bootstrap and typed boundaries](02-bootstrap.md) | Runnable desktop scaffold and native CI | Complete for scaffold-only exception — macOS native smoke passed; cross-platform validation remains under 01 |
 | 03 | [Reference UI shell](03-ui-shell.md) | Faithful React shell, themes, commands | Implementation in place; visual/native accessibility exit checks open |
-| 04 | [Projects and filesystem](04-projects-filesystem.md) | Real project opening, explorer, trust, watchers | Not started |
+| 04 | [Projects and filesystem](04-projects-filesystem.md) | Real project opening, explorer, trust, watchers | In progress — safe folder open/recent list/read-only bounded explorer; native smoke and remaining filesystem work pending |
 | 05 | [Editor and TypeScript](05-editor-typescript.md) | Real editing, recovery, language services | Not started |
 | 06 | [Terminal and Git](06-terminal-git.md) | Real shells, processes, status, diffs | Not started |
 | 07 | [Persistent Changes](07-changes-persistence.md) | Durable domain, Change register, recovery | Not started |

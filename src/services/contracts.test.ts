@@ -5,6 +5,8 @@ import type {
   IpcError,
   PingRequest,
   PingResponse,
+  ProjectEntry,
+  ProjectSummary,
   UiPreferences,
 } from "./contracts";
 
@@ -15,6 +17,8 @@ describe("shared Rust/TypeScript wire fixtures", () => {
     const error: IpcError = fixture.ipcError;
     const event: AppEvent = fixture.appEvent;
     const preferences = fixture.uiPreferences as UiPreferences;
+    const project: ProjectSummary = fixture.projectSummary;
+    const entry = fixture.projectEntry as ProjectEntry;
 
     expect(request.schemaVersion).toBe(1);
     expect(response.operationId).toBe(request.operationId);
@@ -25,5 +29,7 @@ describe("shared Rust/TypeScript wire fixtures", () => {
       density: "comfortable",
       inspectorWidth: 286,
     });
+    expect(project.id).toBe(project.path);
+    expect(entry.kind).toBe("directory");
   });
 });

@@ -7,7 +7,12 @@ import type {
 import * as Dialog from "@radix-ui/react-dialog";
 import { navigationItems, screenTitles } from "./app/navigation";
 import { AppServiceError, type AppService } from "./services/app-service";
-import type { AppEvent, UiPreferences } from "./services/contracts";
+import type {
+  AppEvent,
+  ProjectEntry,
+  ProjectSummary,
+  UiPreferences,
+} from "./services/contracts";
 import { useAppStore, type PageId } from "./state/app-store";
 
 interface AppProps {
@@ -33,6 +38,13 @@ export function App({ service }: AppProps) {
   const [nativeError, setNativeError] = useState<AppServiceError>();
   const [nativeEvent, setNativeEvent] = useState<AppEvent>();
   const [nativePending, setNativePending] = useState(false);
+  const [activeProject, setActiveProject] = useState<ProjectSummary>();
+  const [projectEntries, setProjectEntries] = useState<ProjectEntry[]>([]);
+  const [projectEntriesTruncated, setProjectEntriesTruncated] = useState(false);
+  const [recentProjects, setRecentProjects] = useState<ProjectSummary[]>([]);
+  const [projectPending, setProjectPending] = useState(false);
+  const [projectError, setProjectError] = useState<string>();
+  const [projectDirectory, setProjectDirectory] = useState("");
 
   useEffect(() => {
     let mounted = true;
@@ -46,6 +58,14 @@ export function App({ service }: AppProps) {
         if (mounted) {
           setPreferencesError("Saved display preferences could not be loaded.");
         }
+      });
+    void service
+      .getRecentProjects()
+      .then((projects) => {
+        if (mounted) setRecentProjects(projects);
+      })
+      .catch(() => {
+        if (mounted) setProjectError("Recent projects could not be loaded.");
       });
     void service
       .listen((event) => {
@@ -72,6 +92,56 @@ export function App({ service }: AppProps) {
       unlisten?.();
     };
   }, [service, setPreferences]);
+
+  async function openProject(path?: string) {
+    setProjectPending(true);
+    setProjectError(undefined);
+    try {
+      const selectedPath = path ?? (await service.chooseProjectDirectory());
+      if (!selectedPath) return;
+      const project = await service.openProject(selectedPath);
+      const listing = await service.listProjectEntries(project.id);
+      setActiveProject(project);
+      setProjectEntries(listing.entries);
+      setProjectEntriesTruncated(listing.truncated);
+      setProjectDirectory("");
+      setRecentProjects((projects) =>
+        [
+          project,
+          ...projects.filter((recent) => recent.id !== project.id),
+        ].slice(0, 12),
+      );
+      navigate("editor");
+    } catch (error) {
+      setProjectError(
+        error instanceof Error
+          ? error.message
+          : "The selected project could not be opened.",
+      );
+    } finally {
+      setProjectPending(false);
+    }
+  }
+
+  async function openProjectDirectory(relativePath: string) {
+    if (!activeProject) return;
+    try {
+      setProjectError(undefined);
+      const listing = await service.listProjectEntries(
+        activeProject.id,
+        relativePath,
+      );
+      setProjectEntries(listing.entries);
+      setProjectEntriesTruncated(listing.truncated);
+      setProjectDirectory(relativePath);
+    } catch (error) {
+      setProjectError(
+        error instanceof Error
+          ? error.message
+          : "That project folder could not be read.",
+      );
+    }
+  }
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -217,10 +287,17 @@ export function App({ service }: AppProps) {
         <span className="toolbar-divider" />
         <div className="project-context" aria-label="Project context">
           <span className="project-avatar" aria-hidden="true">
-            —
+            {activeProject?.name.slice(0, 1) ?? "—"}
           </span>
-          <span>No project open</span>
-          <span className="toolbar-subtle">/ no branch</span>
+          <span>{activeProject?.name ?? "No project open"}</span>
+          <span className="toolbar-subtle">
+            /{" "}
+            {activeProject
+              ? activeProject.isGitRepository
+                ? "Git repository"
+                : "not a Git repository"
+              : "no branch"}
+          </span>
         </div>
         <Dialog.Root open={paletteOpen} onOpenChange={setPaletteOpen}>
           <Dialog.Trigger asChild>
@@ -336,6 +413,15 @@ export function App({ service }: AppProps) {
             nativePending={nativePending}
             onTestNative={testNativeConnection}
             onNavigate={navigate}
+            activeProject={activeProject}
+            recentProjects={recentProjects}
+            projectEntries={projectEntries}
+            projectEntriesTruncated={projectEntriesTruncated}
+            projectDirectory={projectDirectory}
+            projectPending={projectPending}
+            projectError={projectError}
+            onOpenProject={openProject}
+            onOpenProjectDirectory={openProjectDirectory}
           />
         </main>
       </div>
@@ -345,13 +431,18 @@ export function App({ service }: AppProps) {
           {preferencesError}
         </div>
       )}
+      {projectError && (
+        <div className="global-alert" role="alert">
+          {projectError}
+        </div>
+      )}
 
       <footer className="statusbar" aria-label="Application status">
         <div className="statusbar-group">
           <span className="status-mark" aria-hidden="true">
             ◈
           </span>
-          <span>No workspace</span>
+          <span>{activeProject?.name ?? "No workspace"}</span>
           <span className="status-separator" />
           <span>Local-first</span>
         </div>
@@ -505,13 +596,22 @@ interface ScreenContentProps {
   nativePending: boolean;
   onTestNative: () => void;
   onNavigate: (page: PageId) => void;
+  activeProject?: ProjectSummary;
+  recentProjects: ProjectSummary[];
+  projectEntries: ProjectEntry[];
+  projectEntriesTruncated: boolean;
+  projectDirectory: string;
+  projectPending: boolean;
+  projectError?: string;
+  onOpenProject: (path?: string) => void;
+  onOpenProjectDirectory: (relativePath: string) => void;
 }
 
 function ScreenContent(props: ScreenContentProps) {
   const { page } = props;
   if (page === "settings") return <SettingsScreen {...props} />;
   if (page === "editor") return <EditorScreen {...props} />;
-  if (page === "home") return <HomeScreen onNavigate={props.onNavigate} />;
+  if (page === "home") return <HomeScreen {...props} />;
 
   const item = navigationItems.find((entry) => entry.id === page);
   const details: Record<
@@ -540,7 +640,13 @@ function ScreenContent(props: ScreenContentProps) {
   );
 }
 
-function HomeScreen({ onNavigate }: { onNavigate: (page: PageId) => void }) {
+function HomeScreen({
+  onNavigate,
+  activeProject,
+  recentProjects,
+  projectPending,
+  onOpenProject,
+}: ScreenContentProps) {
   return (
     <section className="home-page" aria-labelledby="screen-title">
       <div className="home-copy">
@@ -556,21 +662,37 @@ function HomeScreen({ onNavigate }: { onNavigate: (page: PageId) => void }) {
         <div className="home-open-state">
           <span className="status-dot status-dot-muted" />
           <div>
-            <strong>No project open</strong>
-            <span>Project opening is the next implementation step.</span>
+            <strong>{activeProject?.name ?? "No project open"}</strong>
+            <span>
+              {activeProject
+                ? activeProject.isGitRepository
+                  ? "Git repository · local files only"
+                  : "Folder open · not a Git repository"
+                : "Opening a folder never runs project code."}
+            </span>
           </div>
         </div>
         <p className="home-note">
-          Nothing has been scanned, executed, or sent to an agent. Open the
-          Editor to explore the shell, or adjust its appearance in Settings.
+          Laplace does not run package scripts, shells, or agent tools when a
+          project is opened. Files remain available without trusting the
+          project.
         </p>
         <div className="home-actions">
           <button
             className="button button-primary"
             type="button"
+            disabled={projectPending}
+            onClick={() => onOpenProject()}
+          >
+            {projectPending ? "Opening…" : "Open project folder"}
+            {!projectPending && <span aria-hidden="true">→</span>}
+          </button>
+          <button
+            className="button button-quiet"
+            type="button"
             onClick={() => onNavigate("editor")}
           >
-            View editor shell <span aria-hidden="true">→</span>
+            {activeProject ? "Return to editor" : "View editor shell"}
           </button>
           <button
             className="button button-quiet"
@@ -580,6 +702,28 @@ function HomeScreen({ onNavigate }: { onNavigate: (page: PageId) => void }) {
             Appearance settings
           </button>
         </div>
+        {recentProjects.length > 0 && (
+          <section className="recent-projects" aria-label="Recent projects">
+            <p className="eyebrow">Recent folders · no tools run</p>
+            {recentProjects.map((project) => (
+              <button
+                className="recent-project-item"
+                key={project.id}
+                type="button"
+                disabled={projectPending}
+                onClick={() => onOpenProject(project.path)}
+              >
+                <span className="project-avatar" aria-hidden="true">
+                  {project.name.slice(0, 1)}
+                </span>
+                <span>
+                  <strong>{project.name}</strong>
+                  <small>{project.path}</small>
+                </span>
+              </button>
+            ))}
+          </section>
+        )}
       </div>
       <div className="home-orbit" aria-hidden="true">
         <span className="orbit-ring orbit-ring-outer" />
@@ -595,7 +739,17 @@ function HomeScreen({ onNavigate }: { onNavigate: (page: PageId) => void }) {
 }
 
 function EditorScreen(props: ScreenContentProps) {
-  const { preferences, onPreferencesChange } = props;
+  const {
+    preferences,
+    onPreferencesChange,
+    activeProject,
+    projectEntries,
+    projectEntriesTruncated,
+    projectDirectory,
+    projectPending,
+    onOpenProject,
+    onOpenProjectDirectory,
+  } = props;
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
   const draftWidthRef = useRef(preferences.inspectorWidth);
   const drag = useRef<{ x: number; width: number } | undefined>(undefined);
@@ -612,32 +766,132 @@ function EditorScreen(props: ScreenContentProps) {
 
   return (
     <section className="editor-shell" aria-label="Editor workspace">
+      {activeProject && (
+        <aside className="project-explorer" aria-label="Project files">
+          <div className="explorer-heading">
+            <span className="eyebrow">Project files</span>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Open another project folder"
+              disabled={projectPending}
+              onClick={() => onOpenProject()}
+            >
+              +
+            </button>
+          </div>
+          <div className="explorer-root">
+            <span className="explorer-folder-glyph" aria-hidden="true">
+              ⌄
+            </span>
+            <strong>{activeProject.name}</strong>
+          </div>
+          {projectDirectory && (
+            <button
+              className="explorer-up"
+              type="button"
+              onClick={() => {
+                const parent = projectDirectory
+                  .split(/[\\/]/)
+                  .slice(0, -1)
+                  .join("/");
+                void onOpenProjectDirectory(parent);
+              }}
+            >
+              <span aria-hidden="true">↰</span> Parent folder
+            </button>
+          )}
+          <div
+            className="explorer-list"
+            role="list"
+            aria-label="Files and folders"
+          >
+            {projectEntries.map((entry) =>
+              entry.kind === "directory" ? (
+                <button
+                  className="explorer-entry explorer-directory"
+                  key={entry.relativePath}
+                  type="button"
+                  onClick={() => onOpenProjectDirectory(entry.relativePath)}
+                >
+                  <span aria-hidden="true">▸</span>
+                  <span>{entry.name}</span>
+                </button>
+              ) : (
+                <div
+                  className={`explorer-entry${entry.kind === "symlink" ? " explorer-symlink" : ""}`}
+                  key={entry.relativePath}
+                  role="listitem"
+                  title={
+                    entry.kind === "symlink"
+                      ? "Symbolic links are not followed in the explorer."
+                      : "File reading and editing arrive in Plan 05."
+                  }
+                >
+                  <span aria-hidden="true">
+                    {entry.kind === "symlink" ? "↗" : "·"}
+                  </span>
+                  <span>{entry.name}</span>
+                </div>
+              ),
+            )}
+            {projectEntries.length === 0 && (
+              <p className="explorer-empty">
+                This folder has no visible entries.
+              </p>
+            )}
+            {projectEntriesTruncated && (
+              <p className="explorer-limit" role="status">
+                Showing the first 1,000 entries. Narrow this folder before
+                browsing more.
+              </p>
+            )}
+          </div>
+        </aside>
+      )}
       <div className="editor-placeholder">
         <div className="editor-placeholder-top">
           <span className="eyebrow">Source workspace</span>
-          <span className="status-pill">No project</span>
+          <span className="status-pill">
+            {activeProject
+              ? activeProject.isGitRepository
+                ? "Git repository"
+                : "Folder · no Git"
+              : "No project"}
+          </span>
         </div>
         <div className="editor-placeholder-center">
           <span className="editor-placeholder-mark" aria-hidden="true">
             ⌘
           </span>
-          <h1 id="screen-title">Your source belongs here.</h1>
+          <h1 id="screen-title">
+            {activeProject
+              ? "Project files are ready."
+              : "Your source belongs here."}
+          </h1>
           <p>
-            Open a local project to browse and edit files. Project access is not
-            implemented in this shell yet.
+            {activeProject
+              ? "Folders can be browsed without running project code. File reading and editing are the next step."
+              : "Open a local project to browse its folders. Opening never runs project code or agent tools."}
           </p>
           <button
             className="button button-quiet"
             type="button"
-            disabled
-            title="Project opening arrives in Plan 04"
+            disabled={projectPending}
+            onClick={() => onOpenProject()}
           >
-            Open project · coming next
+            {projectPending
+              ? "Opening…"
+              : activeProject
+                ? "Open another folder"
+                : "Open project folder"}
           </button>
         </div>
         <div className="editor-placeholder-footer">
-          <span>No file selected</span>
-          <span>Editor · available in Plan 05</span>
+          <span>
+            {projectDirectory || activeProject?.path || "No folder selected"}
+          </span>
+          <span>File reading/editing · Plan 05</span>
         </div>
       </div>
       {!preferences.inspectorCollapsed && (

@@ -8,6 +8,8 @@ import {
 import type {
   AppEvent,
   PingResponse,
+  ProjectEntry,
+  ProjectSummary,
   UiPreferences,
 } from "../../src/services/contracts";
 import { DEFAULT_PREFERENCES, useAppStore } from "../../src/state/app-store";
@@ -18,6 +20,19 @@ const response: PingResponse = {
   status: "ok",
   message: "Native command/event round trip succeeded.",
 };
+
+const project: ProjectSummary = {
+  id: "/tmp/laplace fixture",
+  name: "laplace fixture",
+  path: "/tmp/laplace fixture",
+  isGitRepository: false,
+  lastOpenedUnixMs: 1,
+};
+
+const entries: ProjectEntry[] = [
+  { name: "src", relativePath: "src", kind: "directory" },
+  { name: "README.md", relativePath: "README.md", kind: "file" },
+];
 
 function serviceFixture(overrides: Partial<AppService> = {}) {
   let receiveEvent: ((event: AppEvent) => void) | undefined;
@@ -31,6 +46,10 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     }),
     getPreferences: vi.fn(async () => DEFAULT_PREFERENCES),
     updatePreferences: vi.fn(async (preferences: UiPreferences) => preferences),
+    chooseProjectDirectory: vi.fn(async () => null),
+    openProject: vi.fn(async () => project),
+    getRecentProjects: vi.fn(async () => []),
+    listProjectEntries: vi.fn(async () => ({ entries, truncated: false })),
     ...overrides,
   };
   return { service, emit: (event: AppEvent) => receiveEvent?.(event) };
@@ -52,6 +71,52 @@ describe("reference application shell", () => {
     expect(screen.getByText("Rook not connected")).toBeInTheDocument();
     expect(service.ping).not.toHaveBeenCalled();
     expect(service.getPreferences).toHaveBeenCalledOnce();
+  });
+
+  it("opens a user-selected folder and shows a read-only lazy explorer", async () => {
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+    });
+    render(<App service={service} />);
+    await screen.findByRole("heading", { name: /Code when you want/i });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open project folder" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Project files are ready." }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Project files" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("README.md")).toBeInTheDocument();
+    expect(service.openProject).toHaveBeenCalledWith(project.path);
+    expect(service.listProjectEntries).toHaveBeenCalledWith(project.id);
+    fireEvent.click(screen.getByRole("button", { name: "src" }));
+    await waitFor(() =>
+      expect(service.listProjectEntries).toHaveBeenLastCalledWith(
+        project.id,
+        "src",
+      ),
+    );
+    expect(service.ping).not.toHaveBeenCalled();
+  });
+
+  it("restores a recent project only after the user selects it", async () => {
+    const { service } = serviceFixture({
+      getRecentProjects: vi.fn(async () => [project]),
+    });
+    render(<App service={service} />);
+    const recent = await screen.findByRole("button", {
+      name: /laplace fixture/i,
+    });
+    expect(service.openProject).not.toHaveBeenCalled();
+
+    fireEvent.click(recent);
+    expect(
+      await screen.findByRole("heading", { name: "Project files are ready." }),
+    ).toBeInTheDocument();
+    expect(service.openProject).toHaveBeenCalledWith(project.path);
   });
 
   it("navigates to real shell views and labels unavailable capabilities honestly", async () => {

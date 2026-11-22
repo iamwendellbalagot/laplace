@@ -1,6 +1,6 @@
 # 03 — Reference UI shell
 
-Status: Shell implementation in place; exit gate remains open for deterministic visual comparison, zoom/minimum-window review, and native accessibility checks.
+Status: Shell implementation in place; exit gate remains open for deterministic visual comparison, zoom/minimum-window review, and native accessibility checks. Plan 04 work proceeds under the user's explicit request to continue sequentially through Plan 16; this does not waive the open checks.
 Depends on: [02](02-bootstrap.md)
 Next: [04 — Projects and filesystem](04-projects-filesystem.md)
 
