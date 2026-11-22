@@ -33,7 +33,7 @@ Each numbered document is an implementation checkpoint, not one giant commit. Br
 | Order | Document | Deliverable | Status |
 | --- | --- | --- | --- |
 | 01 | [Feasibility and contracts](01-feasibility.md) | Platform proofs, Rook capability matrix, decisions | In progress — Rook package verified; platform gates pending |
-| 02 | [Bootstrap and typed boundaries](02-bootstrap.md) | Runnable desktop scaffold and native CI | In progress — scaffold-only exception; native compile pending |
+| 02 | [Bootstrap and typed boundaries](02-bootstrap.md) | Runnable desktop scaffold and native CI | In progress — local macOS native build passes; interactive window smoke pending |
 | 03 | [Reference UI shell](03-ui-shell.md) | Faithful React shell, themes, commands | Not started |
 | 04 | [Projects and filesystem](04-projects-filesystem.md) | Real project opening, explorer, trust, watchers | Not started |
 | 05 | [Editor and TypeScript](05-editor-typescript.md) | Real editing, recovery, language services | Not started |
