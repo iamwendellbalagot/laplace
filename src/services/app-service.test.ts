@@ -216,4 +216,30 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("saves a project file using its previously read content as the version", async () => {
+    mocks.invoke.mockResolvedValue({
+      schemaVersion: 1,
+      operationId: "op-save-1",
+      saved: true,
+    });
+    await expect(
+      new TauriAppService().saveProjectFile(
+        "/tmp/example",
+        "src/main.ts",
+        "before",
+        "after",
+      ),
+    ).resolves.toBe(true);
+    expect(mocks.invoke).toHaveBeenCalledWith("save_project_file", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/tmp/example",
+        relativePath: "src/main.ts",
+        expectedContent: "before",
+        content: "after",
+      },
+    });
+  });
 });

@@ -228,6 +228,25 @@ pub struct ReadProjectFileResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectFileRequest {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub project_id: String,
+    pub relative_path: String,
+    pub expected_content: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectFileResponse {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub saved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AppEventKind {
     PingCompleted,
@@ -929,6 +948,153 @@ fn read_project_file_contents(
     }
 }
 
+fn save_project_file_contents(
+    project_id: &str,
+    relative_path: &str,
+    expected_content: &str,
+    content: &str,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    if content.len() as u64 > MAX_PROJECT_FILE_BYTES {
+        return Err(IpcError::new(
+            "project_file_too_large",
+            "Files larger than 1 MiB cannot be edited in Laplace yet.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    let current = read_project_file_contents(project_id, relative_path)?;
+    if current.kind != ProjectFileReadKind::Text {
+        return Err(IpcError::new(
+            "project_file_not_editable",
+            "Only small UTF-8 text files can be edited in Laplace.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    if current.content.as_deref() != Some(expected_content) {
+        return Err(IpcError::new(
+            "project_file_conflict",
+            "This file changed on disk since it was opened. Copy or reload your edits before saving.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+
+    let root = fs::canonicalize(project_id).map_err(|_| {
+        IpcError::new(
+            "project_unavailable",
+            "The project folder is no longer available. Reopen it from the folder picker.",
+            operation_id.to_owned(),
+            true,
+        )
+    })?;
+    let relative = Path::new(relative_path);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(IpcError::new(
+            "invalid_relative_path",
+            "Select a file inside the open project.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    let joined_path = root.join(relative);
+    let parent = joined_path.parent().ok_or_else(|| {
+        IpcError::new("invalid_relative_path", "Select a file inside the open project.", operation_id.to_owned(), false)
+    })?;
+    let canonical_parent = fs::canonicalize(parent).map_err(|_| {
+        IpcError::new("project_file_unavailable", "That file is no longer available inside the project.", operation_id.to_owned(), true)
+    })?;
+    if !canonical_parent.starts_with(&root) {
+        return Err(IpcError::new("project_path_escape", "The requested file resolves outside the open project.", operation_id.to_owned(), false));
+    }
+    let filename = relative.file_name().ok_or_else(|| {
+        IpcError::new("invalid_relative_path", "Select a file inside the open project.", operation_id.to_owned(), false)
+    })?;
+    let path = canonical_parent.join(filename);
+    if fs::symlink_metadata(&path).map_err(|_| {
+        IpcError::new("project_file_unavailable", "That file is no longer available inside the project.", operation_id.to_owned(), true)
+    })?.file_type().is_symlink() {
+        return Err(IpcError::new("project_file_symlink", "Symbolic links are not followed by the project editor.", operation_id.to_owned(), false));
+    }
+    let permissions = fs::metadata(&path)
+        .map_err(|_| IpcError::new("project_file_read_failed", "This project file could not be inspected.", operation_id.to_owned(), true))?
+        .permissions();
+    let temporary = canonical_parent.join(format!(".laplace-save-{operation_id}.tmp"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| IpcError::new("project_file_write_failed", "This project file could not be saved.", operation_id.to_owned(), true))?;
+    use std::io::Write;
+    if file.write_all(content.as_bytes()).is_err() || fs::set_permissions(&temporary, permissions).is_err() {
+        let _ = fs::remove_file(&temporary);
+        return Err(IpcError::new(
+            "project_file_write_failed",
+            "This project file could not be saved.",
+            operation_id.to_owned(),
+            true,
+        ));
+    }
+    drop(file);
+    let current = match read_project_file_contents(project_id, relative_path) {
+        Ok(current) => current,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+    };
+    if current.content.as_deref() != Some(expected_content) {
+        let _ = fs::remove_file(&temporary);
+        return Err(IpcError::new(
+            "project_file_conflict",
+            "This file changed on disk since it was opened. Copy or reload your edits before saving.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    #[cfg(windows)]
+    if path.exists() {
+        let backup = canonical_parent.join(format!(".laplace-backup-{operation_id}.tmp"));
+        fs::rename(&path, &backup).map_err(|_| {
+            let _ = fs::remove_file(&temporary);
+            IpcError::new(
+                "project_file_write_failed",
+                "This project file could not be saved.",
+                operation_id.to_owned(),
+                true,
+            )
+        })?;
+        if fs::rename(&temporary, &path).is_err() {
+            let _ = fs::rename(&backup, &path);
+            let _ = fs::remove_file(&temporary);
+            return Err(IpcError::new(
+                "project_file_write_failed",
+                "This project file could not be saved.",
+                operation_id.to_owned(),
+                true,
+            ));
+        }
+        let _ = fs::remove_file(backup);
+        return Ok(());
+    }
+    if fs::rename(&temporary, &path).is_err() {
+        let _ = fs::remove_file(&temporary);
+        return Err(IpcError::new(
+            "project_file_write_failed",
+            "This project file could not be saved.",
+            operation_id.to_owned(),
+            true,
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn open_project(
     app: tauri::AppHandle,
@@ -1028,6 +1194,33 @@ async fn read_project_file(
     })
 }
 
+#[tauri::command]
+async fn save_project_file(
+    request: SaveProjectFileRequest,
+) -> Result<SaveProjectFileResponse, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(IpcError::new(
+            "invalid_project_request",
+            "The project request is invalid or uses an unsupported schema.",
+            request.operation_id,
+            false,
+        ));
+    }
+    save_project_file_contents(
+        &request.project_id,
+        &request.relative_path,
+        &request.expected_content,
+        &request.content,
+        &request.operation_id,
+    )?;
+    Ok(SaveProjectFileResponse {
+        schema_version: IPC_SCHEMA_VERSION,
+        operation_id: request.operation_id,
+        saved: true,
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1038,7 +1231,8 @@ pub fn run() {
             open_project,
             get_recent_projects,
             list_project_entries,
-            read_project_file
+            read_project_file,
+            save_project_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Laplace desktop application");
@@ -1371,6 +1565,42 @@ mod tests {
             "invalid_relative_path"
         );
 
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn saves_utf8_only_when_disk_content_matches_the_open_version() {
+        let directory = std::env::temp_dir().join(format!(
+            "laplace-project-save-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("source.ts");
+        fs::write(&path, "before\n").unwrap();
+
+        save_project_file_contents(
+            directory.to_str().unwrap(),
+            "source.ts",
+            "before\n",
+            "after\n",
+            "save-test-1",
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "after\n");
+        assert_eq!(
+            save_project_file_contents(
+                directory.to_str().unwrap(),
+                "source.ts",
+                "before\n",
+                "lost update\n",
+                "save-test-2",
+            )
+            .unwrap_err()
+            .code,
+            "project_file_conflict"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "after\n");
         let _ = fs::remove_dir_all(directory);
     }
 }

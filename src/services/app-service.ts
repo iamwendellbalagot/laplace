@@ -18,6 +18,8 @@ import {
   type ProjectFileRead,
   type ReadProjectFileRequest,
   type ReadProjectFileResponse,
+  type SaveProjectFileRequest,
+  type SaveProjectFileResponse,
   type PreferencesRequest,
   type PreferencesResponse,
   type UiPreferences,
@@ -40,6 +42,12 @@ export interface AppService {
     projectId: string,
     relativePath: string,
   ): Promise<ProjectFileRead>;
+  saveProjectFile(
+    projectId: string,
+    relativePath: string,
+    expectedContent: string,
+    content: string,
+  ): Promise<boolean>;
 }
 
 export class AppServiceError extends Error implements IpcError {
@@ -184,6 +192,31 @@ export class TauriAppService implements AppService {
         },
       );
       return response.file;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveProjectFile(
+    projectId: string,
+    relativePath: string,
+    expectedContent: string,
+    content: string,
+  ): Promise<boolean> {
+    const request: SaveProjectFileRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      relativePath,
+      expectedContent,
+      content,
+    };
+    try {
+      const response = await invoke<SaveProjectFileResponse>(
+        "save_project_file",
+        { request },
+      );
+      return response.saved;
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

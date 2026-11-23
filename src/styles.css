@@ -803,6 +803,63 @@ kbd,
   border-bottom: 1px solid var(--border);
   background: var(--shell);
 }
+.editor-tabs {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  align-items: stretch;
+  gap: 2px;
+  overflow: auto hidden;
+}
+.editor-tab {
+  display: flex;
+  min-width: 120px;
+  align-items: center;
+  border-right: 1px solid var(--border);
+}
+.editor-tab > button:first-child {
+  height: 100%;
+  padding: 0 11px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: 10px var(--mono);
+}
+.editor-tab-active > button:first-child {
+  border-bottom: 1px solid var(--brass);
+  color: var(--text);
+}
+.editor-tab > button:first-child span {
+  color: var(--brass-light);
+}
+.editor-tab-close {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.editor-tab-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.editor-save-button {
+  align-self: center;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 10px;
+}
+.editor-save-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 .status-pill {
   padding: 4px 7px;
   border: 1px solid var(--border);
@@ -842,6 +899,32 @@ kbd,
   min-height: 0;
   flex-direction: column;
   align-items: stretch;
+}
+.code-editor {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.code-editor > section {
+  min-height: 0;
+  flex: 1;
+}
+.editor-loading {
+  margin: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.editor-breadcrumb {
+  display: flex;
+  min-height: 29px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font: 9px var(--mono);
 }
 .file-preview-heading {
   display: flex;

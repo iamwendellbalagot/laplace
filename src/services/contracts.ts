@@ -128,3 +128,16 @@ export interface ReadProjectFileResponse {
   operationId: string;
   file: ProjectFileRead;
 }
+
+export interface SaveProjectFileRequest extends ProjectsRequest {
+  projectId: string;
+  relativePath: string;
+  expectedContent: string;
+  content: string;
+}
+
+export interface SaveProjectFileResponse {
+  schemaVersion: number;
+  operationId: string;
+  saved: boolean;
+}

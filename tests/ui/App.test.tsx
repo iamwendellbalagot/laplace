@@ -1,6 +1,22 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/App";
+
+vi.mock("../../src/features/editor/CodeEditor", () => ({
+  CodeEditor: ({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+  }) => (
+    <textarea
+      aria-label="Code editor"
+      value={value}
+      onChange={(event) => onChange(event.currentTarget.value)}
+    />
+  ),
+}));
 import {
   AppServiceError,
   type AppService,
@@ -58,6 +74,7 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     getRecentProjects: vi.fn(async () => []),
     listProjectEntries: vi.fn(async () => ({ entries, truncated: false })),
     readProjectFile: vi.fn(async () => textPreview),
+    saveProjectFile: vi.fn(async () => true),
     ...overrides,
   };
   return { service, emit: (event: AppEvent) => receiveEvent?.(event) };
@@ -81,7 +98,7 @@ describe("reference application shell", () => {
     expect(service.getPreferences).toHaveBeenCalledOnce();
   });
 
-  it("opens a user-selected folder and shows a read-only lazy explorer", async () => {
+  it("opens, edits, and saves a project file from the lazy explorer", async () => {
     const { service } = serviceFixture({
       chooseProjectDirectory: vi.fn(async () => project.path),
     });
@@ -117,14 +134,52 @@ describe("reference application shell", () => {
       ),
     );
     fireEvent.click(screen.getByRole("button", { name: "README.md" }));
-    expect(
-      await screen.findByText("hello, Laplace!", { selector: "pre" }),
-    ).toBeInTheDocument();
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    expect(editor).toHaveValue("hello, Laplace!");
     expect(service.readProjectFile).toHaveBeenCalledWith(
       project.id,
       "src/README.md",
     );
+    fireEvent.change(editor, { target: { value: "updated source" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() =>
+      expect(service.saveProjectFile).toHaveBeenCalledWith(
+        project.id,
+        "src/README.md",
+        "hello, Laplace!",
+        "updated source",
+      ),
+    );
+    await waitFor(() => expect(screen.getAllByText("Saved")).toHaveLength(2));
     expect(service.ping).not.toHaveBeenCalled();
+  });
+
+  it("keeps an edited buffer dirty when the backend detects a save conflict", async () => {
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+      saveProjectFile: vi.fn(async () => {
+        throw new AppServiceError(
+          "project_file_conflict",
+          "The file changed on disk.",
+          "op-conflict",
+          false,
+        );
+      }),
+    });
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open project folder" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "README.md" }));
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    fireEvent.change(editor, { target: { value: "my edits" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The file changed on disk.",
+    );
+    expect(screen.getByText("Modified")).toBeInTheDocument();
+    expect(editor).toHaveValue("my edits");
   });
 
   it("restores a recent project only after the user selects it", async () => {

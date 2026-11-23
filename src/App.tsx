@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -16,6 +16,12 @@ import type {
 } from "./services/contracts";
 import { useAppStore, type PageId } from "./state/app-store";
 
+const CodeEditor = lazy(() =>
+  import("./features/editor/CodeEditor").then((module) => ({
+    default: module.CodeEditor,
+  })),
+);
+
 interface AppProps {
   service: AppService;
 }
@@ -25,6 +31,14 @@ interface PaletteCommand {
   label: string;
   description: string;
   run: () => void;
+}
+
+interface EditorDocument {
+  key: string;
+  projectId: string;
+  path: string;
+  content: string;
+  savedContent: string;
 }
 
 export function App({ service }: AppProps) {
@@ -48,6 +62,9 @@ export function App({ service }: AppProps) {
   const [projectDirectory, setProjectDirectory] = useState("");
   const [selectedFilePath, setSelectedFilePath] = useState<string>();
   const [selectedFile, setSelectedFile] = useState<ProjectFileRead>();
+  const [documents, setDocuments] = useState<EditorDocument[]>([]);
+  const [activeDocumentKey, setActiveDocumentKey] = useState<string>();
+  const [savingFiles, setSavingFiles] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -110,6 +127,7 @@ export function App({ service }: AppProps) {
       setProjectDirectory("");
       setSelectedFilePath(undefined);
       setSelectedFile(undefined);
+      setActiveDocumentKey(undefined);
       setRecentProjects((projects) =>
         [
           project,
@@ -155,19 +173,114 @@ export function App({ service }: AppProps) {
     const fullRelativePath = [projectDirectory, relativePath]
       .filter(Boolean)
       .join("/");
+    const key = `${activeProject.id}\0${fullRelativePath}`;
+    const existing = documents.find((document) => document.key === key);
+    if (existing) {
+      setActiveDocumentKey(key);
+      setSelectedFilePath(fullRelativePath);
+      setSelectedFile(undefined);
+      return;
+    }
     setProjectError(undefined);
     setSelectedFilePath(fullRelativePath);
     setSelectedFile(undefined);
     try {
-      setSelectedFile(
-        await service.readProjectFile(activeProject.id, fullRelativePath),
+      const file = await service.readProjectFile(
+        activeProject.id,
+        fullRelativePath,
       );
+      setSelectedFile(file);
+      if (file.kind === "text" && file.content !== null) {
+        const content = file.content;
+        setDocuments((current) => [
+          ...current,
+          {
+            key,
+            projectId: activeProject.id,
+            path: fullRelativePath,
+            content,
+            savedContent: content,
+          },
+        ]);
+        setActiveDocumentKey(key);
+      } else {
+        setActiveDocumentKey(undefined);
+      }
     } catch (error) {
       setSelectedFilePath(undefined);
       setProjectError(
         error instanceof Error
           ? error.message
           : "This project file could not be previewed.",
+      );
+    }
+  }
+
+  function updateDocument(key: string, content: string) {
+    setDocuments((current) =>
+      current.map((document) =>
+        document.key === key ? { ...document, content } : document,
+      ),
+    );
+  }
+
+  async function saveDocument(document: EditorDocument) {
+    const newline = document.savedContent.match(/\r\n|\r|\n/)?.[0] ?? "\n";
+    const content = document.content
+      .replace(/\r\n|\r|\n/g, "\n")
+      .replace(/\n/g, newline);
+    await service.saveProjectFile(
+      document.projectId,
+      document.path,
+      document.savedContent,
+      content,
+    );
+    setDocuments((current) =>
+      current.map((item) =>
+        item.key === document.key ? { ...item, savedContent: content } : item,
+      ),
+    );
+  }
+
+  async function saveDocuments(items: EditorDocument[]) {
+    setSavingFiles(true);
+    setProjectError(undefined);
+    try {
+      for (const document of items) {
+        if (document.content !== document.savedContent) {
+          await saveDocument(document);
+        }
+      }
+    } catch (error) {
+      setProjectError(
+        error instanceof Error ? error.message : "The file could not be saved.",
+      );
+    } finally {
+      setSavingFiles(false);
+    }
+  }
+
+  function closeDocument(document: EditorDocument) {
+    if (
+      document.content !== document.savedContent &&
+      !window.confirm(`Discard unsaved changes to ${document.path}?`)
+    ) {
+      return;
+    }
+    const remaining = documents.filter((item) => item.key !== document.key);
+    setDocuments(remaining);
+    if (activeDocumentKey === document.key) {
+      setActiveDocumentKey(remaining.at(-1)?.key);
+      setSelectedFilePath(remaining.at(-1)?.path);
+      const next = remaining.at(-1);
+      setSelectedFile(
+        next
+          ? {
+              kind: "text",
+              sizeBytes: new TextEncoder().encode(next.savedContent).length,
+              content: next.savedContent,
+            }
+          : undefined,
       );
     }
   }
@@ -179,7 +292,19 @@ export function App({ service }: AppProps) {
         target instanceof HTMLElement &&
         (target.isContentEditable ||
           target.matches("input, textarea, select, [role='textbox']"));
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void saveDocuments(
+          event.shiftKey
+            ? documents
+            : documents.filter(
+                (document) => document.key === activeDocumentKey,
+              ),
+        );
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "k"
+      ) {
         if (isTextEntry) return;
         event.preventDefault();
         setPaletteOpen((open) => !open);
@@ -197,7 +322,7 @@ export function App({ service }: AppProps) {
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [preferences, service]);
+  }, [preferences, service, documents, activeDocumentKey]);
 
   async function savePreferences(next: UiPreferences) {
     setSavingPreferences(true);
@@ -454,6 +579,25 @@ export function App({ service }: AppProps) {
             onOpenProject={openProject}
             onOpenProjectDirectory={openProjectDirectory}
             onOpenProjectFile={openProjectFile}
+            documents={documents}
+            activeDocumentKey={activeDocumentKey}
+            onSelectDocument={(key) => {
+              setActiveDocumentKey(key);
+              const document = documents.find((item) => item.key === key);
+              if (document) {
+                setSelectedFilePath(document.path);
+                setSelectedFile({
+                  kind: "text",
+                  sizeBytes: new TextEncoder().encode(document.savedContent)
+                    .length,
+                  content: document.savedContent,
+                });
+              }
+            }}
+            onUpdateDocument={updateDocument}
+            onSaveDocuments={(items) => void saveDocuments(items)}
+            onCloseDocument={closeDocument}
+            savingFiles={savingFiles}
           />
         </main>
       </div>
@@ -640,6 +784,13 @@ interface ScreenContentProps {
   onOpenProject: (path?: string) => void;
   onOpenProjectDirectory: (relativePath: string) => void;
   onOpenProjectFile: (relativePath: string) => void;
+  documents: EditorDocument[];
+  activeDocumentKey?: string;
+  onSelectDocument: (key: string) => void;
+  onUpdateDocument: (key: string, content: string) => void;
+  onSaveDocuments: (documents: EditorDocument[]) => void;
+  onCloseDocument: (document: EditorDocument) => void;
+  savingFiles: boolean;
 }
 
 function ScreenContent(props: ScreenContentProps) {
@@ -787,8 +938,23 @@ function EditorScreen(props: ScreenContentProps) {
     onOpenProject,
     onOpenProjectDirectory,
     onOpenProjectFile,
+    documents,
+    activeDocumentKey,
+    onSelectDocument,
+    onUpdateDocument,
+    onSaveDocuments,
+    onCloseDocument,
+    savingFiles,
   } = props;
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
+  const activeDocument = documents.find(
+    (document) =>
+      document.key === activeDocumentKey &&
+      document.projectId === activeProject?.id,
+  );
+  const projectDocuments = documents.filter(
+    (document) => document.projectId === activeProject?.id,
+  );
   const draftWidthRef = useRef(preferences.inspectorWidth);
   const drag = useRef<{ x: number; width: number } | undefined>(undefined);
   useEffect(() => {
@@ -902,73 +1068,163 @@ function EditorScreen(props: ScreenContentProps) {
       )}
       <div className="editor-placeholder">
         <div className="editor-placeholder-top">
-          <span className="eyebrow">Source workspace</span>
-          <span className="status-pill">
-            {activeProject
-              ? activeProject.isGitRepository
-                ? "Git repository"
-                : "Folder · no Git"
-              : "No project"}
-          </span>
-        </div>
-        <div className="editor-placeholder-center">
-          {selectedFilePath && selectedFile ? (
-            <article
-              className="file-preview"
-              aria-label="Read-only file preview"
-            >
-              <div className="file-preview-heading">
-                <span className="eyebrow">Read-only preview</span>
-                <span className="status-pill">
-                  {selectedFile.sizeBytes.toLocaleString()} bytes
-                </span>
-              </div>
-              <h1 id="screen-title">
-                {selectedFilePath.split(/[\\/]/).at(-1)}
-              </h1>
-              {selectedFile.kind === "text" ? (
-                <pre>{selectedFile.content}</pre>
-              ) : (
-                <p role="status">
-                  {selectedFile.kind === "binary"
-                    ? "This file appears to be binary and is not displayed as text."
-                    : "This file exceeds the 1 MiB preview limit. Narrow or inspect it with another tool."}
-                </p>
-              )}
-              <p className="file-preview-path">{selectedFilePath}</p>
-            </article>
-          ) : selectedFilePath ? (
-            <p role="status">Reading selected file…</p>
+          {projectDocuments.length > 0 ? (
+            <div className="editor-tabs" role="tablist" aria-label="Open files">
+              {projectDocuments.map((document) => (
+                <div
+                  className={`editor-tab${document.key === activeDocumentKey ? " editor-tab-active" : ""}`}
+                  key={document.key}
+                  role="presentation"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={document.key === activeDocumentKey}
+                    onClick={() => {
+                      onSelectDocument(document.key);
+                    }}
+                  >
+                    {document.path.split(/[\\/]/).at(-1)}
+                    {document.content !== document.savedContent && (
+                      <span aria-label="unsaved changes"> ●</span>
+                    )}
+                  </button>
+                  <button
+                    className="editor-tab-close"
+                    type="button"
+                    aria-label={`Close ${document.path.split(/[\\/]/).at(-1)}`}
+                    onClick={() => onCloseDocument(document)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                className="editor-save-button"
+                type="button"
+                disabled={
+                  savingFiles ||
+                  !activeDocument ||
+                  activeDocument.content === activeDocument.savedContent
+                }
+                onClick={() =>
+                  activeDocument && onSaveDocuments([activeDocument])
+                }
+              >
+                Save
+              </button>
+              <button
+                className="editor-save-button"
+                type="button"
+                disabled={
+                  savingFiles ||
+                  !projectDocuments.some(
+                    (document) => document.content !== document.savedContent,
+                  )
+                }
+                onClick={() => onSaveDocuments(projectDocuments)}
+              >
+                {savingFiles ? "Saving…" : "Save all"}
+              </button>
+            </div>
           ) : (
             <>
-              <span className="editor-placeholder-mark" aria-hidden="true">
-                ⌘
+              <span className="eyebrow">Source workspace</span>
+              <span className="status-pill">
+                {activeProject
+                  ? activeProject.isGitRepository
+                    ? "Git repository"
+                    : "Folder · no Git"
+                  : "No project"}
               </span>
-              <h1 id="screen-title">
-                {activeProject
-                  ? "Project files are ready."
-                  : "Your source belongs here."}
-              </h1>
-              <p>
-                {activeProject
-                  ? "Folders can be browsed and small UTF-8 text files previewed without running project code. Editing arrives in Plan 05."
-                  : "Open a local project to browse its folders. Opening never runs project code or agent tools."}
-              </p>
-              <button
-                className="button button-quiet"
-                type="button"
-                disabled={projectPending}
-                onClick={() => onOpenProject()}
-              >
-                {projectPending
-                  ? "Opening…"
-                  : activeProject
-                    ? "Open another folder"
-                    : "Open project folder"}
-              </button>
             </>
           )}
         </div>
+        {activeDocument ? (
+          <div
+            className="code-editor"
+            aria-label={`Editing ${activeDocument.path}`}
+          >
+            <Suspense
+              fallback={<p className="editor-loading">Loading editor…</p>}
+            >
+              <CodeEditor
+                path={`${activeDocument.projectId}/${activeDocument.path}`}
+                value={activeDocument.content}
+                theme={preferences.theme}
+                fontSize={preferences.editorFontSize}
+                onChange={(content) =>
+                  onUpdateDocument(activeDocument.key, content)
+                }
+              />
+            </Suspense>
+            <div className="editor-breadcrumb">
+              <span>{activeDocument.path.split("/").join(" › ")}</span>
+              <span>
+                {activeDocument.content !== activeDocument.savedContent
+                  ? "Modified"
+                  : "Saved"}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="editor-placeholder-center">
+            {selectedFilePath && selectedFile ? (
+              <article
+                className="file-preview"
+                aria-label="Read-only file preview"
+              >
+                <div className="file-preview-heading">
+                  <span className="eyebrow">Read-only preview</span>
+                  <span className="status-pill">
+                    {selectedFile.sizeBytes.toLocaleString()} bytes
+                  </span>
+                </div>
+                <h1 id="screen-title">
+                  {selectedFilePath.split(/[\\/]/).at(-1)}
+                </h1>
+                {selectedFile.kind !== "text" && (
+                  <p role="status">
+                    {selectedFile.kind === "binary"
+                      ? "This file appears to be binary and is not displayed as text."
+                      : "This file exceeds the 1 MiB preview limit. Narrow or inspect it with another tool."}
+                  </p>
+                )}
+                <p className="file-preview-path">{selectedFilePath}</p>
+              </article>
+            ) : selectedFilePath ? (
+              <p role="status">Reading selected file…</p>
+            ) : (
+              <>
+                <span className="editor-placeholder-mark" aria-hidden="true">
+                  ⌘
+                </span>
+                <h1 id="screen-title">
+                  {activeProject
+                    ? "Project files are ready."
+                    : "Your source belongs here."}
+                </h1>
+                <p>
+                  {activeProject
+                    ? "Open a UTF-8 text file to edit it. Changes are saved only when you choose Save."
+                    : "Open a local project to browse its folders. Opening never runs project code or agent tools."}
+                </p>
+                <button
+                  className="button button-quiet"
+                  type="button"
+                  disabled={projectPending}
+                  onClick={() => onOpenProject()}
+                >
+                  {projectPending
+                    ? "Opening…"
+                    : activeProject
+                      ? "Open another folder"
+                      : "Open project folder"}
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <div className="editor-placeholder-footer">
           <span>
             {selectedFilePath ||
@@ -977,7 +1233,13 @@ function EditorScreen(props: ScreenContentProps) {
               "No folder selected"}
           </span>
           <span>
-            {selectedFilePath ? "Read-only preview" : "Editing · Plan 05"}
+            {activeDocument
+              ? activeDocument.content !== activeDocument.savedContent
+                ? "Unsaved changes"
+                : "Saved"
+              : selectedFilePath
+                ? "Not editable"
+                : "Ready to edit"}
           </span>
         </div>
       </div>

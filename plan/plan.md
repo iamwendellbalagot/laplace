@@ -36,7 +36,7 @@ Each numbered document is an implementation checkpoint, not one giant commit. Br
 | 02 | [Bootstrap and typed boundaries](02-bootstrap.md) | Runnable desktop scaffold and native CI | Complete for scaffold-only exception — macOS native smoke passed; cross-platform validation remains under 01 |
 | 03 | [Reference UI shell](03-ui-shell.md) | Faithful React shell, themes, commands | Implementation in place; visual/native accessibility exit checks open |
 | 04 | [Projects and filesystem](04-projects-filesystem.md) | Real project opening, explorer, trust, watchers | In progress — safe folder open/recent list, bounded explorer and read-only file preview; native smoke and remaining filesystem work pending |
-| 05 | [Editor and TypeScript](05-editor-typescript.md) | Real editing, recovery, language services | Not started |
+| 05 | [Editor and TypeScript](05-editor-typescript.md) | Real editing, recovery, language services | In progress — Monaco editing and safe saves implemented; LSP/recovery/native checks remain |
 | 06 | [Terminal and Git](06-terminal-git.md) | Real shells, processes, status, diffs | Not started |
 | 07 | [Persistent Changes](07-changes-persistence.md) | Durable domain, Change register, recovery | Not started |
 | 08 | [Rook and contextual delegation](08-rook-delegation.md) | Read-only Ask, permissions, session lifecycle | Not started |
