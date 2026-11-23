@@ -2777,14 +2777,10 @@ async fn prompt_rook_ask(
         || !validate_operation_id(&request.session_id)
         || request.text.trim().is_empty()
         || request.text.len() > 64_000
-        || request
-            .context
-            .as_ref()
-            .is_some_and(|context| context.len() > 32_000)
     {
         return Err(terminal_error(
             "invalid_rook_prompt",
-            "The Ask prompt or context exceeds supported limits.",
+            "The Ask prompt exceeds supported limits.",
             &request.operation_id,
         ));
     }
@@ -2810,7 +2806,7 @@ async fn prompt_rook_ask(
         )
     })?;
     let stdin = &mut process.stdin;
-    let prompt = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"text":request.text,"context":request.context}});
+    let prompt = rook_prompt_message(&request.text);
     writeln!(stdin, "{}", prompt).map_err(|_| {
         terminal_error(
             "rook_protocol_failed",
@@ -2819,6 +2815,10 @@ async fn prompt_rook_ask(
         )
     })?;
     Ok(())
+}
+
+fn rook_prompt_message(text: &str) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"text":text,"context":""}})
 }
 
 #[tauri::command]
@@ -2968,7 +2968,6 @@ struct RookPromptRequest {
     operation_id: String,
     session_id: String,
     text: String,
-    context: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4202,6 +4201,13 @@ mod rook_start_tests {
         assert_eq!(error.code, "rook_unavailable");
         assert!(error.message.contains("Install Rook"));
         assert_eq!(error.operation_id, "rook-test-op");
+    }
+
+    #[test]
+    fn prompt_message_uses_empty_string_context() {
+        let message = rook_prompt_message("Explain this project");
+        assert_eq!(message["params"]["text"], "Explain this project");
+        assert_eq!(message["params"]["context"], "");
     }
 }
 

@@ -49,6 +49,24 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("sends Rook prompts without a separate context field", async () => {
+    mocks.invoke.mockResolvedValue(undefined);
+
+    await new TauriAppService().promptRookAsk(
+      "session1",
+      "Explain this project",
+    );
+
+    expect(mocks.invoke).toHaveBeenCalledWith("prompt_rook_ask", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "session1",
+        text: "Explain this project",
+      },
+    });
+  });
+
   it("preserves structured backend errors", async () => {
     mocks.invoke.mockRejectedValue({
       schemaVersion: 1,

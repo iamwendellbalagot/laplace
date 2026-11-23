@@ -99,11 +99,7 @@ export interface AppService {
     sessionId: string,
     workspaceId: string,
   ): Promise<RookInitResponse>;
-  promptRookAsk(
-    sessionId: string,
-    text: string,
-    context?: string,
-  ): Promise<void>;
+  promptRookAsk(sessionId: string, text: string): Promise<void>;
   listenRook(listener: (event: RookEvent) => void): Promise<UnlistenFn>;
   stopRookAsk(sessionId: string): Promise<void>;
   cancelRookAsk(sessionId: string, runId: string): Promise<void>;
@@ -331,18 +327,13 @@ export class TauriAppService implements AppService {
     }
   }
 
-  async promptRookAsk(
-    sessionId: string,
-    text: string,
-    context?: string,
-  ): Promise<void> {
+  async promptRookAsk(sessionId: string, text: string): Promise<void> {
     await invoke("prompt_rook_ask", {
       request: {
         schemaVersion: IPC_SCHEMA_VERSION,
         operationId: crypto.randomUUID(),
         sessionId,
         text,
-        context: context ?? null,
       },
     });
   }

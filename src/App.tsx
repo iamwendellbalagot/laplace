@@ -1308,7 +1308,6 @@ function RookScreen({
   const [session, setSession] = useState<string>();
   const [rookVersion, setRookVersion] = useState<string>();
   const [prompt, setPrompt] = useState("");
-  const [askContext, setAskContext] = useState("");
   const [events, setEvents] = useState<string[]>([]);
   const [runId, setRunId] = useState<string>();
   const [permission, setPermission] = useState<{
@@ -1435,10 +1434,9 @@ function RookScreen({
                 onSubmit={(event) => {
                   event.preventDefault();
                   void service
-                    .promptRookAsk(session, prompt, askContext || undefined)
+                    .promptRookAsk(session, prompt)
                     .then(() => {
                       setPrompt("");
-                      setAskContext("");
                     })
                     .catch((failure) => setError(String(failure)));
                 }}
@@ -1449,16 +1447,6 @@ function RookScreen({
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   maxLength={64000}
-                />
-                <label htmlFor="rook-context">
-                  Optional context · treated as untrusted input
-                </label>
-                <textarea
-                  id="rook-context"
-                  value={askContext}
-                  onChange={(event) => setAskContext(event.target.value)}
-                  maxLength={32000}
-                  placeholder="Paste selected text or a diagnostic excerpt"
                 />
                 {runId ? (
                   <button
