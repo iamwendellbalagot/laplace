@@ -1,5 +1,6 @@
 .DS_Store
 .rook/
+models.json
 node_modules/
 dist/
 src-tauri/target/
