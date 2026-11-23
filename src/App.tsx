@@ -54,6 +54,9 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string>();
+  const [rookDevSettings, setRookDevSettings] =
+    useState<import("./services/contracts").RookDevSettings>();
+  const [rookDevError, setRookDevError] = useState<string>();
   const [nativeResult, setNativeResult] = useState<string>();
   const [nativeError, setNativeError] = useState<AppServiceError>();
   const [nativeEvent, setNativeEvent] = useState<AppEvent>();
@@ -91,6 +94,36 @@ export function App({ service, browserPreview = false }: AppProps) {
       .catch(() => {
         if (mounted) {
           setPreferencesError("Saved display preferences could not be loaded.");
+        }
+      });
+    void service
+      .getRookDevSettings()
+      .then((settings) => {
+        if (mounted) {
+          setRookDevSettings(settings);
+          if (settings.checkoutPath) {
+            void service
+              .setRookDevCheckout(settings.checkoutPath)
+              .then(setRookDevSettings)
+              .catch((error) => {
+                setRookDevError(
+                  errorMessage(
+                    error,
+                    "The saved Rook checkout is no longer valid.",
+                  ),
+                );
+              });
+          }
+        }
+      })
+      .catch((error) => {
+        if (mounted) {
+          if (import.meta.env.DEV) {
+            setRookDevSettings({ enabled: true, checkoutPath: null });
+          }
+          setRookDevError(
+            errorMessage(error, "Rook developer settings could not be loaded."),
+          );
         }
       });
     void service
@@ -620,6 +653,33 @@ export function App({ service, browserPreview = false }: AppProps) {
             preferences={preferences}
             onPreferencesChange={savePreferences}
             savingPreferences={savingPreferences}
+            rookDevSettings={rookDevSettings}
+            rookDevError={rookDevError}
+            onChooseRookCheckout={async () => {
+              const path = await service.chooseRookCheckout();
+              if (!path) return;
+              try {
+                setRookDevSettings(await service.setRookDevCheckout(path));
+                setRookDevError(undefined);
+              } catch (error) {
+                setRookDevError(
+                  errorMessage(error, "The selected Rook checkout is invalid."),
+                );
+              }
+            }}
+            onClearRookCheckout={async () => {
+              try {
+                setRookDevSettings(await service.setRookDevCheckout(null));
+                setRookDevError(undefined);
+              } catch (error) {
+                setRookDevError(
+                  errorMessage(
+                    error,
+                    "The Rook checkout could not be cleared.",
+                  ),
+                );
+              }
+            }}
             preferencesError={preferencesError}
             nativeResult={nativeResult}
             nativeError={nativeError}
@@ -900,6 +960,10 @@ interface ScreenContentProps {
   preferences: UiPreferences;
   onPreferencesChange: (preferences: UiPreferences) => Promise<void>;
   savingPreferences: boolean;
+  rookDevSettings?: import("./services/contracts").RookDevSettings;
+  rookDevError?: string;
+  onChooseRookCheckout: () => void;
+  onClearRookCheckout: () => void;
   preferencesError?: string;
   nativeResult?: string;
   nativeError?: AppServiceError;
@@ -2138,6 +2202,7 @@ function SettingsScreen(props: ScreenContentProps) {
           </a>
           <a href="#layout">Layout</a>
           <a href="#native-check">Native connection</a>
+          {props.rookDevSettings?.enabled && <a href="#developer">Developer</a>}
         </nav>
         <div className="settings-content">
           <section
@@ -2238,6 +2303,49 @@ function SettingsScreen(props: ScreenContentProps) {
               </code>
             </div>
           </section>
+          {props.rookDevSettings?.enabled && (
+            <section
+              className="settings-group"
+              id="developer"
+              aria-labelledby="developer-title"
+            >
+              <h2 id="developer-title">Developer</h2>
+              <p>
+                Use a local Rook source checkout for Tauri development. This
+                setting is unavailable in release builds. Rebuild Rook with
+                <code>pnpm build</code> after changing its source.
+              </p>
+              <PreferenceRow
+                title="Rook checkout"
+                description={
+                  props.rookDevSettings.checkoutPath ??
+                  "No local Rook checkout selected."
+                }
+              >
+                <button
+                  className="button button-quiet"
+                  type="button"
+                  onClick={props.onChooseRookCheckout}
+                >
+                  Choose checkout
+                </button>
+              </PreferenceRow>
+              {props.rookDevSettings.checkoutPath && (
+                <button
+                  className="button button-quiet"
+                  type="button"
+                  onClick={props.onClearRookCheckout}
+                >
+                  Clear checkout
+                </button>
+              )}
+              {props.rookDevError && (
+                <p className="inline-error" role="alert">
+                  {props.rookDevError}
+                </p>
+              )}
+            </section>
+          )}
 
           <section
             className="settings-group"

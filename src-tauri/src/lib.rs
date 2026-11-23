@@ -25,6 +25,7 @@ const IPC_SCHEMA_VERSION: u16 = 1;
 const EVENT_NAME: &str = "app-event";
 static EVENT_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 static PREFERENCES_LOCK: Mutex<()> = Mutex::new(());
+static ROOK_DEV_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 static RECENT_PROJECTS_LOCK: Mutex<()> = Mutex::new(());
 const MAX_RECENT_PROJECTS: usize = 12;
 const MAX_DIRECTORY_ENTRIES: usize = 1_000;
@@ -373,6 +374,21 @@ pub struct UpdatePreferencesRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct RookDevSettingsRequest {
+    schema_version: u16,
+    operation_id: String,
+    checkout_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RookDevSettings {
+    enabled: bool,
+    checkout_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct PreferencesResponse {
     pub schema_version: u16,
     pub operation_id: String,
@@ -608,6 +624,182 @@ fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, IpcError> {
                 true,
             )
         })
+}
+
+fn rook_dev_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, IpcError> {
+    app.path()
+        .app_config_dir()
+        .map(|directory| directory.join("rook-dev-settings.json"))
+        .map_err(|_| {
+            IpcError::new(
+                "rook_settings_unavailable",
+                "Laplace could not locate its developer settings directory.",
+                String::new(),
+                true,
+            )
+        })
+}
+
+fn valid_rook_checkout(path: &Path) -> Option<PathBuf> {
+    let checkout = fs::canonicalize(path).ok()?;
+    let cli = checkout.join("bin/rook.mjs");
+    if !checkout.is_dir()
+        || !cli.is_file()
+        || !checkout.join("dist/index.js").is_file()
+        || !checkout.join("node_modules").is_dir()
+    {
+        return None;
+    }
+    let version = Command::new("node")
+        .arg(cli)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !version.status.success() || !String::from_utf8_lossy(&version.stdout).starts_with("rook ") {
+        return None;
+    }
+    Some(checkout)
+}
+
+fn read_rook_dev_settings(path: &Path) -> Result<RookDevSettings, IpcError> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
+            IpcError::new(
+                "rook_settings_invalid",
+                "Rook developer settings are invalid; choose the local Rook checkout again.",
+                String::new(),
+                false,
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(RookDevSettings {
+            enabled: tauri::is_dev(),
+            checkout_path: None,
+        }),
+        Err(_) => Err(IpcError::new(
+            "rook_settings_read_failed",
+            "Rook developer settings could not be read.",
+            String::new(),
+            true,
+        )),
+    }
+}
+
+fn write_rook_dev_settings(
+    path: &Path,
+    settings: &RookDevSettings,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    let _guard = ROOK_DEV_SETTINGS_LOCK.lock().map_err(|_| {
+        terminal_error(
+            "rook_settings_busy",
+            "Rook developer settings are temporarily unavailable.",
+            operation_id,
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        terminal_error(
+            "rook_settings_invalid",
+            "Rook developer settings could not be saved.",
+            operation_id,
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|_| {
+        terminal_error(
+            "rook_settings_write_failed",
+            "Rook developer settings could not be saved.",
+            operation_id,
+        )
+    })?;
+    let temporary_path = parent.join(format!(".rook-dev-settings-{operation_id}.tmp"));
+    let bytes = serde_json::to_vec_pretty(settings).map_err(|_| {
+        terminal_error(
+            "rook_settings_write_failed",
+            "Rook developer settings could not be saved.",
+            operation_id,
+        )
+    })?;
+    fs::write(&temporary_path, bytes).map_err(|_| {
+        terminal_error(
+            "rook_settings_write_failed",
+            "Rook developer settings could not be saved.",
+            operation_id,
+        )
+    })?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path).map_err(|_| {
+            terminal_error(
+                "rook_settings_write_failed",
+                "Rook developer settings could not be replaced.",
+                operation_id,
+            )
+        })?;
+    }
+    if fs::rename(&temporary_path, path).is_err() {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(terminal_error(
+            "rook_settings_write_failed",
+            "Rook developer settings could not be saved.",
+            operation_id,
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_rook_dev_settings(
+    app: tauri::AppHandle,
+    request: PreferencesRequest,
+) -> Result<RookDevSettings, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_rook_settings",
+            "The Rook settings request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let mut settings = read_rook_dev_settings(&rook_dev_settings_path(&app)?)?;
+    settings.enabled = tauri::is_dev();
+    Ok(settings)
+}
+
+#[tauri::command]
+async fn set_rook_dev_checkout(
+    app: tauri::AppHandle,
+    request: RookDevSettingsRequest,
+) -> Result<RookDevSettings, IpcError> {
+    if !tauri::is_dev() {
+        return Err(terminal_error(
+            "rook_dev_settings_unavailable",
+            "The Rook checkout setting is available only in development builds.",
+            &request.operation_id,
+        ));
+    }
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_rook_settings",
+            "The Rook settings request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let checkout_path = match request.checkout_path {
+        Some(path) => Some(valid_rook_checkout(Path::new(&path)).ok_or_else(|| {
+            terminal_error("rook_checkout_invalid", "Choose a Rook checkout containing the built bin/rook.mjs and dist/index.js files.", &request.operation_id)
+        })?.to_string_lossy().into_owned()),
+        None => None,
+    };
+    let settings = RookDevSettings {
+        enabled: true,
+        checkout_path,
+    };
+    write_rook_dev_settings(
+        &rook_dev_settings_path(&app)?,
+        &settings,
+        &request.operation_id,
+    )?;
+    Ok(settings)
 }
 
 fn read_preferences(path: &std::path::Path) -> Result<UiPreferences, IpcError> {
@@ -2609,7 +2801,26 @@ async fn start_rook_ask(
             &request.operation_id,
         ));
     }
-    let rook_bin = std::env::var("LAPLACE_ROOK_BIN").ok();
+    let rook_bin = if tauri::is_dev() {
+        let settings = read_rook_dev_settings(&rook_dev_settings_path(&app)?)?;
+        let path = settings.checkout_path.ok_or_else(|| {
+            terminal_error(
+                "rook_checkout_required",
+                "Select a local Rook checkout in Settings → Developer before starting Ask.",
+                &request.operation_id,
+            )
+        })?;
+        let checkout = valid_rook_checkout(Path::new(&path)).ok_or_else(|| {
+            terminal_error(
+                "rook_checkout_invalid",
+                "The selected Rook checkout is no longer valid. Select it again in Settings → Developer.",
+                &request.operation_id,
+            )
+        })?;
+        Some(checkout.join("bin/rook.mjs").to_string_lossy().into_owned())
+    } else {
+        None
+    };
     let mut child = spawn_rook(&root, rook_bin.as_deref(), &request.operation_id)?;
     let mut stdin = child.stdin.take().ok_or_else(|| {
         terminal_error(
@@ -4209,6 +4420,44 @@ mod rook_start_tests {
         assert_eq!(message["params"]["text"], "Explain this project");
         assert_eq!(message["params"]["context"], "");
     }
+
+    #[test]
+    fn local_checkout_requires_built_cli_and_dependencies() {
+        let checkout =
+            std::env::temp_dir().join(format!("laplace-rook-checkout-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&checkout);
+        fs::create_dir_all(checkout.join("bin")).unwrap();
+        fs::create_dir_all(checkout.join("dist")).unwrap();
+        fs::write(checkout.join("bin/rook.mjs"), "").unwrap();
+        fs::write(checkout.join("dist/index.js"), "").unwrap();
+        assert!(valid_rook_checkout(&checkout).is_none());
+        fs::create_dir_all(checkout.join("node_modules")).unwrap();
+        fs::write(
+            checkout.join("bin/rook.mjs"),
+            "console.log('rook 0.1.6');\n",
+        )
+        .unwrap();
+        assert_eq!(
+            valid_rook_checkout(&checkout).as_deref(),
+            Some(fs::canonicalize(&checkout).unwrap().as_path())
+        );
+        fs::remove_dir_all(checkout).unwrap();
+    }
+
+    #[test]
+    fn local_checkout_setting_round_trips() {
+        let directory =
+            std::env::temp_dir().join(format!("laplace-rook-settings-test-{}", std::process::id()));
+        let path = directory.join("rook-dev-settings.json");
+        let _ = fs::remove_dir_all(&directory);
+        let settings = RookDevSettings {
+            enabled: true,
+            checkout_path: Some("/work/rook".to_owned()),
+        };
+        write_rook_dev_settings(&path, &settings, "rook-settings-test").unwrap();
+        assert_eq!(read_rook_dev_settings(&path).unwrap(), settings);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 pub fn run() {
@@ -4222,6 +4471,8 @@ pub fn run() {
             ping,
             get_preferences,
             update_preferences,
+            get_rook_dev_settings,
+            set_rook_dev_checkout,
             open_project,
             get_recent_projects,
             list_project_entries,

@@ -50,6 +50,15 @@ export interface UpdatePreferencesRequest extends PreferencesRequest {
   preferences: UiPreferences;
 }
 
+export interface RookDevSettings {
+  enabled: boolean;
+  checkoutPath: string | null;
+}
+
+export interface RookDevSettingsRequest extends PreferencesRequest {
+  checkoutPath: string | null;
+}
+
 export interface PreferencesResponse {
   schemaVersion: number;
   operationId: string;

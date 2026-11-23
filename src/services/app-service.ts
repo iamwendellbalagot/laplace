@@ -24,6 +24,8 @@ import {
   type PreferencesResponse,
   type UiPreferences,
   type UpdatePreferencesRequest,
+  type RookDevSettings,
+  type RookDevSettingsRequest,
   type GitStatus,
   type TerminalEvent,
   type ChangeRecord,
@@ -40,6 +42,9 @@ export interface AppService {
   listen(listener: (event: AppEvent) => void): Promise<UnlistenFn>;
   getPreferences(): Promise<UiPreferences>;
   updatePreferences(preferences: UiPreferences): Promise<UiPreferences>;
+  getRookDevSettings(): Promise<RookDevSettings>;
+  setRookDevCheckout(path: string | null): Promise<RookDevSettings>;
+  chooseRookCheckout(): Promise<string | null>;
   chooseProjectDirectory(): Promise<string | null>;
   openProject(path: string): Promise<ProjectSummary>;
   getRecentProjects(): Promise<ProjectSummary[]>;
@@ -449,6 +454,40 @@ export class TauriAppService implements AppService {
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }
+  }
+
+  async getRookDevSettings(): Promise<RookDevSettings> {
+    const request: PreferencesRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+    };
+    try {
+      return await invoke("get_rook_dev_settings", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async setRookDevCheckout(path: string | null): Promise<RookDevSettings> {
+    const request: RookDevSettingsRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      checkoutPath: path,
+    };
+    try {
+      return await invoke("set_rook_dev_checkout", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async chooseRookCheckout(): Promise<string | null> {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Select local Rook checkout",
+    });
+    return typeof selected === "string" ? selected : null;
   }
 
   async chooseProjectDirectory(): Promise<string | null> {

@@ -67,6 +67,32 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("reads and updates the local Rook developer checkout setting", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ enabled: true, checkoutPath: null })
+      .mockResolvedValueOnce({ enabled: true, checkoutPath: "/work/rook" });
+    const service = new TauriAppService();
+
+    await expect(service.getRookDevSettings()).resolves.toEqual({
+      enabled: true,
+      checkoutPath: null,
+    });
+    await expect(service.setRookDevCheckout("/work/rook")).resolves.toEqual({
+      enabled: true,
+      checkoutPath: "/work/rook",
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_rook_dev_settings", {
+      request: { schemaVersion: 1, operationId: expect.any(String) },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "set_rook_dev_checkout", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        checkoutPath: "/work/rook",
+      },
+    });
+  });
+
   it("preserves structured backend errors", async () => {
     mocks.invoke.mockRejectedValue({
       schemaVersion: 1,

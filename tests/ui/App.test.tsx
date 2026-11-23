@@ -73,6 +73,15 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     }),
     getPreferences: vi.fn(async () => DEFAULT_PREFERENCES),
     updatePreferences: vi.fn(async (preferences: UiPreferences) => preferences),
+    getRookDevSettings: vi.fn(async () => ({
+      enabled: false,
+      checkoutPath: null,
+    })),
+    setRookDevCheckout: vi.fn(async (checkoutPath: string | null) => ({
+      enabled: false,
+      checkoutPath,
+    })),
+    chooseRookCheckout: vi.fn(async () => null),
     chooseProjectDirectory: vi.fn(async () => null),
     openProject: vi.fn(async () => project),
     getRecentProjects: vi.fn(async () => []),
@@ -546,6 +555,43 @@ describe("reference application shell", () => {
     expect(
       screen.getByRole("heading", { name: "Settings" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows and saves the development-only Rook checkout setting", async () => {
+    const { service } = serviceFixture({
+      getRookDevSettings: vi.fn(async () => ({
+        enabled: true,
+        checkoutPath: null,
+      })),
+      chooseRookCheckout: vi.fn(async () => "/work/rook"),
+      setRookDevCheckout: vi.fn(async (checkoutPath) => ({
+        enabled: true,
+        checkoutPath,
+      })),
+    });
+    render(<App service={service} />);
+    await screen.findByRole("heading", { name: /Code when you want/i });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(
+      await screen.findByRole("heading", { name: "Developer" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Choose checkout" }));
+
+    expect(await screen.findByText("/work/rook")).toBeInTheDocument();
+    expect(service.setRookDevCheckout).toHaveBeenCalledWith("/work/rook");
+  });
+
+  it("hides the developer Rook checkout setting when the backend disables it", async () => {
+    const { service } = serviceFixture();
+    render(<App service={service} />);
+    await screen.findByRole("heading", { name: /Code when you want/i });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Native connection" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Developer" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Developer" })).toBeNull();
   });
 
   it("resizes the editor inspector with keyboard and saves the layout", async () => {
