@@ -2610,30 +2610,7 @@ async fn start_rook_ask(
         ));
     }
     let rook_bin = std::env::var("LAPLACE_ROOK_BIN").ok();
-    let mut command = if let Some(path) = rook_bin.as_deref().filter(|path| path.ends_with(".mjs"))
-    {
-        let mut cmd = Command::new("node");
-        cmd.arg(path);
-        cmd
-    } else if let Some(path) = rook_bin.as_deref() {
-        Command::new(path)
-    } else {
-        Command::new("rook")
-    };
-    let mut child = command
-        .args(["--stdio", "--cwd"])
-        .arg(&root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| {
-            terminal_error(
-                "rook_unavailable",
-                "Install Rook or set LAPLACE_ROOK_BIN to its executable path.",
-                &request.operation_id,
-            )
-        })?;
+    let mut child = spawn_rook(&root, rook_bin.as_deref(), &request.operation_id)?;
     let mut stdin = child.stdin.take().ok_or_else(|| {
         terminal_error(
             "rook_start_failed",
@@ -2758,6 +2735,36 @@ async fn start_rook_ask(
             Arc::new(Mutex::new(RookProcess { child, stdin })),
         );
     Ok(response)
+}
+
+fn spawn_rook(
+    root: &Path,
+    rook_bin: Option<&str>,
+    operation_id: &str,
+) -> Result<std::process::Child, IpcError> {
+    let mut command = if let Some(path) = rook_bin.filter(|path| path.ends_with(".mjs")) {
+        let mut command = Command::new("node");
+        command.arg(path);
+        command
+    } else if let Some(path) = rook_bin {
+        Command::new(path)
+    } else {
+        Command::new("rook")
+    };
+    command
+        .args(["--stdio", "--cwd"])
+        .arg(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            terminal_error(
+                "rook_unavailable",
+                "Install Rook or set LAPLACE_ROOK_BIN to its executable path.",
+                operation_id,
+            )
+        })
 }
 
 #[tauri::command]
@@ -4177,6 +4184,24 @@ mod plan09_tests {
             .output();
         let _ = fs::remove_dir_all(std::env::temp_dir().join("laplace-test-worktrees"));
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod rook_start_tests {
+    use super::*;
+
+    #[test]
+    fn missing_rook_executable_returns_actionable_error() {
+        let error = spawn_rook(
+            Path::new("/tmp"),
+            Some("/laplace-test/missing-rook"),
+            "rook-test-op",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "rook_unavailable");
+        assert!(error.message.contains("Install Rook"));
+        assert_eq!(error.operation_id, "rook-test-op");
     }
 }
 

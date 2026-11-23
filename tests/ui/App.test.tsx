@@ -214,6 +214,19 @@ describe("reference application shell", () => {
   it("opens, edits, and saves a project file from the lazy explorer", async () => {
     const { service } = serviceFixture({
       chooseProjectDirectory: vi.fn(async () => project.path),
+      listProjectEntries: vi
+        .fn()
+        .mockResolvedValueOnce({ entries, truncated: false })
+        .mockResolvedValueOnce({
+          entries: [{ name: "src", relativePath: "src", kind: "directory" }],
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          entries: [
+            { name: "README.md", relativePath: "src/README.md", kind: "file" },
+          ],
+          truncated: false,
+        }),
     });
     render(<App service={service} />);
     await screen.findByRole("heading", { name: /Code when you want/i });
@@ -265,6 +278,46 @@ describe("reference application shell", () => {
     );
     await waitFor(() => expect(screen.getAllByText("Saved")).toHaveLength(2));
     expect(service.ping).not.toHaveBeenCalled();
+  });
+
+  it("opens nested files using their project-relative path exactly once", async () => {
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+      listProjectEntries: vi
+        .fn()
+        .mockResolvedValueOnce({ entries, truncated: false })
+        .mockResolvedValueOnce({
+          entries: [
+            { name: "nested", relativePath: "src/nested", kind: "directory" },
+          ],
+          truncated: false,
+        })
+        .mockResolvedValueOnce({
+          entries: [
+            {
+              name: "main.ts",
+              relativePath: "src/nested/main.ts",
+              kind: "file",
+            },
+          ],
+          truncated: false,
+        }),
+    });
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open project folder" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "src" }));
+    fireEvent.click(await screen.findByRole("button", { name: "nested" }));
+    fireEvent.click(await screen.findByRole("button", { name: "main.ts" }));
+
+    expect(
+      await screen.findByRole("textbox", { name: "Code editor" }),
+    ).toHaveValue("hello, Laplace!");
+    expect(service.readProjectFile).toHaveBeenCalledWith(
+      project.id,
+      "src/nested/main.ts",
+    );
   });
 
   it("keeps an edited buffer dirty when the backend detects a save conflict", async () => {
@@ -350,6 +403,69 @@ describe("reference application shell", () => {
     expect(
       screen.getByText(/Durable Change records belong to a project/),
     ).toBeInTheDocument();
+  });
+
+  it("shows structured Change transition errors instead of object coercion", async () => {
+    const change = {
+      id: "change1",
+      projectId: project.id,
+      objective: "Test status validation",
+      status: "draft" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+      listChanges: vi.fn(async () => [change]),
+      updateChange: vi.fn(async () => {
+        throw {
+          code: "change_transition_invalid",
+          message: "Move this Change through review before integrating it.",
+          retryable: false,
+        };
+      }),
+    });
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open project folder" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Changes" }));
+    fireEvent.change(
+      await screen.findByRole("combobox", {
+        name: "Status for Test status validation",
+      }),
+      { target: { value: "integrated" } },
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Move this Change through review before integrating it.",
+    );
+    expect(screen.queryByText("[object Object]")).not.toBeInTheDocument();
+  });
+
+  it("shows structured Rook startup errors", async () => {
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+      startRookAsk: vi.fn(async () => {
+        throw {
+          code: "rook_unavailable",
+          message: "Install Rook or configure its executable path.",
+          retryable: false,
+        };
+      }),
+    });
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open project folder" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Rook" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start read-only Ask" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Install Rook or configure its executable path.",
+    );
   });
 
   it("opens the command palette, filters, runs a command, and returns focus", async () => {

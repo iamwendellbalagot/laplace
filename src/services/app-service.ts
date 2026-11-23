@@ -210,14 +210,19 @@ export class TauriAppService implements AppService {
     objective: string,
     status: ChangeStatus,
   ): Promise<ChangeRecord> {
-    return invoke("update_change", {
-      request: {
-        ...this.workspaceRequest(projectId),
-        changeId,
-        objective,
-        status,
-      },
-    });
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+      objective,
+      status,
+    };
+    try {
+      return await invoke("update_change", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async updateChangeIfVersion(
@@ -313,14 +318,17 @@ export class TauriAppService implements AppService {
     sessionId: string,
     workspaceId: string,
   ): Promise<RookInitResponse> {
-    return invoke("start_rook_ask", {
-      request: {
-        schemaVersion: IPC_SCHEMA_VERSION,
-        operationId: crypto.randomUUID(),
-        sessionId,
-        workspaceId,
-      },
-    });
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      sessionId,
+      workspaceId,
+    };
+    try {
+      return await invoke("start_rook_ask", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async promptRookAsk(

@@ -290,6 +290,37 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("normalizes structured Change and Rook startup failures", async () => {
+    const service = new TauriAppService();
+    mocks.invoke.mockRejectedValueOnce({
+      schemaVersion: 1,
+      code: "change_transition_invalid",
+      message: "This Change status transition is not allowed.",
+      operationId: "change-op",
+      retryable: false,
+    });
+    await expect(
+      service.updateChange("/work/project", "c1", "Change", "integrated"),
+    ).rejects.toMatchObject({
+      code: "change_transition_invalid",
+      message: "This Change status transition is not allowed.",
+    });
+
+    mocks.invoke.mockRejectedValueOnce({
+      schemaVersion: 1,
+      code: "rook_unavailable",
+      message: "Install Rook or set LAPLACE_ROOK_BIN to its executable path.",
+      operationId: "rook-op",
+      retryable: false,
+    });
+    await expect(
+      service.startRookAsk("session1", "/work/project"),
+    ).rejects.toMatchObject({
+      code: "rook_unavailable",
+      message: "Install Rook or set LAPLACE_ROOK_BIN to its executable path.",
+    });
+  });
+
   it("sends structured verification commands and loads execution history", async () => {
     mocks.invoke.mockResolvedValueOnce({ id: "e1" }).mockResolvedValueOnce([]);
     const service = new TauriAppService();

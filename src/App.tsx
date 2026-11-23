@@ -221,9 +221,7 @@ export function App({ service, browserPreview = false }: AppProps) {
   async function openProjectFile(relativePath: string) {
     if (browserPreview) return;
     if (!activeProject) return;
-    const fullRelativePath = [projectDirectory, relativePath]
-      .filter(Boolean)
-      .join("/");
+    const fullRelativePath = relativePath;
     const key = `${activeProject.id}\0${fullRelativePath}`;
     const existing = documents.find((document) => document.key === key);
     if (existing) {
@@ -966,6 +964,15 @@ function ScreenContent(props: ScreenContentProps) {
   );
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") return message;
+  }
+  return fallback;
+}
+
 function ChangesScreen({
   activeProject,
   changes,
@@ -1094,7 +1101,14 @@ function ChangesScreen({
                           change.id,
                           change.objective,
                           event.target.value as ChangeStatus,
-                        ).catch((failure) => setError(String(failure)))
+                        ).catch((failure) =>
+                          setError(
+                            errorMessage(
+                              failure,
+                              "Change status could not be updated.",
+                            ),
+                          ),
+                        )
                       }
                     >
                       <option value="draft">Draft</option>
@@ -1108,7 +1122,12 @@ function ChangesScreen({
                       type="button"
                       onClick={() =>
                         void onCreateCandidate?.(change.id).catch((failure) =>
-                          setError(String(failure)),
+                          setError(
+                            errorMessage(
+                              failure,
+                              "Candidate worktree could not be created.",
+                            ),
+                          ),
                         )
                       }
                     >
@@ -1130,7 +1149,14 @@ function ChangesScreen({
                           void onReopenChange?.(
                             change.id,
                             change.objective,
-                          ).catch((failure) => setError(String(failure)))
+                          ).catch((failure) =>
+                            setError(
+                              errorMessage(
+                                failure,
+                                "Change could not be reopened.",
+                              ),
+                            ),
+                          )
                         }
                       >
                         Reopen review
@@ -1340,11 +1366,7 @@ function RookScreen({
       setSession(id);
       setRookVersion(result.rookVersion);
     } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : "Rook could not be started.",
-      );
+      setError(errorMessage(failure, "Rook could not be started."));
     } finally {
       setPending(false);
     }
@@ -1688,7 +1710,7 @@ function EditorScreen(props: ScreenContentProps) {
                 </button>
               ) : entry.kind === "file" ? (
                 <button
-                  className={`explorer-entry explorer-file${selectedFilePath === [projectDirectory, entry.relativePath].filter(Boolean).join("/") ? " explorer-file-active" : ""}`}
+                  className={`explorer-entry explorer-file${selectedFilePath === entry.relativePath ? " explorer-file-active" : ""}`}
                   key={entry.relativePath}
                   type="button"
                   onClick={() => onOpenProjectFile(entry.relativePath)}
