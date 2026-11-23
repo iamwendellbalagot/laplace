@@ -14,6 +14,8 @@ Developers can inspect and configure what Rook can access, where capabilities ca
 - [ ] Support inspecting skill instructions/origin without executing them.
 - [ ] Add MCP server configuration, supported transport settings, connection lifecycle, tool discovery, and actionable errors.
 - [ ] Show enabled/configured/connected/authorized as distinct concepts.
+- [ ] Maintain a Rook feature-parity inventory covering provider login/logout, model selection/settings, sessions, skills, MCP, memory, and other user-facing Rook features. Mark each as implemented natively, available through an explicit Rook Terminal handoff, or blocked by missing protocol support; do not imply unsupported features are available.
+- [ ] Expose Rook-owned provider/model configuration through negotiated Rook APIs rather than implementing a competing provider runtime. Keep credentials in Rook/Pi and model selection/configuration ownership explicit; any workspace-defined provider endpoint requires clear source visibility and workspace trust before use.
 - [ ] Present applicable scopes and permission requests without bypassing harness enforcement.
 - [ ] Store application-owned secrets in credential storage; respect harness-owned configuration/credential boundaries.
 - [ ] Warn on untrusted project capability changes; review effective config before activation.

@@ -16,6 +16,10 @@ A packaged, recoverable desktop beta with honest platform support and no critica
 - [ ] Configure signed updates, trusted update endpoints, version compatibility, and failed-update recovery policy.
 - [ ] Validate database upgrade/backup/recovery behavior; do not promise downgrade compatibility without evidence.
 - [ ] Review Rook/language-server/runtime bundling and updates, licensing, notices, and offline/missing-runtime behavior.
+- [ ] Enable Tauri release bundling and include an exact, pinned published `rook-agent` npm release plus its locked runtime dependencies and a compatible Node runtime in each supported installer. Developer builds may use the dev-only local-checkout setting; release builds must not expose it.
+- [ ] Launch only the Rook payload inside the Laplace app bundle in release builds. Ignore developer overrides, `LAPLACE_ROOK_BIN`, global Rook/Node on `PATH`, and network downloads; ship Rook updates through Laplace releases. Do not include developer `models.json`, provider credentials, or user auth data.
+- [ ] Verify bundled Node and Rook's native `better-sqlite3` module are compatible for every OS/architecture, and include their licenses/notices in signing and packaging review.
+- [ ] Test installed Laplace on clean supported systems without Node, npm, Rook, or a checkout: first-launch/offline protocol startup, then provider sign-in, model selection, and streamed Ask. Missing or incompatible bundle components must produce an actionable Laplace repair/reinstall error, not an instruction to install Rook separately.
 - [ ] Audit trust, capability scopes, path handling, process cleanup, credential storage, and artifact redaction/retention.
 - [ ] Audit themes, density, contrast, screen-reader semantics, keyboard-only operation, zoom, IME, and reduced motion.
 - [ ] Benchmark startup, idle memory, large repositories/diffs, typing latency, and output floods on declared fixtures/hardware.
@@ -24,7 +28,7 @@ A packaged, recoverable desktop beta with honest platform support and no critica
 
 ## Native release matrix
 
-Test editor input/clipboard/IME, terminal resize/cancel/process trees, filesystem events, Git credentials, worktree setup, Rook reconnect/permissions, check recording, candidate review, guarded integration, restart, installer, and updater. Include relevant Linux X11/Wayland environments. Browser UI tests do not substitute for these checks.
+Test editor input/clipboard/IME, terminal resize/cancel/process trees, filesystem events, Git credentials, worktree setup, Rook local-checkout dev override, bundled-runtime startup, sign-in/model selection, reconnect/permissions, check recording, candidate review, guarded integration, restart, installer, and updater. Include relevant Linux X11/Wayland environments. Browser UI tests do not substitute for these checks.
 
 ## Product qualification scenarios
 

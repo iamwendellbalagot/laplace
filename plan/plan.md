@@ -39,15 +39,15 @@ Each numbered document is an implementation checkpoint, not one giant commit. Br
 | 05 | [Editor and TypeScript](05-editor-typescript.md) | Real editing, recovery, language services | In progress — Monaco editing and safe saves implemented; LSP/recovery/native checks remain |
 | 06 | [Terminal and Git](06-terminal-git.md) | Real shells, processes, status, diffs | Initial implementation; native and cross-platform acceptance open |
 | 07 | [Persistent Changes](07-changes-persistence.md) | Durable domain, Change register, recovery | SQLite Change foundation; recovery/domain expansion open |
-| 08 | [Rook and contextual delegation](08-rook-delegation.md) | Read-only Ask, permissions, session lifecycle | Experimental Rook Ask; provider-backed and context workflow open |
+| 08 | [Rook and contextual delegation](08-rook-delegation.md) | Read-only Ask, permissions, session lifecycle | Experimental Ask; dev checkout selection, native sign-in/model selection, provider-backed and context workflow open |
 | 09 | [Isolated implementation](09-worktrees-environments.md) | Worktrees, setup recipes, authorized Build | Candidate worktrees and trusted recipes; Build blocked on Rook support |
 | 10 | [Verification and evidence](10-verification-evidence.md) | Recorded checks and source freshness | Structured source-bound checks; artifact/workflow acceptance open |
 | 11 | [Review and integration](11-review-integration.md) | Editable review, approval, guarded integration | Not started |
 | 12 | [Daily workflow](12-daily-workflow.md) | Inline patches, runs, manual Changes, robustness | Not started |
 | 13 | [Context and history](13-context-history.md) | Context Lens, grounded System explorer | Not started |
 | 14 | [Behavior comparison](14-behavior-comparison.md) | Narrow, reproducible baseline/candidate comparisons | Not started |
-| 15 | [Skills and MCP](15-skills-mcp.md) | Capability configuration, permissions, provenance | Not started |
-| 16 | [Cross-platform beta](16-release-hardening.md) | Qualified, packaged, signed desktop beta | Not started |
+| 15 | [Skills and MCP](15-skills-mcp.md) | Capability configuration, permissions, provenance | Not started; includes Rook parity inventory and Rook-owned provider/model controls |
+| 16 | [Cross-platform beta](16-release-hardening.md) | Qualified, packaged, signed desktop beta | Not started; must bundle pinned Rook npm release and compatible Node runtime |
 
 ## Milestones
 
