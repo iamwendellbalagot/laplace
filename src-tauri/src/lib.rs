@@ -1005,34 +1005,84 @@ fn save_project_file_contents(
     }
     let joined_path = root.join(relative);
     let parent = joined_path.parent().ok_or_else(|| {
-        IpcError::new("invalid_relative_path", "Select a file inside the open project.", operation_id.to_owned(), false)
+        IpcError::new(
+            "invalid_relative_path",
+            "Select a file inside the open project.",
+            operation_id.to_owned(),
+            false,
+        )
     })?;
     let canonical_parent = fs::canonicalize(parent).map_err(|_| {
-        IpcError::new("project_file_unavailable", "That file is no longer available inside the project.", operation_id.to_owned(), true)
+        IpcError::new(
+            "project_file_unavailable",
+            "That file is no longer available inside the project.",
+            operation_id.to_owned(),
+            true,
+        )
     })?;
     if !canonical_parent.starts_with(&root) {
-        return Err(IpcError::new("project_path_escape", "The requested file resolves outside the open project.", operation_id.to_owned(), false));
+        return Err(IpcError::new(
+            "project_path_escape",
+            "The requested file resolves outside the open project.",
+            operation_id.to_owned(),
+            false,
+        ));
     }
     let filename = relative.file_name().ok_or_else(|| {
-        IpcError::new("invalid_relative_path", "Select a file inside the open project.", operation_id.to_owned(), false)
+        IpcError::new(
+            "invalid_relative_path",
+            "Select a file inside the open project.",
+            operation_id.to_owned(),
+            false,
+        )
     })?;
     let path = canonical_parent.join(filename);
-    if fs::symlink_metadata(&path).map_err(|_| {
-        IpcError::new("project_file_unavailable", "That file is no longer available inside the project.", operation_id.to_owned(), true)
-    })?.file_type().is_symlink() {
-        return Err(IpcError::new("project_file_symlink", "Symbolic links are not followed by the project editor.", operation_id.to_owned(), false));
+    if fs::symlink_metadata(&path)
+        .map_err(|_| {
+            IpcError::new(
+                "project_file_unavailable",
+                "That file is no longer available inside the project.",
+                operation_id.to_owned(),
+                true,
+            )
+        })?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(IpcError::new(
+            "project_file_symlink",
+            "Symbolic links are not followed by the project editor.",
+            operation_id.to_owned(),
+            false,
+        ));
     }
     let permissions = fs::metadata(&path)
-        .map_err(|_| IpcError::new("project_file_read_failed", "This project file could not be inspected.", operation_id.to_owned(), true))?
+        .map_err(|_| {
+            IpcError::new(
+                "project_file_read_failed",
+                "This project file could not be inspected.",
+                operation_id.to_owned(),
+                true,
+            )
+        })?
         .permissions();
     let temporary = canonical_parent.join(format!(".laplace-save-{operation_id}.tmp"));
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .map_err(|_| IpcError::new("project_file_write_failed", "This project file could not be saved.", operation_id.to_owned(), true))?;
+        .map_err(|_| {
+            IpcError::new(
+                "project_file_write_failed",
+                "This project file could not be saved.",
+                operation_id.to_owned(),
+                true,
+            )
+        })?;
     use std::io::Write;
-    if file.write_all(content.as_bytes()).is_err() || fs::set_permissions(&temporary, permissions).is_err() {
+    if file.write_all(content.as_bytes()).is_err()
+        || fs::set_permissions(&temporary, permissions).is_err()
+    {
         let _ = fs::remove_file(&temporary);
         return Err(IpcError::new(
             "project_file_write_failed",
@@ -1570,10 +1620,8 @@ mod tests {
 
     #[test]
     fn saves_utf8_only_when_disk_content_matches_the_open_version() {
-        let directory = std::env::temp_dir().join(format!(
-            "laplace-project-save-test-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("laplace-project-save-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("source.ts");
