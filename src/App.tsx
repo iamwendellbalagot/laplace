@@ -24,6 +24,7 @@ const CodeEditor = lazy(() =>
 
 interface AppProps {
   service: AppService;
+  browserPreview?: boolean;
 }
 
 interface PaletteCommand {
@@ -41,7 +42,7 @@ interface EditorDocument {
   savedContent: string;
 }
 
-export function App({ service }: AppProps) {
+export function App({ service, browserPreview = false }: AppProps) {
   const page = useAppStore((state) => state.page);
   const preferences = useAppStore((state) => state.preferences);
   const navigate = useAppStore((state) => state.navigate);
@@ -67,6 +68,7 @@ export function App({ service }: AppProps) {
   const [savingFiles, setSavingFiles] = useState(false);
 
   useEffect(() => {
+    if (browserPreview) return;
     let mounted = true;
     let unlisten: (() => void) | undefined;
     void service
@@ -111,9 +113,10 @@ export function App({ service }: AppProps) {
       mounted = false;
       unlisten?.();
     };
-  }, [service, setPreferences]);
+  }, [browserPreview, service, setPreferences]);
 
   async function openProject(path?: string) {
+    if (browserPreview) return;
     setProjectPending(true);
     setProjectError(undefined);
     try {
@@ -147,6 +150,7 @@ export function App({ service }: AppProps) {
   }
 
   async function openProjectDirectory(relativePath: string) {
+    if (browserPreview) return;
     if (!activeProject) return;
     try {
       setProjectError(undefined);
@@ -169,6 +173,7 @@ export function App({ service }: AppProps) {
   }
 
   async function openProjectFile(relativePath: string) {
+    if (browserPreview) return;
     if (!activeProject) return;
     const fullRelativePath = [projectDirectory, relativePath]
       .filter(Boolean)
@@ -325,6 +330,11 @@ export function App({ service }: AppProps) {
   }, [preferences, service, documents, activeDocumentKey]);
 
   async function savePreferences(next: UiPreferences) {
+    if (browserPreview) {
+      setPreferences(next);
+      setPreferencesError(undefined);
+      return;
+    }
     setSavingPreferences(true);
     setPreferencesError(undefined);
     try {
@@ -474,6 +484,11 @@ export function App({ service }: AppProps) {
           />
         </Dialog.Root>
         <div className="toolbar-right">
+          {browserPreview && (
+            <span className="preview-badge" role="status">
+              Browser preview · native actions off
+            </span>
+          )}
           <span className="connection-state">
             <span className="status-dot status-dot-muted" /> Rook not connected
           </span>
@@ -598,6 +613,7 @@ export function App({ service }: AppProps) {
             onSaveDocuments={(items) => void saveDocuments(items)}
             onCloseDocument={closeDocument}
             savingFiles={savingFiles}
+            browserPreview={browserPreview}
           />
         </main>
       </div>
@@ -791,6 +807,7 @@ interface ScreenContentProps {
   onSaveDocuments: (documents: EditorDocument[]) => void;
   onCloseDocument: (document: EditorDocument) => void;
   savingFiles: boolean;
+  browserPreview: boolean;
 }
 
 function ScreenContent(props: ScreenContentProps) {
@@ -832,6 +849,7 @@ function HomeScreen({
   recentProjects,
   projectPending,
   onOpenProject,
+  browserPreview,
 }: ScreenContentProps) {
   return (
     <section className="home-page" aria-labelledby="screen-title">
@@ -867,11 +885,17 @@ function HomeScreen({
           <button
             className="button button-primary"
             type="button"
-            disabled={projectPending}
+            disabled={projectPending || browserPreview}
             onClick={() => onOpenProject()}
           >
-            {projectPending ? "Opening…" : "Open project folder"}
-            {!projectPending && <span aria-hidden="true">→</span>}
+            {browserPreview
+              ? "Open project · desktop app only"
+              : projectPending
+                ? "Opening…"
+                : "Open project folder"}
+            {!projectPending && !browserPreview && (
+              <span aria-hidden="true">→</span>
+            )}
           </button>
           <button
             className="button button-quiet"
@@ -945,6 +969,7 @@ function EditorScreen(props: ScreenContentProps) {
     onSaveDocuments,
     onCloseDocument,
     savingFiles,
+    browserPreview,
   } = props;
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
   const activeDocument = documents.find(
@@ -1212,14 +1237,16 @@ function EditorScreen(props: ScreenContentProps) {
                 <button
                   className="button button-quiet"
                   type="button"
-                  disabled={projectPending}
+                  disabled={projectPending || browserPreview}
                   onClick={() => onOpenProject()}
                 >
-                  {projectPending
-                    ? "Opening…"
-                    : activeProject
-                      ? "Open another folder"
-                      : "Open project folder"}
+                  {browserPreview
+                    ? "Project access requires the desktop app"
+                    : projectPending
+                      ? "Opening…"
+                      : activeProject
+                        ? "Open another folder"
+                        : "Open project folder"}
                 </button>
               </>
             )}
@@ -1523,23 +1550,30 @@ function SettingsScreen(props: ScreenContentProps) {
           >
             <h2 id="native-title">Native connection</h2>
             <p>
-              The command/event smoke test runs only when requested. It does not
-              open a project or start a tool.
+              {props.browserPreview
+                ? "Native IPC and project/filesystem access are unavailable in this browser preview. Open Laplace as a desktop app to use them."
+                : "The command/event smoke test runs only when requested. It does not open a project or start a tool."}
             </p>
             <div className="native-check-row">
               <button
                 className="button button-primary"
                 type="button"
-                disabled={props.nativePending}
+                disabled={props.nativePending || props.browserPreview}
                 onClick={props.onTestNative}
               >
-                {props.nativePending ? "Checking…" : "Test native connection"}
+                {props.browserPreview
+                  ? "Unavailable in browser preview"
+                  : props.nativePending
+                    ? "Checking…"
+                    : "Test native connection"}
               </button>
               <span role="status" aria-live="polite">
-                {props.nativeResult ??
-                  (props.nativePending
-                    ? "Waiting for native response…"
-                    : "Not tested this session")}
+                {props.browserPreview
+                  ? "No native commands are sent from this page."
+                  : (props.nativeResult ??
+                    (props.nativePending
+                      ? "Waiting for native response…"
+                      : "Not tested this session"))}
               </span>
             </div>
             {props.nativeEvent && (

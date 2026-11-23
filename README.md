@@ -35,6 +35,11 @@ pnpm tauri dev
 `pnpm tauri dev` launches the native window. `pnpm tauri build` compiles the
 desktop executable without producing an installer bundle yet. Rust checks:
 
+For a browser-only visual preview from the shared `ai_dev_workspace` opencode
+container, run `pnpm dev:web-preview` and open <http://localhost:5173> on the
+host Mac. The preview deliberately disables native project/filesystem and IPC
+actions; use `pnpm tauri dev` on the host for those features.
+
 ```sh
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

@@ -98,6 +98,30 @@ describe("reference application shell", () => {
     expect(service.getPreferences).toHaveBeenCalledOnce();
   });
 
+  it("renders an explicit browser preview without making native calls", async () => {
+    const { service } = serviceFixture();
+    render(<App service={service} browserPreview />);
+
+    expect(
+      await screen.findByRole("heading", { name: /Code when you want/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Browser preview · native actions off/i),
+    ).toBeInTheDocument();
+    expect(service.getPreferences).not.toHaveBeenCalled();
+    expect(service.getRecentProjects).not.toHaveBeenCalled();
+    expect(service.listen).not.toHaveBeenCalled();
+
+    expect(
+      screen.getByRole("button", { name: /desktop app only/i }),
+    ).toBeDisabled();
+    expect(service.chooseProjectDirectory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(
+      screen.getByText(/unavailable in this browser preview/i),
+    ).toBeInTheDocument();
+  });
+
   it("opens, edits, and saves a project file from the lazy explorer", async () => {
     const { service } = serviceFixture({
       chooseProjectDirectory: vi.fn(async () => project.path),

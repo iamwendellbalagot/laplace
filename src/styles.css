@@ -231,6 +231,14 @@ kbd,
   justify-content: flex-end;
   gap: 15px;
 }
+.preview-badge {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--brass-light);
+  font: 9px var(--mono);
+  white-space: nowrap;
+}
 .connection-state {
   display: inline-flex;
   align-items: center;

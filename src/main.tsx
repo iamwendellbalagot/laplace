@@ -14,6 +14,9 @@ if (!root) throw new Error("Missing application root element.");
 
 createRoot(root).render(
   <StrictMode>
-    <App service={new TauriAppService()} />
+    <App
+      service={new TauriAppService()}
+      browserPreview={import.meta.env.VITE_BROWSER_PREVIEW === "1"}
+    />
   </StrictMode>,
 );
