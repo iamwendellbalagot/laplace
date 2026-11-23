@@ -678,6 +678,150 @@ kbd,
   font-size: 12px;
   line-height: 1.75;
 }
+.change-create {
+  display: grid;
+  max-width: 780px;
+  gap: 10px;
+  margin: 26px 0;
+}
+.change-create label {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.change-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 14px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.change-filter select {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: 10px var(--mono);
+}
+.change-create textarea {
+  min-height: 78px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  padding: 11px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12px/1.5 var(--sans);
+}
+.change-list {
+  display: grid;
+  gap: 8px;
+}
+.change-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.change-card h2 {
+  margin: 6px 0;
+  font: 400 19px var(--serif);
+}
+.change-card small {
+  color: var(--muted);
+  font: 9px var(--mono);
+}
+.change-card select {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: 10px var(--mono);
+}
+.check-run-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 24px 0;
+}
+.check-run-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.check-run-form input {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  padding: 0 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: 11px var(--mono);
+}
+.execution-list {
+  display: grid;
+  gap: 10px;
+}
+.execution-list article {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.6fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.execution-list article div {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+.execution-list article span,
+.execution-list article small {
+  color: var(--muted);
+  font: 9px/1.5 var(--mono);
+}
+.execution-list pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  color: var(--text-secondary);
+  font: 10px/1.5 var(--mono);
+  white-space: pre-wrap;
+}
+.rook-events {
+  display: grid;
+  gap: 6px;
+  max-height: 55vh;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+.rook-events li {
+  padding: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: 9px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+.permission-card {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--brass);
+  background: var(--surface);
+}
+.permission-card pre {
+  max-height: 150px;
+  overflow: auto;
+  font: 9px/1.5 var(--mono);
+  white-space: pre-wrap;
+}
+.permission-card button {
+  margin-right: 8px;
+}
 
 .editor-shell {
   position: relative;
@@ -800,6 +944,90 @@ kbd,
   flex: 1;
   flex-direction: column;
   background: var(--canvas);
+}
+.workspace-tools {
+  display: flex;
+  height: 240px;
+  min-height: 160px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--shell);
+}
+.workspace-tool-tabs {
+  display: flex;
+  height: 35px;
+  flex: 0 0 35px;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-tool-tabs button {
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: 10px var(--mono);
+}
+.workspace-tool-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--brass);
+  color: var(--text);
+}
+.terminal-panel,
+.git-panel {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.terminal-host {
+  width: 100%;
+  height: 100%;
+}
+.terminal-host .xterm {
+  height: 100%;
+}
+.git-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font: 10px var(--mono);
+}
+.git-panel header button {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.git-panel ul {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+.git-panel li {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  font: 10px var(--mono);
+}
+.git-panel li code {
+  color: var(--brass-light);
+}
+.git-panel pre {
+  max-height: 100px;
+  overflow: auto;
+  margin: 6px 0 0;
+  border: 1px solid var(--border);
+  padding: 8px;
+  color: var(--text-secondary);
+  font: 9px/1.5 var(--mono);
+  white-space: pre-wrap;
 }
 .editor-placeholder-top {
   display: flex;

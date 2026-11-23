@@ -2,6 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/App";
 
+vi.mock("../../src/features/terminal/TerminalPanel", () => ({
+  TerminalPanel: () => <div aria-label="Workspace terminal" />,
+}));
+
 vi.mock("../../src/features/editor/CodeEditor", () => ({
   CodeEditor: ({
     value,
@@ -75,6 +79,91 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     listProjectEntries: vi.fn(async () => ({ entries, truncated: false })),
     readProjectFile: vi.fn(async () => textPreview),
     saveProjectFile: vi.fn(async () => true),
+    gitStatus: vi.fn(async () => ({ branch: "main", files: [] })),
+    gitDiff: vi.fn(async () => ""),
+    startTerminal: vi.fn(async () => undefined),
+    writeTerminal: vi.fn(async () => undefined),
+    stopTerminal: vi.fn(async () => undefined),
+    trustWorkspace: vi.fn(async () => undefined),
+    untrustWorkspace: vi.fn(async () => undefined),
+    listChanges: vi.fn(async () => []),
+    createChange: vi.fn(async (_projectId: string, objective: string) => ({
+      id: "change1",
+      projectId: project.id,
+      objective,
+      status: "draft" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    })),
+    updateChange: vi.fn(
+      async (
+        _projectId: string,
+        changeId: string,
+        objective: string,
+        status:
+          | "draft"
+          | "active"
+          | "in_review"
+          | "approved"
+          | "integrated"
+          | "abandoned",
+      ) => ({
+        id: changeId,
+        projectId: project.id,
+        objective,
+        status,
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+    ),
+    reopenChangeReview: vi.fn(
+      async (_projectId: string, changeId: string, objective: string) => ({
+        id: changeId,
+        projectId: project.id,
+        objective,
+        status: "in_review" as const,
+        createdAt: 1,
+        updatedAt: 3,
+      }),
+    ),
+    createCandidateWorktree: vi.fn(
+      async (_projectId: string, changeId: string) => ({
+        changeId,
+        path: "/tmp/candidate",
+        branch: `laplace/${changeId}`,
+        baseRevision: "abc123",
+      }),
+    ),
+    listExecutions: vi.fn(async () => []),
+    cancelCheck: vi.fn(async () => undefined),
+    startRookAsk: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      workspaceId: "file:///tmp/project",
+      rookVersion: "0.1.6",
+      capabilities: { buildSessions: false },
+    })),
+    promptRookAsk: vi.fn(async () => undefined),
+    listenRook: vi.fn(async () => () => undefined),
+    stopRookAsk: vi.fn(async () => undefined),
+    cancelRookAsk: vi.fn(async () => undefined),
+    respondRookPermission: vi.fn(async () => undefined),
+    runCheck: vi.fn(
+      async (_projectId: string, program: string, args: string[]) => ({
+        id: "execution-test",
+        projectId: project.id,
+        changeId: null,
+        program,
+        args,
+        sourceDigest: "digest",
+        files: ["src/main.ts"],
+        status: "passed" as const,
+        exitCode: 0,
+        output: "ok",
+        startedAt: 1,
+        finishedAt: 2,
+      }),
+    ),
+    listenTerminal: vi.fn(async () => () => undefined),
     ...overrides,
   };
   return { service, emit: (event: AppEvent) => receiveEvent?.(event) };
@@ -223,6 +312,29 @@ describe("reference application shell", () => {
     expect(service.openProject).toHaveBeenCalledWith(project.path);
   });
 
+  it("keeps dirty documents when switching projects is cancelled", async () => {
+    const { service } = serviceFixture({
+      getRecentProjects: vi.fn(async () => [project]),
+      chooseProjectDirectory: vi.fn(async () => "/tmp/another-project"),
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /laplace fixture/i }),
+    );
+    await screen.findByRole("heading", { name: "Project files are ready." });
+    fireEvent.click(screen.getByRole("button", { name: "README.md" }));
+    const editor = await screen.findByRole("textbox", { name: /Code editor/ });
+    fireEvent.change(editor, { target: { value: "dirty buffer" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open another project folder" }),
+    );
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox", { name: /Code editor/ })).toHaveValue(
+      "dirty buffer",
+    );
+  });
+
   it("navigates to real shell views and labels unavailable capabilities honestly", async () => {
     const { service } = serviceFixture();
     render(<App service={service} />);
@@ -233,10 +345,10 @@ describe("reference application shell", () => {
       screen.getByRole("heading", { name: "Changes" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Not available yet" }),
+      screen.getByRole("heading", { name: "Open a project" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Change records will appear here/),
+      screen.getByText(/Durable Change records belong to a project/),
     ).toBeInTheDocument();
   });
 

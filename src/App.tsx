@@ -13,8 +13,12 @@ import type {
   ProjectFileRead,
   ProjectSummary,
   UiPreferences,
+  ChangeRecord,
+  ChangeStatus,
 } from "./services/contracts";
 import { useAppStore, type PageId } from "./state/app-store";
+import { TerminalPanel } from "./features/terminal/TerminalPanel";
+import { GitPanel } from "./features/git/GitPanel";
 
 const CodeEditor = lazy(() =>
   import("./features/editor/CodeEditor").then((module) => ({
@@ -66,6 +70,14 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [documents, setDocuments] = useState<EditorDocument[]>([]);
   const [activeDocumentKey, setActiveDocumentKey] = useState<string>();
   const [savingFiles, setSavingFiles] = useState(false);
+  const [changes, setChanges] = useState<ChangeRecord[]>([]);
+  const [changeFilter, setChangeFilter] = useState<ChangeStatus | "all">("all");
+  const [candidateWorktrees, setCandidateWorktrees] = useState<
+    Record<string, { path: string; branch: string; baseRevision: string }>
+  >({});
+  const [executions, setExecutions] = useState<
+    import("./services/contracts").ExecutionRecord[]
+  >([]);
 
   useEffect(() => {
     if (browserPreview) return;
@@ -117,14 +129,48 @@ export function App({ service, browserPreview = false }: AppProps) {
 
   async function openProject(path?: string) {
     if (browserPreview) return;
+    if (activeProject && path && activeProject.id !== path) {
+      const dirty = documents.filter(
+        (document) => document.content !== document.savedContent,
+      );
+      if (
+        dirty.length &&
+        !window.confirm(
+          `Switching projects will close ${dirty.length} unsaved document(s). Continue?`,
+        )
+      )
+        return;
+    }
     setProjectPending(true);
     setProjectError(undefined);
     try {
       const selectedPath = path ?? (await service.chooseProjectDirectory());
       if (!selectedPath) return;
+      if (activeProject && activeProject.id !== selectedPath) {
+        const dirty = documents.filter(
+          (document) => document.content !== document.savedContent,
+        );
+        if (
+          dirty.length &&
+          !window.confirm(
+            `Switching projects will close ${dirty.length} unsaved document(s). Continue?`,
+          )
+        )
+          return;
+      }
       const project = await service.openProject(selectedPath);
       const listing = await service.listProjectEntries(project.id);
+      if (activeProject?.id !== project.id) {
+        setDocuments((opened) =>
+          opened.filter(
+            (document) => document.content !== document.savedContent,
+          ),
+        );
+        setActiveDocumentKey(undefined);
+      }
       setActiveProject(project);
+      setChanges(await service.listChanges(project.id).catch(() => []));
+      setExecutions(await service.listExecutions(project.id).catch(() => []));
       setProjectEntries(listing.entries);
       setProjectEntriesTruncated(listing.truncated);
       setProjectDirectory("");
@@ -571,6 +617,7 @@ export function App({ service, browserPreview = false }: AppProps) {
           aria-labelledby="screen-title"
         >
           <ScreenContent
+            service={service}
             page={page}
             preferences={preferences}
             onPreferencesChange={savePreferences}
@@ -614,6 +661,62 @@ export function App({ service, browserPreview = false }: AppProps) {
             onCloseDocument={closeDocument}
             savingFiles={savingFiles}
             browserPreview={browserPreview}
+            changes={changes}
+            changeFilter={changeFilter}
+            onChangeFilter={setChangeFilter}
+            candidateWorktrees={candidateWorktrees}
+            executions={executions}
+            onRunCheck={async (program, args) => {
+              if (!activeProject) return;
+              const execution = await service.runCheck(
+                activeProject.id,
+                program,
+                args,
+              );
+              setExecutions((items) => [execution, ...items]);
+            }}
+            onCreateChange={async (objective) => {
+              if (!activeProject) return;
+              const change = await service.createChange(
+                activeProject.id,
+                objective,
+              );
+              setChanges((items) => [change, ...items]);
+            }}
+            onUpdateChange={async (changeId, objective, status) => {
+              if (!activeProject) return;
+              const change = await service.updateChange(
+                activeProject.id,
+                changeId,
+                objective,
+                status,
+              );
+              setChanges((items) =>
+                items.map((item) => (item.id === change.id ? change : item)),
+              );
+            }}
+            onReopenChange={async (changeId, objective) => {
+              if (!activeProject) return;
+              const change = await service.reopenChangeReview(
+                activeProject.id,
+                changeId,
+                objective,
+              );
+              setChanges((items) =>
+                items.map((item) => (item.id === change.id ? change : item)),
+              );
+            }}
+            onCreateCandidate={async (changeId) => {
+              if (!activeProject) return;
+              const worktree = await service.createCandidateWorktree(
+                activeProject.id,
+                changeId,
+              );
+              setCandidateWorktrees((items) => ({
+                ...items,
+                [changeId]: worktree,
+              }));
+            }}
           />
         </main>
       </div>
@@ -777,6 +880,24 @@ function CommandPalette({ commands, onRun }: CommandPaletteProps) {
 }
 
 interface ScreenContentProps {
+  service: AppService;
+  changes?: ChangeRecord[];
+  changeFilter?: ChangeStatus | "all";
+  onChangeFilter?: (filter: ChangeStatus | "all") => void;
+  candidateWorktrees?: Record<
+    string,
+    { path: string; branch: string; baseRevision: string }
+  >;
+  executions?: import("./services/contracts").ExecutionRecord[];
+  onRunCheck?: (program: string, args: string[]) => Promise<void>;
+  onCreateChange?: (objective: string) => Promise<void>;
+  onUpdateChange?: (
+    changeId: string,
+    objective: string,
+    status: ChangeStatus,
+  ) => Promise<void>;
+  onReopenChange?: (changeId: string, objective: string) => Promise<void>;
+  onCreateCandidate?: (changeId: string) => Promise<void>;
   page: PageId;
   preferences: UiPreferences;
   onPreferencesChange: (preferences: UiPreferences) => Promise<void>;
@@ -815,14 +936,16 @@ function ScreenContent(props: ScreenContentProps) {
   if (page === "settings") return <SettingsScreen {...props} />;
   if (page === "editor") return <EditorScreen {...props} />;
   if (page === "home") return <HomeScreen {...props} />;
+  if (page === "changes") return <ChangesScreen {...props} />;
+  if (page === "verify") return <VerifyScreen {...props} />;
+  if (page === "rook") return <RookScreen {...props} />;
 
   const item = navigationItems.find((entry) => entry.id === page);
   const details: Record<
     Exclude<PageId, "home" | "editor" | "settings">,
     string
   > = {
-    changes:
-      "Change records will appear here once durable project state is available.",
+    changes: "Create and track durable Changes for this project.",
     context:
       "Context relationships will be grounded in opened source and recorded provenance.",
     verify:
@@ -839,6 +962,513 @@ function ScreenContent(props: ScreenContentProps) {
         description={details[page]}
         label={item?.label ?? "Feature"}
       />
+    </section>
+  );
+}
+
+function ChangesScreen({
+  activeProject,
+  changes,
+  changeFilter = "all",
+  onChangeFilter,
+  onCreateChange,
+  onUpdateChange,
+  onReopenChange,
+  onCreateCandidate,
+  candidateWorktrees,
+  browserPreview,
+}: ScreenContentProps) {
+  const [objective, setObjective] = useState("");
+  const [error, setError] = useState<string>();
+  const [pending, setPending] = useState(false);
+  async function create() {
+    setPending(true);
+    setError(undefined);
+    try {
+      await onCreateChange?.(objective);
+      setObjective("");
+    } catch (failure) {
+      setError(
+        failure instanceof Error
+          ? failure.message
+          : "Change could not be created.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <section
+      className="content-page changes-page"
+      aria-labelledby="screen-title"
+    >
+      <PageHeading
+        eyebrow={activeProject?.name ?? "Project required"}
+        title="Changes"
+      />
+      {browserPreview ? (
+        <EmptyState
+          title="Not available yet"
+          description="Durable Change records require the desktop application."
+          label="Desktop only"
+        />
+      ) : !activeProject ? (
+        <EmptyState
+          title="Open a project"
+          description="Durable Change records belong to a project."
+          label="Workspace"
+        />
+      ) : (
+        <>
+          <label className="change-filter">
+            Filter{" "}
+            <select
+              value={changeFilter}
+              onChange={(event) =>
+                onChangeFilter?.(event.target.value as ChangeStatus | "all")
+              }
+            >
+              <option value="all">All</option>
+              <option value="draft">Draft</option>
+              <option value="active">Active</option>
+              <option value="in_review">In review</option>
+              <option value="approved">Approved</option>
+              <option value="integrated">Integrated</option>
+              <option value="abandoned">Abandoned</option>
+            </select>
+          </label>
+          <form
+            className="change-create"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void create();
+            }}
+          >
+            <label htmlFor="change-objective">New Change objective</label>
+            <textarea
+              id="change-objective"
+              maxLength={500}
+              value={objective}
+              onChange={(event) => setObjective(event.target.value)}
+              placeholder="What would you like to change?"
+            />
+            <button
+              className="button button-primary"
+              type="submit"
+              disabled={pending || !objective.trim()}
+            >
+              Create Change
+            </button>
+          </form>
+          {error && (
+            <p role="alert" className="inline-error">
+              {error}
+            </p>
+          )}
+          {(changes ?? []).filter(
+            (change) =>
+              changeFilter === "all" || change.status === changeFilter,
+          ).length === 0 ? (
+            <p>No Changes yet.</p>
+          ) : (
+            <div className="change-list">
+              {(changes ?? [])
+                .filter(
+                  (change) =>
+                    changeFilter === "all" || change.status === changeFilter,
+                )
+                .map((change) => (
+                  <article key={change.id} className="change-card">
+                    <div>
+                      <span className="eyebrow">
+                        {change.status.replaceAll("_", " ")}
+                      </span>
+                      <h2>{change.objective}</h2>
+                      <small>{change.id}</small>
+                    </div>
+                    <select
+                      aria-label={`Status for ${change.objective}`}
+                      value={change.status}
+                      onChange={(event) =>
+                        void onUpdateChange?.(
+                          change.id,
+                          change.objective,
+                          event.target.value as ChangeStatus,
+                        ).catch((failure) => setError(String(failure)))
+                      }
+                    >
+                      <option value="draft">Draft</option>
+                      <option value="active">Active</option>
+                      <option value="in_review">In review</option>
+                      <option value="approved">Approved</option>
+                      <option value="integrated">Integrated</option>
+                      <option value="abandoned">Abandoned</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onCreateCandidate?.(change.id).catch((failure) =>
+                          setError(String(failure)),
+                        )
+                      }
+                    >
+                      Create isolated candidate
+                    </button>
+                    {candidateWorktrees?.[change.id] && (
+                      <small>
+                        Candidate · {candidateWorktrees[change.id].branch} ·{" "}
+                        {candidateWorktrees[change.id].baseRevision.slice(
+                          0,
+                          12,
+                        )}
+                      </small>
+                    )}
+                    {change.status === "integrated" && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void onReopenChange?.(
+                            change.id,
+                            change.objective,
+                          ).catch((failure) => setError(String(failure)))
+                        }
+                      >
+                        Reopen review
+                      </button>
+                    )}
+                  </article>
+                ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function VerifyScreen({
+  service,
+  activeProject,
+  executions = [],
+  onRunCheck,
+  browserPreview,
+}: ScreenContentProps) {
+  const [program, setProgram] = useState("pnpm");
+  const [argsText, setArgsText] = useState("test");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string>();
+  const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
+  useEffect(() => {
+    setWorkspaceTrusted(false);
+  }, [activeProject?.id]);
+  const checks = executions.filter(
+    (record) => record.projectId === activeProject?.id,
+  );
+  return (
+    <section className="content-page" aria-labelledby="screen-title">
+      <PageHeading
+        eyebrow={activeProject?.name ?? "Project required"}
+        title="Verify"
+      />
+      {browserPreview || !activeProject ? (
+        <EmptyState
+          title={browserPreview ? "Not available yet" : "Open a project"}
+          description="Verification requires the native app and an open project."
+          label="Workspace"
+        />
+      ) : (
+        <>
+          <form
+            className="check-run-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setPending(true);
+              setError(undefined);
+              void onRunCheck?.(
+                program,
+                argsText.trim().split(/\s+/).filter(Boolean),
+              )
+                .catch((failure) => setError(String(failure)))
+                .finally(() => setPending(false));
+            }}
+          >
+            <label>
+              Executable{" "}
+              <input
+                value={program}
+                onChange={(event) => setProgram(event.target.value)}
+              />
+            </label>
+            <label>
+              Arguments{" "}
+              <input
+                value={argsText}
+                onChange={(event) => setArgsText(event.target.value)}
+              />
+            </label>
+            {!workspaceTrusted ? (
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={pending || browserPreview}
+                onClick={async () => {
+                  try {
+                    await service.trustWorkspace(activeProject.id);
+                    setWorkspaceTrusted(true);
+                  } catch (failure) {
+                    setError(String(failure));
+                  }
+                }}
+              >
+                Trust project to run checks
+              </button>
+            ) : pending ? (
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() => void service.cancelCheck()}
+              >
+                Cancel check
+              </button>
+            ) : (
+              <button
+                className="button button-primary"
+                disabled={pending || !program.trim()}
+              >
+                {pending ? "Running…" : "Run check"}
+              </button>
+            )}
+          </form>
+          <p>
+            Checks run from the open workspace against a Git-derived source
+            manifest. Project trust is required to run code.
+          </p>
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="execution-list">
+            {checks.map((check) => (
+              <article key={check.id}>
+                <div>
+                  <strong>
+                    {check.program} {check.args.join(" ")}
+                  </strong>
+                  <span>
+                    {check.status} · {check.sourceDigest.slice(0, 12)}
+                  </span>
+                  <small>
+                    {check.files.length} source files · exit{" "}
+                    {check.exitCode ?? "—"}
+                  </small>
+                </div>
+                <pre>{check.output}</pre>
+              </article>
+            ))}
+          </div>
+          {checks.length === 0 && <p>No verification records.</p>}
+        </>
+      )}
+    </section>
+  );
+}
+
+function RookScreen({
+  service,
+  activeProject,
+  browserPreview,
+}: ScreenContentProps) {
+  const [session, setSession] = useState<string>();
+  const [rookVersion, setRookVersion] = useState<string>();
+  const [prompt, setPrompt] = useState("");
+  const [askContext, setAskContext] = useState("");
+  const [events, setEvents] = useState<string[]>([]);
+  const [runId, setRunId] = useState<string>();
+  const [permission, setPermission] = useState<{
+    permissionId: string;
+    request: Record<string, unknown>;
+  }>();
+  const [error, setError] = useState<string>();
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (!session || browserPreview) return;
+    let unlisten: (() => void) | undefined;
+    void service
+      .listenRook((event) => {
+        if (event.sessionId !== session) return;
+        const params = event.message.params as
+          | Record<string, unknown>
+          | undefined;
+        if (
+          event.message.method === "session/request_permission" &&
+          typeof event.message.id === "string" &&
+          params &&
+          typeof params.request === "object" &&
+          params.request !== null
+        ) {
+          setPermission({
+            permissionId: event.message.id,
+            request: params.request as Record<string, unknown>,
+          });
+        }
+        if (typeof params?.runId === "string") setRunId(params.runId);
+        if (
+          (params?.event as Record<string, unknown> | undefined)?.type ===
+          "run_settled"
+        )
+          setRunId(undefined);
+        setEvents((items) =>
+          [...items, JSON.stringify(event.message)].slice(-100),
+        );
+      })
+      .then((stop) => {
+        unlisten = stop;
+      });
+    return () => {
+      unlisten?.();
+      void service.stopRookAsk(session).catch(() => undefined);
+    };
+  }, [browserPreview, service, session]);
+  async function connect() {
+    if (!activeProject) return;
+    setPending(true);
+    setError(undefined);
+    try {
+      const id = crypto.randomUUID().replaceAll("-", "");
+      const result = await service.startRookAsk(id, activeProject.path);
+      setSession(id);
+      setRookVersion(result.rookVersion);
+    } catch (failure) {
+      setError(
+        failure instanceof Error
+          ? failure.message
+          : "Rook could not be started.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <section className="content-page" aria-labelledby="screen-title">
+      <PageHeading
+        eyebrow={activeProject?.name ?? "Project required"}
+        title="Rook Ask"
+      />
+      {browserPreview || !activeProject ? (
+        <EmptyState
+          title="Desktop project required"
+          description="Rook is a native process scoped to an open workspace."
+          label="Desktop only"
+        />
+      ) : (
+        <>
+          {!session ? (
+            <button
+              className="button button-primary"
+              type="button"
+              disabled={pending}
+              onClick={() => void connect()}
+            >
+              {pending ? "Connecting…" : "Start read-only Ask"}
+            </button>
+          ) : (
+            <>
+              <p role="status">
+                Rook {rookVersion} · immutable read-only Ask · Build unavailable
+              </p>
+              {permission && (
+                <section
+                  className="permission-card"
+                  aria-label="Rook permission request"
+                >
+                  <p>
+                    Rook requests{" "}
+                    {String(permission.request.access ?? "external access")}{" "}
+                    with {String(permission.request.toolName ?? "tool")}
+                  </p>
+                  <pre>{JSON.stringify(permission.request, null, 2)}</pre>
+                  {(["once", "session", "deny"] as const).map((choice) => (
+                    <button
+                      key={choice}
+                      type="button"
+                      onClick={() =>
+                        void service
+                          .respondRookPermission(
+                            session,
+                            permission.permissionId,
+                            choice,
+                          )
+                          .then(() => setPermission(undefined))
+                          .catch((failure) => setError(String(failure)))
+                      }
+                    >
+                      {choice === "deny" ? "Deny" : `Allow ${choice}`}
+                    </button>
+                  ))}
+                </section>
+              )}
+              <form
+                className="change-create"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void service
+                    .promptRookAsk(session, prompt, askContext || undefined)
+                    .then(() => {
+                      setPrompt("");
+                      setAskContext("");
+                    })
+                    .catch((failure) => setError(String(failure)));
+                }}
+              >
+                <label htmlFor="rook-prompt">Ask about this workspace</label>
+                <textarea
+                  id="rook-prompt"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  maxLength={64000}
+                />
+                <label htmlFor="rook-context">
+                  Optional context · treated as untrusted input
+                </label>
+                <textarea
+                  id="rook-context"
+                  value={askContext}
+                  onChange={(event) => setAskContext(event.target.value)}
+                  maxLength={32000}
+                  placeholder="Paste selected text or a diagnostic excerpt"
+                />
+                {runId ? (
+                  <button
+                    className="button button-quiet"
+                    type="button"
+                    onClick={() => void service.cancelRookAsk(session, runId)}
+                  >
+                    Cancel Ask
+                  </button>
+                ) : (
+                  <button
+                    className="button button-primary"
+                    disabled={!prompt.trim()}
+                  >
+                    Ask
+                  </button>
+                )}
+              </form>
+              <ol className="rook-events" aria-label="Rook session events">
+                {events.map((event, index) => (
+                  <li key={`${index}-${event}`}>{event}</li>
+                ))}
+              </ol>
+            </>
+          )}
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -950,6 +1580,7 @@ function HomeScreen({
 
 function EditorScreen(props: ScreenContentProps) {
   const {
+    service,
     preferences,
     onPreferencesChange,
     activeProject,
@@ -1269,6 +1900,13 @@ function EditorScreen(props: ScreenContentProps) {
                 : "Ready to edit"}
           </span>
         </div>
+        {activeProject && (
+          <WorkspaceTools
+            service={service}
+            projectId={activeProject.id}
+            browserPreview={browserPreview}
+          />
+        )}
       </div>
       {!preferences.inspectorCollapsed && (
         <div
@@ -1364,6 +2002,112 @@ function EditorScreen(props: ScreenContentProps) {
         >
           Show context
         </button>
+      )}
+    </section>
+  );
+}
+
+function WorkspaceTools({
+  service,
+  projectId,
+  browserPreview,
+}: {
+  service: AppService;
+  projectId: string;
+  browserPreview: boolean;
+}) {
+  const [tab, setTab] = useState<"terminal" | "git">("terminal");
+  const [terminalTrusted, setTerminalTrusted] = useState(false);
+  const [terminalStarted, setTerminalStarted] = useState(false);
+  const [terminalActive, setTerminalActive] = useState(false);
+  const [gitStatus, setGitStatus] =
+    useState<import("./services/contracts").GitStatus>();
+  useEffect(() => {
+    setTerminalTrusted(false);
+    setTerminalStarted(false);
+    setTerminalActive(false);
+  }, [projectId]);
+  useEffect(() => {
+    if (browserPreview || tab !== "git") return;
+    void service
+      .gitStatus(projectId)
+      .then(setGitStatus)
+      .catch(() => setGitStatus(undefined));
+  }, [browserPreview, projectId, service, tab]);
+  return (
+    <section className="workspace-tools" aria-label="Workspace tools">
+      <div
+        className="workspace-tool-tabs"
+        role="tablist"
+        aria-label="Bottom tools"
+      >
+        <button
+          role="tab"
+          aria-selected={tab === "terminal"}
+          onClick={() => setTab("terminal")}
+        >
+          Terminal
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === "git"}
+          onClick={() => setTab("git")}
+        >
+          Git changes
+        </button>
+      </div>
+      {tab === "terminal" ? (
+        !terminalStarted ? (
+          <div className="terminal-panel">
+            <p>Starting a shell can execute project-controlled commands.</p>
+            <button
+              type="button"
+              disabled={browserPreview}
+              onClick={() => setTerminalStarted(true)}
+            >
+              Start terminal
+            </button>
+          </div>
+        ) : (
+          <>
+            <TerminalPanel
+              service={service}
+              workspaceId={projectId}
+              browserPreview={browserPreview}
+              trusted={terminalTrusted && terminalActive}
+              onTrust={async () => {
+                if (!terminalTrusted) {
+                  await service.trustWorkspace(projectId);
+                  setTerminalTrusted(true);
+                }
+                setTerminalActive(true);
+              }}
+            />
+            {terminalTrusted && (
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() =>
+                  void service.untrustWorkspace(projectId).then(() => {
+                    setTerminalTrusted(false);
+                    setTerminalActive(false);
+                  })
+                }
+              >
+                Revoke project trust
+              </button>
+            )}
+          </>
+        )
+      ) : browserPreview ? (
+        <p role="status">Git access requires the native desktop app.</p>
+      ) : (
+        <GitPanel
+          service={service}
+          projectId={projectId}
+          status={gitStatus}
+          onStatus={setGitStatus}
+        />
       )}
     </section>
   );

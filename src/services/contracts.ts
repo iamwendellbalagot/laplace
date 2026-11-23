@@ -141,3 +141,83 @@ export interface SaveProjectFileResponse {
   operationId: string;
   saved: boolean;
 }
+
+export interface GitFileStatus {
+  path: string;
+  indexStatus: string;
+  worktreeStatus: string;
+}
+
+export interface GitStatus {
+  branch: string | null;
+  files: GitFileStatus[];
+}
+
+export interface TerminalEvent {
+  schemaVersion: number;
+  operationId: string;
+  sessionId: string;
+  workspaceId: string;
+  kind: "output" | "exited";
+  data: string | null;
+  exitCode: number | null;
+}
+
+export type ChangeStatus =
+  | "draft"
+  | "active"
+  | "in_review"
+  | "approved"
+  | "integrated"
+  | "abandoned";
+export interface ChangeRecord {
+  id: string;
+  projectId: string;
+  objective: string;
+  status: ChangeStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorktreeRecord {
+  changeId: string;
+  path: string;
+  branch: string;
+  baseRevision: string;
+}
+
+export type ExecutionStatus =
+  | "running"
+  | "passed"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "start_failed"
+  | "interrupted"
+  | "inconclusive";
+export interface ExecutionRecord {
+  id: string;
+  projectId: string;
+  changeId: string | null;
+  program: string;
+  args: string[];
+  sourceDigest: string;
+  files: string[];
+  status: ExecutionStatus;
+  exitCode: number | null;
+  output: string;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
+export interface RookInitResponse {
+  sessionId: string;
+  workspaceId: string;
+  rookVersion: string;
+  capabilities: Record<string, unknown>;
+}
+export interface RookEvent {
+  sessionId: string;
+  message: Record<string, unknown>;
+}
+export type RookPermissionChoice = "once" | "session" | "deny";

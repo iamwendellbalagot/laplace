@@ -242,4 +242,69 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("sends Git and terminal requests with workspace identity", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ branch: "main", files: [] })
+      .mockResolvedValueOnce("")
+      .mockResolvedValue(undefined);
+    const service = new TauriAppService();
+    await expect(service.gitStatus("/work/project")).resolves.toEqual({
+      branch: "main",
+      files: [],
+    });
+    await expect(service.gitDiff("/work/project")).resolves.toBe("");
+    await service.startTerminal("terminal1", "/work/project");
+    await service.writeTerminal("terminal1", "/work/project", "hello");
+    await service.stopTerminal("terminal1", "/work/project");
+    await service.trustWorkspace("/work/project");
+    mocks.invoke
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ id: "change1" })
+      .mockResolvedValueOnce({ id: "change1" });
+    await service.listChanges("/work/project");
+    await service.createChange("/work/project", "Add a feature");
+    await service.updateChange(
+      "/work/project",
+      "change1",
+      "Add a feature",
+      "active",
+    );
+    expect(mocks.invoke).toHaveBeenCalledWith("git_status", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("write_terminal", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "terminal1",
+        workspaceId: "/work/project",
+        data: "hello",
+        rows: undefined,
+        cols: undefined,
+      },
+    });
+  });
+
+  it("sends structured verification commands and loads execution history", async () => {
+    mocks.invoke.mockResolvedValueOnce({ id: "e1" }).mockResolvedValueOnce([]);
+    const service = new TauriAppService();
+    await service.runCheck("/work/project", "pnpm", ["test"], "c1");
+    await service.listExecutions("/work/project");
+    expect(mocks.invoke).toHaveBeenCalledWith("run_check", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        program: "pnpm",
+        args: ["test"],
+        changeId: "c1",
+        timeoutMs: 600000,
+      },
+    });
+  });
 });

@@ -56,7 +56,11 @@ User identified `/Users/wendellbalagot/Documents/Projects/rook` as the Rook code
 | ACP | Inspected gateway directly wraps `@earendil-works/pi-coding-agent`; no ACP adapter is exposed in the gateway or the inspected docs | No ACP support found. Keep ACP transport decision open; do not assume protocol compatibility. |
 | Shell sandbox | `src/policy/sandbox.ts` selects Seatbelt on macOS and Bubblewrap on Linux; other OSes have no runtime candidate; source defaults to fail-closed | Code declares macOS/Linux sandbox backends; this is not proof of live enforcement on each OS. |
 
-A CLI smoke was attempted with `node /Users/wendellbalagot/Documents/Projects/rook/bin/rook.mjs --version` from the Laplace shell. It failed with `MODULE_NOT_FOUND` for that absolute path (sandbox cannot resolve the sibling project), so no CLI version/smoke result is claimed. Rook's own `docs/PI_PARITY.md` records pinned Pi SDK `1.5.2` and a previously verified provider smoke, but that is project documentation, not a test run in this feasibility pass.
+## Rook stdio v1 verification (2026-11-23)
+
+The local sibling checkout `/home/dev/projects/pp/rook` reports `rook-agent@0.1.6`, MIT license, and Node `>=22.19`. `npm run build`, `node bin/rook.mjs --version`, and `node bin/rook.mjs --smoke` passed with Node 22.23.2. A spawned `--stdio --cwd /home/dev/projects/pp/laplace` process successfully answered protocol-v1 `initialize` and `shutdown`; it advertised 8 immutable read-only tools, `buildSessions: false`, and no arbitrary MCP. Providers were all unconfigured, so no model-backed answer, permission denial, or real investigation was exercised. The adapter intentionally supports Ask only.
+
+The earlier CLI attempt used a stale macOS-only sibling path and failed with `MODULE_NOT_FOUND`; the current Linux checkout was built and checked above. The source review originally attributed provider verification to Rook documentation only; no provider smoke occurred in this session.
 
 ## Initial environment inventory
 

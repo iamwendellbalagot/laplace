@@ -1,6 +1,6 @@
 # Laplace — Implementation Roadmap
 
-Status: sequential implementation in progress; Plan 02 scaffold-only exit gate passed on macOS, with Plan 01 cross-platform feasibility still open
+Status: Plans 06–10 foundational slices implemented; plan-specific acceptance gates remain open as recorded in each step
 Targets: macOS, Windows, Linux; TypeScript/Node.js repositories first
 Agent harness: Rook, architecturally independent
 UI reference: `laplace-html-mockup/` in the Laplace repository
@@ -37,11 +37,11 @@ Each numbered document is an implementation checkpoint, not one giant commit. Br
 | 03 | [Reference UI shell](03-ui-shell.md) | Faithful React shell, themes, commands | Implementation in place; visual/native accessibility exit checks open |
 | 04 | [Projects and filesystem](04-projects-filesystem.md) | Real project opening, explorer, trust, watchers | In progress — safe folder open/recent list, bounded explorer and read-only file preview; native smoke and remaining filesystem work pending |
 | 05 | [Editor and TypeScript](05-editor-typescript.md) | Real editing, recovery, language services | In progress — Monaco editing and safe saves implemented; LSP/recovery/native checks remain |
-| 06 | [Terminal and Git](06-terminal-git.md) | Real shells, processes, status, diffs | Not started |
-| 07 | [Persistent Changes](07-changes-persistence.md) | Durable domain, Change register, recovery | Not started |
-| 08 | [Rook and contextual delegation](08-rook-delegation.md) | Read-only Ask, permissions, session lifecycle | Not started |
-| 09 | [Isolated implementation](09-worktrees-environments.md) | Worktrees, setup recipes, authorized Build | Not started |
-| 10 | [Verification and evidence](10-verification-evidence.md) | Recorded checks and source freshness | Not started |
+| 06 | [Terminal and Git](06-terminal-git.md) | Real shells, processes, status, diffs | Initial implementation; native and cross-platform acceptance open |
+| 07 | [Persistent Changes](07-changes-persistence.md) | Durable domain, Change register, recovery | SQLite Change foundation; recovery/domain expansion open |
+| 08 | [Rook and contextual delegation](08-rook-delegation.md) | Read-only Ask, permissions, session lifecycle | Experimental Rook Ask; provider-backed and context workflow open |
+| 09 | [Isolated implementation](09-worktrees-environments.md) | Worktrees, setup recipes, authorized Build | Candidate worktrees and trusted recipes; Build blocked on Rook support |
+| 10 | [Verification and evidence](10-verification-evidence.md) | Recorded checks and source freshness | Structured source-bound checks; artifact/workflow acceptance open |
 | 11 | [Review and integration](11-review-integration.md) | Editable review, approval, guarded integration | Not started |
 | 12 | [Daily workflow](12-daily-workflow.md) | Inline patches, runs, manual Changes, robustness | Not started |
 | 13 | [Context and history](13-context-history.md) | Context Lens, grounded System explorer | Not started |
