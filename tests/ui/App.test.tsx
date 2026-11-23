@@ -150,7 +150,24 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
       workspaceId: "file:///tmp/project",
       rookVersion: "0.1.6",
       capabilities: { buildSessions: false },
+      providers: [],
+      currentModel: null,
     })),
+    listRookModels: vi.fn(async () => ({ models: [], currentModel: null })),
+    selectRookModel: vi.fn(async (_sessionId: string, model) => model),
+    loginRookProvider: vi.fn(async () => ({
+      providers: [],
+      models: [],
+      currentModel: null,
+    })),
+    respondRookAuthPrompt: vi.fn(async () => undefined),
+    cancelRookLogin: vi.fn(async () => undefined),
+    allowRookWorkspaceProvider: vi.fn(
+      async (_sessionId: string, _providerId: string, _fingerprint: string) =>
+        undefined,
+    ),
+    logoutRookProvider: vi.fn(async () => []),
+    openRookAuthUrl: vi.fn(async () => undefined),
     promptRookAsk: vi.fn(async () => undefined),
     listenRook: vi.fn(async () => () => undefined),
     stopRookAsk: vi.fn(async () => undefined),
@@ -475,6 +492,100 @@ describe("reference application shell", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Install Rook or configure its executable path.",
     );
+  });
+
+  it("renders provider login and model selection when Rook advertises those capabilities", async () => {
+    const provider = {
+      id: "openai",
+      name: "OpenAI",
+      configured: false,
+      source: "provider" as const,
+      authMethods: [
+        { type: "api_key" as const, name: "API key", loginLabel: "API key" },
+      ],
+    };
+    const model = {
+      provider: "openai",
+      id: "gpt-test",
+      name: "Test model",
+      source: "provider" as const,
+    };
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+      startRookAsk: vi.fn(async (sessionId) => ({
+        sessionId,
+        workspaceId: "file:///tmp/project",
+        rookVersion: "0.1.7",
+        capabilities: {
+          buildSessions: false,
+          providerControls: { login: true },
+          modelCatalog: true,
+        },
+        providers: [provider],
+        currentModel: null,
+      })),
+      listRookModels: vi.fn(async () => ({
+        models: [model],
+        currentModel: null,
+      })),
+      loginRookProvider: vi.fn(async () => ({
+        providers: [{ ...provider, configured: true }],
+        models: [model],
+        currentModel: model,
+      })),
+    });
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open project folder" }),
+    );
+    await waitFor(() => expect(service.openProject).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: "Rook" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start read-only Ask" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Provider and model" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "API key" }));
+    await waitFor(() =>
+      expect(service.loginRookProvider).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        "openai",
+        "api_key",
+      ),
+    );
+    expect(
+      await screen.findByText(/Using Test model · openai\/gpt-test/),
+    ).toBeInTheDocument();
+  });
+
+  it("explains provider/model controls are unavailable with an older Rook handshake", async () => {
+    const { service } = serviceFixture({
+      chooseProjectDirectory: vi.fn(async () => project.path),
+      startRookAsk: vi.fn(async (sessionId) => ({
+        sessionId,
+        workspaceId: "file:///tmp/project",
+        rookVersion: "0.1.6",
+        capabilities: { buildSessions: false },
+        providers: [],
+        currentModel: null,
+      })),
+    });
+    render(<App service={service} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open project folder" }),
+    );
+    await waitFor(() => expect(service.openProject).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: "Rook" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start read-only Ask" }),
+    );
+    expect(
+      await screen.findByText(
+        /does not advertise native provider or model controls/i,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("opens the command palette, filters, runs a command, and returns focus", async () => {

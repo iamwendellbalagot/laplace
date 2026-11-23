@@ -67,6 +67,57 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("requests Rook models and submits selected model through native IPC", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ models: [], currentModel: null })
+      .mockResolvedValueOnce({
+        currentModel: { provider: "p", id: "m", name: "M" },
+      })
+      .mockResolvedValueOnce(undefined);
+    const service = new TauriAppService();
+    await service.listRookModels("session1");
+    await service.selectRookModel("session1", {
+      provider: "p",
+      id: "m",
+      name: "M",
+    });
+    await service.allowRookWorkspaceProvider(
+      "session1",
+      "workspace-provider",
+      "fingerprint",
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "rook_provider_request", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "session1",
+        method: "model/list",
+        params: {},
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "rook_provider_request", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "session1",
+        method: "model/select",
+        params: { provider: "p", id: "m" },
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "rook_provider_request", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "session1",
+        method: "workspace/allow_provider",
+        params: {
+          providerId: "workspace-provider",
+          endpointFingerprint: "fingerprint",
+        },
+      },
+    });
+  });
+
   it("reads and updates the local Rook developer checkout setting", async () => {
     mocks.invoke
       .mockResolvedValueOnce({ enabled: true, checkoutPath: null })

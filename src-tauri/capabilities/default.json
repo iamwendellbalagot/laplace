@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Laplace window capability for native folder selection.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "opener:allow-open-url"]
 }

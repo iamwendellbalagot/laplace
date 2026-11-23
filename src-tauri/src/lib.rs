@@ -20,6 +20,7 @@ use sqlx::{
     Row, SqlitePool,
 };
 use tauri::{Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 const IPC_SCHEMA_VERSION: u16 = 1;
 const EVENT_NAME: &str = "app-event";
@@ -44,6 +45,13 @@ struct RookProcesses(Mutex<HashMap<String, Arc<Mutex<RookProcess>>>>);
 struct RookProcess {
     child: std::process::Child,
     stdin: std::process::ChildStdin,
+    pending: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<serde_json::Value>>>>,
+    next_request: Arc<AtomicU64>,
+    workspace_providers: HashSet<String>,
+    allowed_workspace_providers: HashMap<String, String>,
+    pending_auth_logins: HashSet<String>,
+    workspace_path: PathBuf,
+    active_model_provider: Option<String>,
 }
 
 impl Drop for RookProcesses {
@@ -51,6 +59,9 @@ impl Drop for RookProcesses {
         if let Ok(processes) = self.0.get_mut() {
             for process in processes.values() {
                 if let Ok(mut process) = process.lock() {
+                    if let Ok(mut pending) = process.pending.lock() {
+                        pending.clear();
+                    }
                     let _ = process.child.kill();
                 }
             }
@@ -84,6 +95,9 @@ impl RookProcesses {
                 "{}",
                 serde_json::json!({"jsonrpc":"2.0","id":99,"method":"shutdown"})
             );
+            if let Ok(mut pending) = process.pending.lock() {
+                pending.clear();
+            }
             let _ = process.child.kill();
         }
         Ok(())
@@ -209,6 +223,273 @@ impl TrustedWorkspaces {
             })?
             .contains(&canonical.to_string_lossy().into_owned()))
     }
+}
+
+async fn ensure_workspace_trusted(
+    app: &tauri::AppHandle,
+    db: &DomainDatabase,
+    trusted: &TrustedWorkspaces,
+    path: &Path,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    validate_workspace_provider_config(path).map_err(|_| {
+        terminal_error(
+            "workspace_models_invalid",
+            "Workspace provider settings are invalid; credentials and prompts are blocked.",
+            operation_id,
+        )
+    })?;
+    if trusted.contains(path)? {
+        return Ok(());
+    }
+    let root = fs::canonicalize(path).map_err(|_| {
+        terminal_error(
+            "workspace_unavailable",
+            "The provider workspace is no longer available.",
+            operation_id,
+        )
+    })?;
+    let pool = open_domain_database(app, db).await?;
+    let exists = sqlx::query("SELECT project_id FROM trusted_workspaces WHERE project_id = ?")
+        .bind(root.to_string_lossy().as_ref())
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| {
+            terminal_error(
+                "trust_read_failed",
+                "Project trust could not be checked.",
+                operation_id,
+            )
+        })?
+        .is_some();
+    if !exists {
+        return Err(terminal_error(
+            "workspace_not_trusted",
+            "Confirm project trust before using this workspace provider.",
+            operation_id,
+        ));
+    }
+    trusted
+        .0
+        .lock()
+        .map_err(|_| {
+            terminal_error(
+                "trust_unavailable",
+                "Workspace trust is temporarily unavailable.",
+                operation_id,
+            )
+        })?
+        .insert(root.to_string_lossy().into_owned());
+    Ok(())
+}
+
+fn workspace_provider_config(root: &Path) -> Result<serde_json::Value, IpcError> {
+    let path = root.join("models.json");
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(serde_json::json!({}))
+        }
+        Err(_) => {
+            return Err(terminal_error(
+                "workspace_models_unavailable",
+                "Workspace model configuration could not be read.",
+                "rook-provider",
+            ))
+        }
+    };
+    if bytes.len() > 256 * 1024 {
+        return Err(terminal_error(
+            "workspace_models_invalid",
+            "Workspace models.json exceeds the supported size limit.",
+            "rook-provider",
+        ));
+    }
+    serde_json::from_slice(&bytes).map_err(|_| {
+        terminal_error(
+            "workspace_models_invalid",
+            "Workspace models.json must contain valid JSON.",
+            "rook-provider",
+        )
+    })
+}
+
+fn workspace_provider_ids(root: &Path) -> Result<HashSet<String>, IpcError> {
+    let config = workspace_provider_config(root)?;
+    Ok(config["providers"]
+        .as_object()
+        .map(|providers| providers.keys().cloned().collect())
+        .unwrap_or_default())
+}
+
+fn workspace_provider_endpoint_fingerprint(
+    root: &Path,
+    provider_id: &str,
+) -> Result<String, IpcError> {
+    let config = workspace_provider_config(root)?;
+    let provider = config["providers"].get(provider_id).ok_or_else(|| {
+        terminal_error(
+            "rook_provider_unknown",
+            "That provider is not configured by this workspace.",
+            "rook-provider",
+        )
+    })?;
+    Ok(workspace_provider_fingerprint(provider))
+}
+
+fn workspace_provider_fingerprint(provider: &serde_json::Value) -> String {
+    let base_url = provider["baseUrl"].as_str().unwrap_or("");
+    let mut endpoint_data = base_url.to_owned();
+    for model in provider["models"].as_array().into_iter().flatten() {
+        if let Some(id) = model["id"].as_str() {
+            endpoint_data.push('\0');
+            endpoint_data.push_str(id);
+            endpoint_data.push('\0');
+            endpoint_data.push_str(model["baseUrl"].as_str().unwrap_or(base_url));
+        }
+    }
+    format!("{:x}", Sha256::digest(endpoint_data.as_bytes()))
+}
+
+#[cfg(test)]
+fn validate_workspace_provider_consent(
+    config: &serde_json::Value,
+    provider_id: &str,
+    endpoint_fingerprint: &str,
+) -> bool {
+    let Some(provider) = config["providers"].get(provider_id) else {
+        return false;
+    };
+    workspace_provider_fingerprint(provider) == endpoint_fingerprint
+}
+
+fn validate_workspace_provider_config(root: &Path) -> Result<(), IpcError> {
+    let path = root.join("models.json");
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => {
+            return Err(terminal_error(
+                "workspace_models_unavailable",
+                "Workspace model configuration could not be read.",
+                "rook-provider",
+            ))
+        }
+    };
+    if bytes.len() > 256 * 1024 {
+        return Err(terminal_error(
+            "workspace_models_invalid",
+            "Workspace models.json exceeds the supported size limit.",
+            "rook-provider",
+        ));
+    }
+    let config: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+        terminal_error(
+            "workspace_models_invalid",
+            "Workspace models.json must contain valid JSON.",
+            "rook-provider",
+        )
+    })?;
+    if !workspace_provider_config_is_safe(&config) {
+        return Err(terminal_error(
+            "workspace_models_invalid",
+            "Workspace provider settings are invalid; credentials and prompts are blocked.",
+            "rook-provider",
+        ));
+    }
+    let Some(providers) = config["providers"].as_object() else {
+        return Ok(());
+    };
+    for (id, provider) in providers {
+        let valid_http_url = |value: &str| {
+            tauri::Url::parse(value).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+        };
+        let key = provider["apiKey"].as_str();
+        if key.is_some_and(|key| {
+            let name = key.strip_prefix('$').unwrap_or("");
+            let mut chars = name.chars();
+            !chars
+                .next()
+                .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+                || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+                || key.len() != name.len() + 1
+        }) {
+            return Err(terminal_error(
+                "workspace_models_invalid",
+                "Workspace models.json contains an invalid API-key reference.",
+                "rook-provider",
+            ));
+        }
+        let base_url = provider["baseUrl"].as_str();
+        if base_url.is_some_and(|url| !valid_http_url(url)) {
+            return Err(terminal_error(
+                "workspace_models_invalid",
+                "Workspace models.json contains an invalid provider endpoint.",
+                "rook-provider",
+            ));
+        }
+        for model in provider["models"].as_array().into_iter().flatten() {
+            if model["id"].as_str().is_none()
+                || model["baseUrl"]
+                    .as_str()
+                    .is_some_and(|url| !valid_http_url(url))
+            {
+                return Err(terminal_error(
+                    "workspace_models_invalid",
+                    &format!(
+                        "Workspace models.json contains an invalid endpoint for provider '{id}'."
+                    ),
+                    "rook-provider",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn workspace_provider_config_is_safe(config: &serde_json::Value) -> bool {
+    let Some(providers) = config["providers"].as_object() else {
+        return true;
+    };
+    providers.values().all(|provider| {
+        let http_url = |value: &str| {
+            tauri::Url::parse(value).is_ok_and(|url| {
+                matches!(url.scheme(), "https" | "http")
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+        };
+        provider["apiKey"].as_str().is_none_or(|key| {
+            let Some(name) = key.strip_prefix('$') else {
+                return false;
+            };
+            let mut chars = name.chars();
+            chars
+                .next()
+                .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+                && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        }) && provider["baseUrl"].as_str().is_none_or(http_url)
+            && provider["models"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .all(|model| {
+                    model["id"].as_str().is_some() && model["baseUrl"].as_str().is_none_or(http_url)
+                })
+    })
+}
+
+fn auth_url_is_safe(url: &str) -> bool {
+    let Ok(url) = tauri::Url::parse(url) else {
+        return false;
+    };
+    matches!(url.scheme(), "https" | "http")
+        && url.username().is_empty()
+        && url.password().is_none()
 }
 
 impl Drop for TerminalSessions {
@@ -1966,6 +2247,17 @@ async fn trust_workspace(
             )
         })?
         .insert(canonical.to_string_lossy().into_owned());
+    if let Some(processes) = app.try_state::<RookProcesses>() {
+        if let Ok(processes) = processes.0.lock() {
+            for process in processes.values() {
+                if let Ok(mut process) = process.lock() {
+                    if process.workspace_path == canonical {
+                        process.allowed_workspace_providers.clear();
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2016,6 +2308,21 @@ async fn untrust_workspace(
         })?
         .remove(&root.to_string_lossy().into_owned());
     terminals.stop_workspace(&root.to_string_lossy());
+    if let Some(processes) = app.try_state::<RookProcesses>() {
+        if let Ok(processes) = processes.0.lock() {
+            for process in processes.values() {
+                if let Ok(mut process) = process.lock() {
+                    if process.workspace_path == root {
+                        process.allowed_workspace_providers.clear();
+                        if let Ok(mut pending) = process.pending.lock() {
+                            pending.clear();
+                        }
+                        let _ = process.child.kill();
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2801,6 +3108,7 @@ async fn start_rook_ask(
             &request.operation_id,
         ));
     }
+    validate_workspace_provider_config(&root)?;
     let rook_bin = if tauri::is_dev() {
         let settings = read_rook_dev_settings(&rook_dev_settings_path(&app)?)?;
         let path = settings.checkout_path.ok_or_else(|| {
@@ -2822,6 +3130,9 @@ async fn start_rook_ask(
         None
     };
     let mut child = spawn_rook(&root, rook_bin.as_deref(), &request.operation_id)?;
+    let pending: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<serde_json::Value>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let next_request = Arc::new(AtomicU64::new(10));
     let mut stdin = child.stdin.take().ok_or_else(|| {
         terminal_error(
             "rook_start_failed",
@@ -2907,10 +3218,42 @@ async fn start_rook_ask(
     }
     let app_events = app.clone();
     let session_id = request.session_id.clone();
+    let pending_events = Arc::clone(&pending);
     std::thread::spawn(move || {
         let mut line = String::new();
         while std::io::BufRead::read_line(&mut stdout, &mut line).unwrap_or(0) > 0 {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                if value["method"] == "session/update" {
+                    if let Some(request_id) = value["params"]["requestId"].as_u64() {
+                        if let Ok(mut waiting) = pending_events.lock() {
+                            if let Some(sender) = waiting.remove(&request_id) {
+                                let _ = sender.send(value);
+                                line.clear();
+                                continue;
+                            }
+                        }
+                    }
+                }
+                if let Some(id) = value["id"].as_u64() {
+                    if let Ok(mut waiting) = pending_events.lock() {
+                        if let Some(sender) = waiting.remove(&id) {
+                            let _ = sender.send(value);
+                            line.clear();
+                            continue;
+                        }
+                    }
+                }
+                if value["method"] == "provider/auth_prompt"
+                    || value["method"] == "provider/auth_event"
+                    || value["method"] == "workspace/providers_changed"
+                {
+                    let _ = app_events.emit(
+                        "rook-event",
+                        serde_json::json!({"sessionId":session_id,"message":value}),
+                    );
+                    line.clear();
+                    continue;
+                }
                 let _ = app_events.emit(
                     "rook-event",
                     serde_json::json!({"sessionId":session_id,"message":value}),
@@ -2930,6 +3273,11 @@ async fn start_rook_ask(
             .unwrap_or_default()
             .to_owned(),
         capabilities: result["capabilities"].clone(),
+        providers: serde_json::from_value(result["providers"].clone()).unwrap_or_default(),
+        current_model: result
+            .get("currentModel")
+            .filter(|value| !value.is_null())
+            .cloned(),
     };
     processes
         .0
@@ -2943,7 +3291,25 @@ async fn start_rook_ask(
         })?
         .insert(
             request.session_id,
-            Arc::new(Mutex::new(RookProcess { child, stdin })),
+            Arc::new(Mutex::new(RookProcess {
+                child,
+                stdin,
+                pending,
+                next_request,
+                workspace_providers: result["providers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|provider| provider["source"] == "workspace")
+                    .filter_map(|provider| provider["id"].as_str().map(str::to_owned))
+                    .collect(),
+                allowed_workspace_providers: HashMap::new(),
+                pending_auth_logins: HashSet::new(),
+                workspace_path: root.clone(),
+                active_model_provider: result["currentModel"]["provider"]
+                    .as_str()
+                    .map(str::to_owned),
+            })),
         );
     Ok(response)
 }
@@ -2980,7 +3346,10 @@ fn spawn_rook(
 
 #[tauri::command]
 async fn prompt_rook_ask(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
     processes: tauri::State<'_, RookProcesses>,
+    trusted: tauri::State<'_, TrustedWorkspaces>,
     request: RookPromptRequest,
 ) -> Result<(), IpcError> {
     if request.schema_version != IPC_SCHEMA_VERSION
@@ -2995,20 +3364,73 @@ async fn prompt_rook_ask(
             &request.operation_id,
         ));
     }
-    let processes = processes.0.lock().map_err(|_| {
-        terminal_error(
-            "rook_busy",
-            "Rook sessions are temporarily unavailable.",
-            &request.operation_id,
+    let process = {
+        let processes = processes.0.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "Rook sessions are temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        Arc::clone(processes.get(&request.session_id).ok_or_else(|| {
+            terminal_error(
+                "rook_session_missing",
+                "This Rook Ask session is no longer active.",
+                &request.operation_id,
+            )
+        })?)
+    };
+    let (workspace_path, provider_id) = {
+        let process = process.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "This Rook session is temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        (
+            process.workspace_path.clone(),
+            process.active_model_provider.clone(),
         )
-    })?;
-    let process = processes.get(&request.session_id).ok_or_else(|| {
-        terminal_error(
-            "rook_session_missing",
-            "This Rook Ask session is no longer active.",
-            &request.operation_id,
-        )
-    })?;
+    };
+    if let Some(provider_id) = provider_id {
+        let known_workspace_provider = process
+            .lock()
+            .map_err(|_| {
+                terminal_error(
+                    "rook_busy",
+                    "This Rook session is temporarily unavailable.",
+                    &request.operation_id,
+                )
+            })?
+            .workspace_providers
+            .contains(&provider_id);
+        if known_workspace_provider {
+            if !workspace_provider_ids(&workspace_path)?.contains(&provider_id) {
+                return Err(terminal_error("workspace_provider_changed", "Workspace provider configuration changed or was removed. Reconnect and review it before use.", &request.operation_id));
+            }
+            ensure_workspace_trusted(&app, &db, &trusted, &workspace_path, &request.operation_id)
+                .await?;
+            let process_state = process.lock().map_err(|_| {
+                terminal_error(
+                    "rook_busy",
+                    "This Rook session is temporarily unavailable.",
+                    &request.operation_id,
+                )
+            })?;
+            let current_fingerprint =
+                workspace_provider_endpoint_fingerprint(&workspace_path, &provider_id)?;
+            if process_state.allowed_workspace_providers.get(&provider_id)
+                != Some(&current_fingerprint)
+            {
+                return Err(terminal_error(
+                    "workspace_provider_consent_required",
+                    "This provider endpoint is not approved or changed; review it before use.",
+                    &request.operation_id,
+                ));
+            }
+        }
+    }
     let mut process = process.lock().map_err(|_| {
         terminal_error(
             "rook_busy",
@@ -3016,15 +3438,41 @@ async fn prompt_rook_ask(
             &request.operation_id,
         )
     })?;
-    let stdin = &mut process.stdin;
+    if let Some(provider_id) = process.active_model_provider.clone() {
+        if process.workspace_providers.contains(&provider_id) {
+            let fingerprint =
+                workspace_provider_endpoint_fingerprint(&process.workspace_path, &provider_id)?;
+            if process.allowed_workspace_providers.get(&provider_id) != Some(&fingerprint) {
+                return Err(terminal_error("workspace_provider_consent_required", "This provider endpoint is not approved or changed; review it before sending a prompt.", &request.operation_id));
+            }
+        }
+    }
     let prompt = rook_prompt_message(&request.text);
-    writeln!(stdin, "{}", prompt).map_err(|_| {
-        terminal_error(
+    process.next_request.fetch_max(10, Ordering::Relaxed);
+    let mut prompt = prompt;
+    let request_id = process.next_request.fetch_add(1, Ordering::Relaxed);
+    prompt["id"] = serde_json::json!(request_id);
+    process
+        .pending
+        .lock()
+        .map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "Rook responses are temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?
+        .insert(request_id, tokio::sync::oneshot::channel().0);
+    if writeln!(process.stdin, "{}", prompt).is_err() {
+        if let Ok(mut pending) = process.pending.lock() {
+            pending.remove(&request_id);
+        }
+        return Err(terminal_error(
             "rook_protocol_failed",
             "The Ask prompt could not be sent.",
             &request.operation_id,
-        )
-    })?;
+        ));
+    }
     Ok(())
 }
 
@@ -3156,6 +3604,476 @@ async fn respond_rook_permission(
     Ok(())
 }
 
+#[tauri::command]
+async fn rook_provider_request(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    processes: tauri::State<'_, RookProcesses>,
+    trusted: tauri::State<'_, TrustedWorkspaces>,
+    request: RookProviderRequest,
+) -> Result<serde_json::Value, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION
+        || !validate_operation_id(&request.operation_id)
+        || !validate_operation_id(&request.session_id)
+        || !matches!(
+            request.method.as_str(),
+            "provider/list"
+                | "provider/login"
+                | "provider/logout"
+                | "provider/auth_cancel"
+                | "model/list"
+                | "model/select"
+                | "workspace/allow_provider"
+                | "session/prompt"
+        )
+    {
+        return Err(terminal_error(
+            "invalid_rook_provider_request",
+            "The provider or model request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    if request.method == "provider/auth_cancel" {
+        let processes = processes.0.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "Rook sessions are temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        let process = processes.get(&request.session_id).ok_or_else(|| {
+            terminal_error(
+                "rook_session_missing",
+                "This Rook Ask session is no longer active.",
+                &request.operation_id,
+            )
+        })?;
+        let mut process = process.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "This Rook session is temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        let params = request.params;
+        let login_id = params["loginId"].as_str().ok_or_else(|| {
+            terminal_error(
+                "invalid_rook_provider_request",
+                "loginId is required.",
+                &request.operation_id,
+            )
+        })?;
+        let id = process.next_request.fetch_add(1, Ordering::Relaxed);
+        if !process.pending_auth_logins.contains(login_id) {
+            return Ok(serde_json::json!({"accepted":false}));
+        }
+        writeln!(process.stdin, "{}", serde_json::json!({"jsonrpc":"2.0","id":id,"method":"provider/auth_cancel","params":params})).map_err(|_| terminal_error("rook_protocol_failed", "Sign-in cancellation could not be sent.", &request.operation_id))?;
+        return Ok(serde_json::json!({"accepted":true}));
+    }
+    let process = {
+        let processes = processes.0.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "Rook sessions are temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        Arc::clone(processes.get(&request.session_id).ok_or_else(|| {
+            terminal_error(
+                "rook_session_missing",
+                "This Rook Ask session is no longer active.",
+                &request.operation_id,
+            )
+        })?)
+    };
+    let (workspace_path, workspace_provider, provider_id) = {
+        let process = process.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "This Rook session is temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        let provider_id = match request.method.as_str() {
+            "workspace/allow_provider" => request.params["providerId"].as_str(),
+            "session/prompt" => process.active_model_provider.as_deref(),
+            "provider/login" => request.params["providerId"].as_str(),
+            "model/select" => request.params["provider"].as_str(),
+            _ => None,
+        };
+        let is_workspace_provider = provider_id
+            .map(str::to_owned)
+            .is_some_and(|id| process.workspace_providers.contains(&id));
+        (
+            process.workspace_path.clone(),
+            is_workspace_provider,
+            provider_id.map(str::to_owned),
+        )
+    };
+    if workspace_provider {
+        validate_workspace_provider_config(&workspace_path)?;
+        if request.method == "model/select" {
+            if let Some(provider_id) = provider_id.as_deref() {
+                let current = process
+                    .lock()
+                    .map_err(|_| {
+                        terminal_error(
+                            "rook_busy",
+                            "This Rook session is temporarily unavailable.",
+                            &request.operation_id,
+                        )
+                    })?
+                    .active_model_provider
+                    .clone();
+                if current.as_deref() != Some(provider_id) {
+                    validate_workspace_provider_config(&workspace_path)?;
+                    if !workspace_provider_ids(&workspace_path)?.contains(provider_id) {
+                        return Err(terminal_error("workspace_provider_changed", "Workspace provider configuration changed or was removed. Reconnect and review it before use.", &request.operation_id));
+                    }
+                    ensure_workspace_trusted(
+                        &app,
+                        &db,
+                        &trusted,
+                        &workspace_path,
+                        &request.operation_id,
+                    )
+                    .await?;
+                }
+            }
+        }
+        if request.method == "session/prompt" {
+            let provider_id = {
+                process
+                    .lock()
+                    .map_err(|_| {
+                        terminal_error(
+                            "rook_busy",
+                            "This Rook session is temporarily unavailable.",
+                            &request.operation_id,
+                        )
+                    })?
+                    .active_model_provider
+                    .clone()
+                    .unwrap_or_default()
+            };
+            if !workspace_provider_ids(&workspace_path)?.contains(&provider_id) {
+                return Err(terminal_error("workspace_provider_changed", "Workspace provider configuration changed or was removed. Reconnect and review it before use.", &request.operation_id));
+            }
+            let fingerprint =
+                workspace_provider_endpoint_fingerprint(&workspace_path, &provider_id)?;
+            let approved = process
+                .lock()
+                .map_err(|_| {
+                    terminal_error(
+                        "rook_busy",
+                        "This Rook session is temporarily unavailable.",
+                        &request.operation_id,
+                    )
+                })?
+                .allowed_workspace_providers
+                .get(&provider_id)
+                .is_some_and(|current| current == &fingerprint);
+            if !approved {
+                return Err(terminal_error("workspace_provider_consent_required", "This provider endpoint is not approved or changed; review it before sending a prompt.", &request.operation_id));
+            }
+        }
+        if request.method == "provider/login" {
+            if let Some(provider_id) = provider_id.as_deref() {
+                if workspace_provider_ids(&workspace_path)?.contains(provider_id) {
+                    let fingerprint =
+                        workspace_provider_endpoint_fingerprint(&workspace_path, provider_id)?;
+                    let approved = process
+                        .lock()
+                        .map_err(|_| {
+                            terminal_error(
+                                "rook_busy",
+                                "This Rook session is temporarily unavailable.",
+                                &request.operation_id,
+                            )
+                        })?
+                        .allowed_workspace_providers
+                        .get(provider_id)
+                        .is_some_and(|current| current == &fingerprint);
+                    if !approved {
+                        return Err(terminal_error("workspace_provider_consent_required", "Explicitly allow the current workspace provider endpoint before signing in.", &request.operation_id));
+                    }
+                }
+            }
+        }
+        ensure_workspace_trusted(&app, &db, &trusted, &workspace_path, &request.operation_id)
+            .await?;
+    }
+    let login_id = request.params["loginId"].as_str().map(str::to_owned);
+    if request.method == "workspace/allow_provider" {
+        validate_workspace_provider_config(&workspace_path)?;
+        ensure_workspace_trusted(&app, &db, &trusted, &workspace_path, &request.operation_id)
+            .await?;
+        let provider_id = request.params["providerId"].as_str().ok_or_else(|| {
+            terminal_error(
+                "invalid_rook_provider_request",
+                "providerId is required.",
+                &request.operation_id,
+            )
+        })?;
+        let current_fingerprint =
+            workspace_provider_endpoint_fingerprint(&workspace_path, provider_id)?;
+        if request.params["endpointFingerprint"].as_str() != Some(current_fingerprint.as_str()) {
+            return Err(terminal_error("workspace_provider_changed", "Workspace provider endpoints changed. Review the current endpoint before allowing it.", &request.operation_id));
+        }
+    }
+    let (id, receiver) = {
+        let mut process = process.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "This Rook session is temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+
+        if request.method == "workspace/allow_provider" {
+            let provider_id = request.params["providerId"].as_str().ok_or_else(|| {
+                terminal_error(
+                    "invalid_rook_provider_request",
+                    "providerId is required.",
+                    &request.operation_id,
+                )
+            })?;
+            if !workspace_provider_ids(&process.workspace_path)?.contains(provider_id) {
+                return Err(terminal_error(
+                    "rook_provider_unknown",
+                    "That provider is not configured by this workspace.",
+                    &request.operation_id,
+                ));
+            }
+            let fingerprint = request.params["endpointFingerprint"]
+                .as_str()
+                .ok_or_else(|| {
+                    terminal_error(
+                        "workspace_provider_changed",
+                        "The approved workspace provider endpoint is missing.",
+                        &request.operation_id,
+                    )
+                })?;
+            let current_fingerprint =
+                workspace_provider_endpoint_fingerprint(&process.workspace_path, provider_id)?;
+            if fingerprint != current_fingerprint {
+                return Err(terminal_error("workspace_provider_changed", "Workspace provider endpoints changed. Review the current endpoint before allowing it.", &request.operation_id));
+            }
+            process
+                .allowed_workspace_providers
+                .insert(provider_id.to_owned(), fingerprint.to_owned());
+        }
+        let id = process.next_request.fetch_add(1, Ordering::Relaxed);
+        if request.method == "provider/login" {
+            if let Some(login_id) = login_id.as_deref() {
+                process.pending_auth_logins.insert(login_id.to_owned());
+            }
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        process
+            .pending
+            .lock()
+            .map_err(|_| {
+                terminal_error(
+                    "rook_busy",
+                    "Rook responses are temporarily unavailable.",
+                    &request.operation_id,
+                )
+            })?
+            .insert(id, sender);
+        let mut params = request.params;
+        if request.method == "session/prompt" {
+            params["context"] = serde_json::json!("");
+        }
+        let message =
+            serde_json::json!({"jsonrpc":"2.0","id":id,"method":request.method,"params":params});
+        if writeln!(process.stdin, "{message}").is_err() {
+            process
+                .pending
+                .lock()
+                .ok()
+                .map(|mut waiting| waiting.remove(&id));
+            if request.method == "provider/login" {
+                if let Some(login_id) = login_id.as_deref() {
+                    process.pending_auth_logins.remove(login_id);
+                }
+            }
+            return Err(terminal_error(
+                "rook_protocol_failed",
+                "The provider or model request could not be sent.",
+                &request.operation_id,
+            ));
+        }
+        (id, receiver)
+    };
+    let response = match tokio::time::timeout(std::time::Duration::from_secs(300), receiver).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) => {
+            process.lock().ok().and_then(|mut process| {
+                if request.method == "provider/login" {
+                    if let Some(login_id) = login_id.as_deref() {
+                        process.pending_auth_logins.remove(login_id);
+                    }
+                }
+                process
+                    .pending
+                    .lock()
+                    .ok()
+                    .map(|mut pending| pending.remove(&id))
+            });
+            return Err(terminal_error(
+                "rook_protocol_failed",
+                "Rook disconnected before completing the provider or model request.",
+                &request.operation_id,
+            ));
+        }
+        Err(_) => {
+            process.lock().ok().and_then(|mut process| {
+                if request.method == "provider/login" {
+                    if let Some(login_id) = login_id.as_deref() {
+                        process.pending_auth_logins.remove(login_id);
+                    }
+                }
+                process
+                    .pending
+                    .lock()
+                    .ok()
+                    .map(|mut pending| pending.remove(&id))
+            });
+            return Err(terminal_error(
+                "rook_protocol_timeout",
+                "Rook did not answer the provider or model request.",
+                &request.operation_id,
+            ));
+        }
+    };
+    if let Some(error) = response.get("error") {
+        return Err(terminal_error(
+            "rook_provider_error",
+            error["message"]
+                .as_str()
+                .unwrap_or("Rook rejected the provider or model request."),
+            &request.operation_id,
+        ));
+    }
+    if request.method == "model/select" {
+        if let Some(provider) = response["result"]["currentModel"]["provider"].as_str() {
+            if let Ok(mut process) = process.lock() {
+                process.active_model_provider = Some(provider.to_owned());
+            }
+        }
+    }
+    Ok(response
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
+#[tauri::command]
+async fn respond_rook_auth_prompt(
+    processes: tauri::State<'_, RookProcesses>,
+    mut request: RookAuthPromptResponse,
+) -> Result<(), IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION
+        || !validate_operation_id(&request.operation_id)
+        || !validate_operation_id(&request.session_id)
+        || !request.prompt_id.starts_with("rook:auth:")
+        || request.prompt_id.len() > 128
+        || request.value.len() > 16_384
+    {
+        return Err(terminal_error(
+            "invalid_rook_auth_response",
+            "The sign-in response is invalid.",
+            &request.operation_id,
+        ));
+    }
+    if request.value.contains('\0') {
+        return Err(terminal_error(
+            "invalid_rook_auth_response",
+            "The sign-in response contains an invalid character.",
+            &request.operation_id,
+        ));
+    }
+    let login_id = request
+        .prompt_id
+        .split(':')
+        .nth(2)
+        .unwrap_or_default()
+        .to_owned();
+    let encoded = serde_json::json!({"jsonrpc":"2.0","id":request.prompt_id,"result":{"value":request.value}}).to_string();
+    let process = {
+        let processes = processes.0.lock().map_err(|_| {
+            terminal_error(
+                "rook_busy",
+                "Rook sessions are temporarily unavailable.",
+                &request.operation_id,
+            )
+        })?;
+        Arc::clone(processes.get(&request.session_id).ok_or_else(|| {
+            terminal_error(
+                "rook_session_missing",
+                "This Rook Ask session is no longer active.",
+                &request.operation_id,
+            )
+        })?)
+    };
+    let mut process = process.lock().map_err(|_| {
+        terminal_error(
+            "rook_busy",
+            "This Rook session is temporarily unavailable.",
+            &request.operation_id,
+        )
+    })?;
+    process.pending_auth_logins.insert(login_id);
+    let result = writeln!(process.stdin, "{encoded}").map_err(|_| {
+        terminal_error(
+            "rook_protocol_failed",
+            "The sign-in response could not be sent.",
+            &request.operation_id,
+        )
+    });
+    request.value.clear();
+    result
+}
+
+#[tauri::command]
+async fn open_rook_auth_url(
+    app: tauri::AppHandle,
+    request: RookAuthUrlRequest,
+) -> Result<(), IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_auth_url",
+            "The sign-in link request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let parsed = tauri::Url::parse(&request.url).map_err(|_| {
+        terminal_error(
+            "invalid_auth_url",
+            "The sign-in link is invalid.",
+            &request.operation_id,
+        )
+    })?;
+    if !auth_url_is_safe(&request.url) {
+        return Err(terminal_error(
+            "invalid_auth_url",
+            "Only HTTP(S) sign-in links without embedded credentials may be opened.",
+            &request.operation_id,
+        ));
+    }
+    app.opener()
+        .open_url(parsed.as_str(), None::<String>)
+        .map_err(|_| {
+            terminal_error(
+                "opener_failed",
+                "The system browser could not open the sign-in link.",
+                &request.operation_id,
+            )
+        })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RookRequest {
@@ -3171,6 +4089,22 @@ struct RookInitResponse {
     workspace_id: String,
     rook_version: String,
     capabilities: serde_json::Value,
+    #[serde(default)]
+    providers: Vec<RookProviderInfo>,
+    #[serde(default)]
+    current_model: Option<serde_json::Value>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RookProviderInfo {
+    id: String,
+    name: String,
+    configured: bool,
+    source: String,
+    #[serde(default)]
+    endpoint: Option<String>,
+    #[serde(default)]
+    auth_methods: Vec<serde_json::Value>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3203,6 +4137,31 @@ struct RookPermissionRequest {
     session_id: String,
     permission_id: String,
     choice: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RookProviderRequest {
+    schema_version: u16,
+    operation_id: String,
+    session_id: String,
+    method: String,
+    params: serde_json::Value,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RookAuthPromptResponse {
+    schema_version: u16,
+    operation_id: String,
+    session_id: String,
+    prompt_id: String,
+    value: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RookAuthUrlRequest {
+    schema_version: u16,
+    operation_id: String,
+    url: String,
 }
 
 fn validate_check_request(request: &RunCheckRequest) -> Result<(), IpcError> {
@@ -4458,6 +5417,62 @@ mod rook_start_tests {
         assert_eq!(read_rook_dev_settings(&path).unwrap(), settings);
         fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn auth_browser_links_require_credential_free_http_urls() {
+        assert!(auth_url_is_safe("https://auth.example.com/device"));
+        assert!(auth_url_is_safe("http://localhost:3000/callback"));
+        assert!(!auth_url_is_safe("file:///etc/passwd"));
+        assert!(!auth_url_is_safe("javascript:alert(1)"));
+        assert!(!auth_url_is_safe("https://user:pass@example.com/"));
+    }
+
+    #[test]
+    fn workspace_provider_consent_tracks_only_endpoint_configuration() {
+        let first = serde_json::json!({"providers":{"custom":{"baseUrl":"https://one.example/v1","apiKey":"$TOKEN_A","models":[{"id":"m1","baseUrl":"https://model.example/v1"}]}}});
+        let same = serde_json::json!({"providers":{"custom":{"baseUrl":"https://one.example/v1","apiKey":"$TOKEN_B","models":[{"id":"m1","baseUrl":"https://model.example/v1"}]}}});
+        let changed = serde_json::json!({"providers":{"custom":{"baseUrl":"https://two.example/v1","apiKey":"$TOKEN_A","models":[{"id":"m1","baseUrl":"https://model.example/v1"}]}}});
+        let fingerprint = |config: &serde_json::Value| {
+            workspace_provider_fingerprint(&config["providers"]["custom"])
+        };
+        assert!(validate_workspace_provider_consent(
+            &first,
+            "custom",
+            &fingerprint(&same)
+        ));
+        assert!(!validate_workspace_provider_consent(
+            &changed,
+            "custom",
+            &fingerprint(&first)
+        ));
+        assert!(!fingerprint(&first).contains("TOKEN"));
+    }
+
+    #[test]
+    fn workspace_provider_config_rejects_literal_secrets_and_unsafe_endpoints() {
+        assert!(workspace_provider_config_is_safe(&serde_json::json!({
+            "providers": {"custom": {"baseUrl":"https://api.example/v1", "apiKey":"$ROOK_API_KEY", "models":[{"id":"m1"}]}}
+        })));
+        assert!(!workspace_provider_config_is_safe(&serde_json::json!({
+            "providers": {"custom": {"baseUrl":"https://api.example/v1", "apiKey":"literal-secret", "models":[{"id":"m1"}]}}
+        })));
+        assert!(!workspace_provider_config_is_safe(&serde_json::json!({
+            "providers": {"custom": {"baseUrl":"file:///etc/passwd", "models":[{"id":"m1"}]}}
+        })));
+    }
+
+    #[test]
+    fn workspace_provider_fingerprints_match_rook_protocol_order_and_default_endpoints() {
+        let config = serde_json::json!({"baseUrl":"https://api.example/v1","models":[{"id":"m1"},{"id":"m2","baseUrl":"https://other.example/v1"}]});
+        let expected = format!(
+            "{:x}",
+            Sha256::digest(
+                "https://api.example/v1\0m1\0https://api.example/v1\0m2\0https://other.example/v1"
+                    .as_bytes()
+            )
+        );
+        assert_eq!(workspace_provider_fingerprint(&config), expected);
+    }
 }
 
 pub fn run() {
@@ -4467,6 +5482,7 @@ pub fn run() {
         .manage(DomainDatabase::default())
         .manage(RookProcesses::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             ping,
             get_preferences,
@@ -4498,7 +5514,10 @@ pub fn run() {
             prompt_rook_ask,
             stop_rook_ask,
             cancel_rook_ask,
-            respond_rook_permission
+            respond_rook_permission,
+            rook_provider_request,
+            respond_rook_auth_prompt,
+            open_rook_auth_url
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Laplace desktop application");

@@ -224,7 +224,62 @@ export interface RookInitResponse {
   workspaceId: string;
   rookVersion: string;
   capabilities: Record<string, unknown>;
+  providers: RookProvider[];
+  currentModel: RookModel | null;
 }
+
+export interface RookProvider {
+  id: string;
+  name: string;
+  configured: boolean;
+  source: "provider" | "workspace";
+  endpoint?: string;
+  endpointFingerprint?: string;
+  authMethods: {
+    type: "api_key" | "oauth";
+    name: string;
+    isSubscription?: boolean;
+    loginLabel?: string;
+  }[];
+}
+
+export interface RookModel {
+  provider: string;
+  id: string;
+  name: string;
+  source?: "provider" | "workspace";
+  endpoint?: string | null;
+}
+
+export interface RookAuthPrompt {
+  type: "text" | "secret" | "manual_code" | "select";
+  message: string;
+  placeholder?: string;
+  options?: { id: string; label: string; description?: string }[];
+}
+
+export interface RookAuthEvent {
+  loginId?: string;
+  type: "info" | "auth_url" | "device_code" | "progress";
+  message?: string;
+  url?: string;
+  instructions?: string;
+  links?: { url: string; label?: string }[];
+  userCode?: string;
+  verificationUri?: string;
+  openBrowserOnConfirm?: boolean;
+  copyCodeOnConfirm?: boolean;
+  intervalSeconds?: number;
+  expiresInSeconds?: number;
+}
+
+export interface RookAuthPrompt {
+  type: "text" | "secret" | "manual_code" | "select";
+  message: string;
+  placeholder?: string;
+  options?: { id: string; label: string; description?: string }[];
+}
+
 export interface RookEvent {
   sessionId: string;
   message: Record<string, unknown>;

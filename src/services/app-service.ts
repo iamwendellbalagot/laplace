@@ -35,6 +35,8 @@ import {
   type RookInitResponse,
   type RookEvent,
   type RookPermissionChoice,
+  type RookModel,
+  type RookProvider,
 } from "./contracts";
 
 export interface AppService {
@@ -104,6 +106,36 @@ export interface AppService {
     sessionId: string,
     workspaceId: string,
   ): Promise<RookInitResponse>;
+  listRookModels(
+    sessionId: string,
+  ): Promise<{ models: RookModel[]; currentModel: RookModel | null }>;
+  selectRookModel(sessionId: string, model: RookModel): Promise<RookModel>;
+  loginRookProvider(
+    sessionId: string,
+    loginId: string,
+    providerId: string,
+    authType: "api_key" | "oauth",
+  ): Promise<{
+    providers: RookProvider[];
+    models: RookModel[];
+    currentModel: RookModel | null;
+  }>;
+  respondRookAuthPrompt(
+    sessionId: string,
+    promptId: string,
+    value: string,
+  ): Promise<void>;
+  cancelRookLogin(sessionId: string, loginId: string): Promise<void>;
+  allowRookWorkspaceProvider(
+    sessionId: string,
+    providerId: string,
+    endpointFingerprint: string,
+  ): Promise<void>;
+  logoutRookProvider(
+    sessionId: string,
+    providerId: string,
+  ): Promise<RookProvider[]>;
+  openRookAuthUrl(url: string): Promise<void>;
   promptRookAsk(sessionId: string, text: string): Promise<void>;
   listenRook(listener: (event: RookEvent) => void): Promise<UnlistenFn>;
   stopRookAsk(sessionId: string): Promise<void>;
@@ -339,6 +371,141 @@ export class TauriAppService implements AppService {
         operationId: crypto.randomUUID(),
         sessionId,
         text,
+      },
+    });
+  }
+
+  async listRookModels(
+    sessionId: string,
+  ): Promise<{ models: RookModel[]; currentModel: RookModel | null }> {
+    const response = await invoke<{
+      models: RookModel[];
+      currentModel: RookModel | null;
+    }>("rook_provider_request", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        sessionId,
+        method: "model/list",
+        params: {},
+      },
+    });
+    return response;
+  }
+
+  async selectRookModel(
+    sessionId: string,
+    model: RookModel,
+  ): Promise<RookModel> {
+    const response = await invoke<{ currentModel: RookModel }>(
+      "rook_provider_request",
+      {
+        request: {
+          schemaVersion: IPC_SCHEMA_VERSION,
+          operationId: crypto.randomUUID(),
+          sessionId,
+          method: "model/select",
+          params: { provider: model.provider, id: model.id },
+        },
+      },
+    );
+    return response.currentModel;
+  }
+
+  async loginRookProvider(
+    sessionId: string,
+    loginId: string,
+    providerId: string,
+    authType: "api_key" | "oauth",
+  ): Promise<{
+    providers: RookProvider[];
+    models: RookModel[];
+    currentModel: RookModel | null;
+  }> {
+    return invoke<{
+      providers: RookProvider[];
+      models: RookModel[];
+      currentModel: RookModel | null;
+    }>("rook_provider_request", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        sessionId,
+        method: "provider/login",
+        params: { providerId, authType, loginId },
+      },
+    });
+  }
+
+  async respondRookAuthPrompt(
+    sessionId: string,
+    promptId: string,
+    value: string,
+  ): Promise<void> {
+    await invoke("respond_rook_auth_prompt", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        sessionId,
+        promptId,
+        value,
+      },
+    });
+  }
+
+  async cancelRookLogin(sessionId: string, loginId: string): Promise<void> {
+    await invoke("rook_provider_request", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        sessionId,
+        method: "provider/auth_cancel",
+        params: { loginId },
+      },
+    });
+  }
+
+  async allowRookWorkspaceProvider(
+    sessionId: string,
+    providerId: string,
+    endpointFingerprint: string,
+  ): Promise<void> {
+    await invoke("rook_provider_request", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        sessionId,
+        method: "workspace/allow_provider",
+        params: { providerId, endpointFingerprint },
+      },
+    });
+  }
+
+  async logoutRookProvider(
+    sessionId: string,
+    providerId: string,
+  ): Promise<RookProvider[]> {
+    const response = await invoke<{ providers: RookProvider[] }>(
+      "rook_provider_request",
+      {
+        request: {
+          schemaVersion: IPC_SCHEMA_VERSION,
+          operationId: crypto.randomUUID(),
+          sessionId,
+          method: "provider/logout",
+          params: { providerId },
+        },
+      },
+    );
+    return response.providers;
+  }
+
+  async openRookAuthUrl(url: string): Promise<void> {
+    await invoke("open_rook_auth_url", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        url,
       },
     });
   }

@@ -9,6 +9,10 @@ import { navigationItems, screenTitles } from "./app/navigation";
 import { AppServiceError, type AppService } from "./services/app-service";
 import type {
   AppEvent,
+  RookModel,
+  RookProvider,
+  RookAuthEvent,
+  RookAuthPrompt,
   ProjectEntry,
   ProjectFileRead,
   ProjectSummary,
@@ -62,6 +66,7 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [nativeEvent, setNativeEvent] = useState<AppEvent>();
   const [nativePending, setNativePending] = useState(false);
   const [activeProject, setActiveProject] = useState<ProjectSummary>();
+  const [trustedProjectIds, setTrustedProjectIds] = useState<string[]>([]);
   const [projectEntries, setProjectEntries] = useState<ProjectEntry[]>([]);
   const [projectEntriesTruncated, setProjectEntriesTruncated] = useState(false);
   const [recentProjects, setRecentProjects] = useState<ProjectSummary[]>([]);
@@ -688,6 +693,16 @@ export function App({ service, browserPreview = false }: AppProps) {
             onTestNative={testNativeConnection}
             onNavigate={navigate}
             activeProject={activeProject}
+            projectTrusted={trustedProjectIds.includes(activeProject?.id ?? "")}
+            onTrustProject={async () => {
+              if (!activeProject) return;
+              await service.trustWorkspace(activeProject.path);
+              setTrustedProjectIds((items) =>
+                items.includes(activeProject.id)
+                  ? items
+                  : [...items, activeProject.id],
+              );
+            }}
             recentProjects={recentProjects}
             projectEntries={projectEntries}
             projectEntriesTruncated={projectEntriesTruncated}
@@ -972,6 +987,8 @@ interface ScreenContentProps {
   onTestNative: () => void;
   onNavigate: (page: PageId) => void;
   activeProject?: ProjectSummary;
+  projectTrusted: boolean;
+  onTrustProject: () => Promise<void>;
   recentProjects: ProjectSummary[];
   projectEntries: ProjectEntry[];
   projectEntriesTruncated: boolean;
@@ -1367,10 +1384,28 @@ function VerifyScreen({
 function RookScreen({
   service,
   activeProject,
+  projectTrusted,
+  onTrustProject,
   browserPreview,
 }: ScreenContentProps) {
   const [session, setSession] = useState<string>();
   const [rookVersion, setRookVersion] = useState<string>();
+  const [providers, setProviders] = useState<RookProvider[]>([]);
+  const [providerControlsAvailable, setProviderControlsAvailable] =
+    useState(false);
+  const [models, setModels] = useState<RookModel[]>([]);
+  const [currentModel, setCurrentModel] = useState<RookModel | null>(null);
+  const [search, setSearch] = useState("");
+  const [authPrompt, setAuthPrompt] = useState<{
+    id: string;
+    prompt: RookAuthPrompt;
+  }>();
+  const [authEvent, setAuthEvent] = useState<RookAuthEvent>();
+  const [authValue, setAuthValue] = useState("");
+  const [activeLogin, setActiveLogin] = useState<string>();
+  const [allowedWorkspaceProviders, setAllowedWorkspaceProviders] = useState<
+    string[]
+  >([]);
   const [prompt, setPrompt] = useState("");
   const [events, setEvents] = useState<string[]>([]);
   const [runId, setRunId] = useState<string>();
@@ -1403,6 +1438,57 @@ function RookScreen({
         }
         if (typeof params?.runId === "string") setRunId(params.runId);
         if (
+          event.message.method === "provider/auth_prompt" &&
+          typeof event.message.id === "string" &&
+          params &&
+          typeof params.prompt === "object" &&
+          params.prompt !== null
+        ) {
+          setAuthPrompt({
+            id: event.message.id,
+            prompt: params.prompt as RookAuthPrompt,
+          });
+          setAuthValue("");
+        }
+        if (
+          event.message.method === "provider/auth_event" &&
+          params &&
+          typeof params.loginId === "string"
+        ) {
+          setAuthEvent({
+            ...(params.event as RookAuthEvent),
+            loginId: params.loginId,
+          });
+          if (
+            ["auth_url", "device_code"].includes(
+              String((params.event as Record<string, unknown>)?.type),
+            )
+          ) {
+            const eventData = params.event as RookAuthEvent;
+            const url = eventData.url ?? eventData.verificationUri;
+            if (url && /^https?:\/\//i.test(url)) {
+              void service
+                .openRookAuthUrl(url)
+                .catch((failure) =>
+                  setError(
+                    errorMessage(
+                      failure,
+                      "The sign-in browser could not be opened.",
+                    ),
+                  ),
+                );
+            }
+          }
+        }
+        if (event.message.method === "workspace/providers_changed") {
+          const providers = params?.providers;
+          if (Array.isArray(providers)) {
+            const updated = providers as RookProvider[];
+            setProviders(updated);
+            setAllowedWorkspaceProviders([]);
+          }
+        }
+        if (
           (params?.event as Record<string, unknown> | undefined)?.type ===
           "run_settled"
         )
@@ -1428,6 +1514,20 @@ function RookScreen({
       const result = await service.startRookAsk(id, activeProject.path);
       setSession(id);
       setRookVersion(result.rookVersion);
+      setProviders(result.providers);
+      setProviderControlsAvailable(
+        result.capabilities.providerControls !== undefined,
+      );
+      setAllowedWorkspaceProviders([]);
+      setCurrentModel(result.currentModel);
+      if (result.capabilities.modelCatalog === true) {
+        const catalog = await service.listRookModels(id);
+        setModels(catalog.models);
+        setCurrentModel(catalog.currentModel);
+      } else {
+        setModels([]);
+        setCurrentModel(null);
+      }
     } catch (failure) {
       setError(errorMessage(failure, "Rook could not be started."));
     } finally {
@@ -1462,6 +1562,306 @@ function RookScreen({
               <p role="status">
                 Rook {rookVersion} · immutable read-only Ask · Build unavailable
               </p>
+              {providerControlsAvailable && (
+                <section
+                  className="rook-provider-controls"
+                  aria-label="Provider and model"
+                >
+                  <h2>Provider and model</h2>
+                  {providers
+                    .filter((provider) => provider.authMethods.length > 0)
+                    .map((provider) => (
+                      <div key={provider.id}>
+                        <strong>{provider.name}</strong>
+                        <span>
+                          {provider.configured ? "Signed in" : "Not signed in"}
+                          {provider.source === "workspace"
+                            ? ` · Workspace · ${provider.endpoint ?? "custom endpoint"}`
+                            : " · Rook/Pi"}
+                        </span>
+                        {provider.source === "workspace" &&
+                          (!projectTrusted ? (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              onClick={() =>
+                                void onTrustProject().catch((failure) =>
+                                  setError(
+                                    errorMessage(
+                                      failure,
+                                      "Project trust could not be saved.",
+                                    ),
+                                  ),
+                                )
+                              }
+                            >
+                              Trust project for this provider
+                            </button>
+                          ) : allowedWorkspaceProviders.includes(
+                              provider.id,
+                            ) ? (
+                            <p role="status">
+                              Workspace provider allowed for this session.
+                            </p>
+                          ) : (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              onClick={() =>
+                                void service
+                                  .allowRookWorkspaceProvider(
+                                    session,
+                                    provider.id,
+                                    provider.endpointFingerprint ?? "",
+                                  )
+                                  .then(() =>
+                                    setAllowedWorkspaceProviders((items) => [
+                                      ...items,
+                                      provider.id,
+                                    ]),
+                                  )
+                                  .catch((failure) =>
+                                    setError(
+                                      errorMessage(
+                                        failure,
+                                        "Workspace provider consent failed.",
+                                      ),
+                                    ),
+                                  )
+                              }
+                            >
+                              Allow this workspace provider
+                            </button>
+                          ))}
+                        {provider.configured && (
+                          <button
+                            type="button"
+                            className="button button-quiet"
+                            disabled={Boolean(activeLogin)}
+                            onClick={() =>
+                              void service
+                                .logoutRookProvider(session, provider.id)
+                                .then(setProviders)
+                                .catch((failure) =>
+                                  setError(
+                                    errorMessage(
+                                      failure,
+                                      "Provider sign-out failed.",
+                                    ),
+                                  ),
+                                )
+                            }
+                          >
+                            Sign out
+                          </button>
+                        )}
+                        {!provider.configured &&
+                          provider.authMethods.map((method) => (
+                            <button
+                              key={method.type}
+                              type="button"
+                              className="button button-quiet"
+                              disabled={Boolean(activeLogin)}
+                              onClick={() => {
+                                const loginId = crypto
+                                  .randomUUID()
+                                  .replaceAll("-", "");
+                                setActiveLogin(loginId);
+                                setAuthEvent(undefined);
+                                void service
+                                  .loginRookProvider(
+                                    session,
+                                    loginId,
+                                    provider.id,
+                                    method.type,
+                                  )
+                                  .then((result) => {
+                                    setProviders(result.providers);
+                                    setModels(result.models);
+                                    setCurrentModel(result.currentModel);
+                                  })
+                                  .catch((failure) =>
+                                    setError(
+                                      errorMessage(
+                                        failure,
+                                        "Provider sign-in failed.",
+                                      ),
+                                    ),
+                                  )
+                                  .finally(() => {
+                                    setActiveLogin(undefined);
+                                    setAuthPrompt(undefined);
+                                  });
+                              }}
+                            >
+                              {method.loginLabel ?? method.name}
+                            </button>
+                          ))}
+                      </div>
+                    ))}
+                  <label htmlFor="rook-model-search">Search models</label>
+                  <input
+                    id="rook-model-search"
+                    value={search}
+                    onChange={(event) => setSearch(event.currentTarget.value)}
+                  />
+                  <label htmlFor="rook-model">Active model</label>
+                  <select
+                    id="rook-model"
+                    value={
+                      currentModel
+                        ? `${currentModel.provider}/${currentModel.id}`
+                        : ""
+                    }
+                    onChange={(event) => {
+                      const model = models.find(
+                        (item) =>
+                          `${item.provider}/${item.id}` ===
+                          event.currentTarget.value,
+                      );
+                      if (model)
+                        void service
+                          .selectRookModel(session, model)
+                          .then(setCurrentModel)
+                          .catch((failure) =>
+                            setError(
+                              errorMessage(failure, "Model selection failed."),
+                            ),
+                          );
+                    }}
+                  >
+                    <option value="">Select a model</option>
+                    {models
+                      .filter((model) =>
+                        `${model.provider} ${model.name} ${model.id}`
+                          .toLowerCase()
+                          .includes(search.toLowerCase()),
+                      )
+                      .map((model) => (
+                        <option
+                          key={`${model.provider}/${model.id}`}
+                          value={`${model.provider}/${model.id}`}
+                        >
+                          {model.name} · {model.provider}
+                          {model.source === "workspace"
+                            ? ` · ${model.endpoint ?? "workspace"}`
+                            : ""}
+                        </option>
+                      ))}
+                  </select>
+                  {currentModel && (
+                    <p role="status">
+                      Using {currentModel.name} · {currentModel.provider}/
+                      {currentModel.id}
+                    </p>
+                  )}
+                </section>
+              )}
+              {!providerControlsAvailable && (
+                <p role="status">
+                  This Rook version does not advertise native provider or model
+                  controls. Sign in and select a model in Rook, then reconnect.
+                </p>
+              )}
+              {activeLogin && (
+                <p role="status">
+                  Provider sign-in is in progress. Cancel to stop it.
+                </p>
+              )}
+              {activeLogin && (
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() =>
+                    void service
+                      .cancelRookLogin(session, activeLogin)
+                      .catch((failure) =>
+                        setError(
+                          errorMessage(failure, "Sign-in cancellation failed."),
+                        ),
+                      )
+                  }
+                >
+                  Cancel sign-in
+                </button>
+              )}
+              {authEvent && (
+                <section className="rook-auth-event" aria-live="polite">
+                  {authEvent.type === "device_code" ? (
+                    <>
+                      <p>
+                        Open {authEvent.verificationUri} and enter this code:
+                      </p>
+                      <strong>{authEvent.userCode}</strong>
+                    </>
+                  ) : (
+                    (authEvent.message ??
+                    authEvent.instructions ??
+                    authEvent.url)
+                  )}
+                </section>
+              )}
+              {authPrompt && (
+                <form
+                  className="rook-auth-prompt"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void service
+                      .respondRookAuthPrompt(session, authPrompt.id, authValue)
+                      .then(() => {
+                        setAuthPrompt(undefined);
+                        setAuthValue("");
+                      })
+                      .catch((failure) =>
+                        setError(
+                          errorMessage(failure, "Sign-in response failed."),
+                        ),
+                      );
+                  }}
+                >
+                  <label htmlFor="rook-auth-input">
+                    {authPrompt.prompt.message}
+                  </label>
+                  {authPrompt.prompt.type === "select" ? (
+                    <select
+                      id="rook-auth-input"
+                      value={authValue}
+                      onChange={(event) =>
+                        setAuthValue(event.currentTarget.value)
+                      }
+                    >
+                      <option value="">Choose…</option>
+                      {authPrompt.prompt.options?.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                          {option.description ? ` — ${option.description}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id="rook-auth-input"
+                      type={
+                        authPrompt.prompt.type === "secret"
+                          ? "password"
+                          : "text"
+                      }
+                      placeholder={authPrompt.prompt.placeholder}
+                      autoComplete="off"
+                      value={authValue}
+                      onChange={(event) =>
+                        setAuthValue(event.currentTarget.value)
+                      }
+                    />
+                  )}
+                  <button
+                    className="button button-primary"
+                    disabled={!authValue}
+                  >
+                    Continue
+                  </button>
+                </form>
+              )}
               {permission && (
                 <section
                   className="permission-card"
