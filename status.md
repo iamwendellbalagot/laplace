@@ -21,3 +21,4 @@
 - Rook Ask now groups model requests by prompt, displays `tool_started`/`tool_finished` as inline activity within the same Rook entry, and suppresses empty replies once settled. TypeScript and targeted Prettier pass; UI/native-app tests and manual visual verification were not run.
 - Rook Ask now preserves assistant text across multiple model turns within one run, and flags runs that settle immediately after a tool-use response instead of presenting that preamble as complete. TypeScript, targeted Prettier, and `git diff --check` pass; no UI/native-app tests or live-provider verification.
 - Agent instructions now require loading and following the `caveman` and `ponytail` skills for every task and response.
+- Added `claude-haiku-5-5` to the local global OpenCode RONE provider at `~/.config/opencode/opencode.json`; verified config loading and `opencode models` listing.
