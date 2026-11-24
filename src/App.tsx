@@ -37,6 +37,9 @@ type RookChatMessage = {
   text: string;
   runId?: string;
   tools?: RookChatTool[];
+  activeTextStart?: number;
+  stopReason?: string;
+  incomplete?: boolean;
 };
 
 function updateRookAssistant(
@@ -380,14 +383,28 @@ export function App({ service, browserPreview = false }: AppProps) {
         if (runId) setRookRunId(runId);
         if (agentEvent?.type === "model_request_started") {
           setRookError(undefined);
-          setRookMessages((items) =>
-            items.some(
-              (message) =>
-                message.role === "assistant" && message.runId === runId,
+          setRookMessages((items) => {
+            if (
+              items.some(
+                (message) =>
+                  message.role === "assistant" && message.runId === runId,
+              )
             )
-              ? items
-              : [...items, { role: "assistant", text: "", runId, tools: [] }],
-          );
+              return updateRookAssistant(items, runId, (message) => ({
+                ...message,
+                activeTextStart: message.text.length,
+              }));
+            return [
+              ...items,
+              {
+                role: "assistant",
+                text: "",
+                runId,
+                tools: [],
+                activeTextStart: 0,
+              },
+            ];
+          });
         } else if (
           agentEvent?.type === "tool_started" &&
           typeof agentEvent.id === "string" &&
@@ -442,7 +459,13 @@ export function App({ service, browserPreview = false }: AppProps) {
           setRookMessages((items) =>
             updateRookAssistant(items, runId, (message) => ({
               ...message,
-              text: agentEvent.text as string,
+              text: `${message.text.slice(0, message.activeTextStart ?? message.text.length)}${agentEvent.text as string}`,
+              activeTextStart: undefined,
+              stopReason:
+                typeof agentEvent.stopReason === "string"
+                  ? agentEvent.stopReason
+                  : undefined,
+              incomplete: false,
             })),
           );
         } else if (
@@ -451,6 +474,14 @@ export function App({ service, browserPreview = false }: AppProps) {
         ) {
           setRookError(agentEvent.message);
         } else if (agentEvent?.type === "run_settled") {
+          if (agentEvent.aborted !== true) {
+            setRookMessages((items) =>
+              updateRookAssistant(items, runId, (message) => ({
+                ...message,
+                incomplete: message.stopReason === "toolUse",
+              })),
+            );
+          }
           setRookRunId(undefined);
         }
       })
@@ -2324,6 +2355,11 @@ function RookScreen({
                     message.runId === runId ? (
                     <p className="rook-thinking">Thinking…</p>
                   ) : null}
+                  {message.role === "assistant" && message.incomplete && (
+                    <p className="rook-incomplete" role="status">
+                      Rook stopped before providing a final answer.
+                    </p>
+                  )}
                 </article>
               );
             })}

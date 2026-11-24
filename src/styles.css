@@ -959,6 +959,10 @@ kbd,
   color: var(--muted) !important;
   font-style: italic;
 }
+.rook-incomplete {
+  color: var(--red) !important;
+  font-size: 11px !important;
+}
 .rook-composer {
   display: grid;
   gap: 10px;
