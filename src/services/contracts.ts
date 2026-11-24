@@ -221,11 +221,29 @@ export interface ExecutionRecord {
 
 export interface RookInitResponse {
   sessionId: string;
+  activeSessionId?: string;
+  sessions?: RookSessionSummary[];
+  messages?: RookSessionMessage[];
+  hostSessionStorage?: boolean;
   workspaceId: string;
   rookVersion: string;
   capabilities: Record<string, unknown>;
   providers: RookProvider[];
   currentModel: RookModel | null;
+}
+
+export interface RookSessionSummary {
+  id: string;
+  name: string | null;
+  created: string;
+  modified: string;
+  messageCount: number;
+  firstMessage: string;
+}
+
+export interface RookSessionMessage {
+  role: "user" | "assistant";
+  text: string;
 }
 
 export interface RookProvider {

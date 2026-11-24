@@ -37,6 +37,8 @@ import {
   type RookPermissionChoice,
   type RookModel,
   type RookProvider,
+  type RookSessionSummary,
+  type RookSessionMessage,
 } from "./contracts";
 
 export interface AppService {
@@ -106,6 +108,10 @@ export interface AppService {
     sessionId: string,
     workspaceId: string,
   ): Promise<RookInitResponse>;
+  listRookSessions(sessionId: string): Promise<RookSessionSummary[]>;
+  newRookSession(sessionId: string): Promise<string>;
+  loadRookSession(sessionId: string, rookSessionId: string): Promise<void>;
+  getRookSessionHistory(sessionId: string): Promise<RookSessionMessage[]>;
   listRookModels(
     sessionId: string,
   ): Promise<{ models: RookModel[]; currentModel: RookModel | null }>;
@@ -353,6 +359,50 @@ export class TauriAppService implements AppService {
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }
+  }
+
+  async listRookSessions(sessionId: string): Promise<RookSessionSummary[]> {
+    const result = await this.rookSessionRequest(sessionId, "session/list");
+    return (result.sessions ?? []) as RookSessionSummary[];
+  }
+
+  async newRookSession(sessionId: string): Promise<string> {
+    const result = await this.rookSessionRequest(sessionId, "session/new");
+    return result.sessionId as string;
+  }
+
+  async loadRookSession(
+    sessionId: string,
+    rookSessionId: string,
+  ): Promise<void> {
+    await this.rookSessionRequest(sessionId, "session/load", {
+      sessionId: rookSessionId,
+    });
+  }
+
+  async getRookSessionHistory(
+    sessionId: string,
+  ): Promise<RookSessionMessage[]> {
+    const result = await this.rookSessionRequest(sessionId, "session/history", {
+      limit: 200,
+    });
+    return (result.messages ?? []) as RookSessionMessage[];
+  }
+
+  private rookSessionRequest(
+    sessionId: string,
+    method: "session/list" | "session/new" | "session/load" | "session/history",
+    params: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    return invoke("rook_provider_request", {
+      request: {
+        schemaVersion: IPC_SCHEMA_VERSION,
+        operationId: crypto.randomUUID(),
+        sessionId,
+        method,
+        params: method === "session/new" ? { mode: "ask" } : params,
+      },
+    });
   }
 
   async promptRookAsk(sessionId: string, text: string): Promise<void> {

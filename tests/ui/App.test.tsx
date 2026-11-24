@@ -166,6 +166,10 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     promptRookAsk: vi.fn(async () => undefined),
     listenRook: vi.fn(async () => () => undefined),
     stopRookAsk: vi.fn(async () => undefined),
+    listRookSessions: vi.fn(async () => []),
+    newRookSession: vi.fn(async () => "new-session"),
+    loadRookSession: vi.fn(async () => undefined),
+    getRookSessionHistory: vi.fn(async () => []),
     cancelRookAsk: vi.fn(async () => undefined),
     respondRookPermission: vi.fn(async () => undefined),
     runCheck: vi.fn(

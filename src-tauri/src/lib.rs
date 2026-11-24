@@ -49,6 +49,7 @@ struct RookProcess {
     next_request: Arc<AtomicU64>,
     pending_auth_logins: HashSet<String>,
     workspace_path: PathBuf,
+    session_storage: bool,
 }
 
 impl Drop for RookProcesses {
@@ -2916,6 +2917,7 @@ struct CancellationRequest {
 async fn start_rook_ask(
     app: tauri::AppHandle,
     processes: tauri::State<'_, RookProcesses>,
+    database: tauri::State<'_, DomainDatabase>,
     request: RookRequest,
 ) -> Result<RookInitResponse, IpcError> {
     if request.schema_version != IPC_SCHEMA_VERSION
@@ -2962,7 +2964,29 @@ async fn start_rook_ask(
     } else {
         None
     };
-    let mut child = spawn_rook(&root, rook_bin.as_deref(), &request.operation_id)?;
+    let app_data_dir = app.path().app_data_dir().map_err(|_| {
+        terminal_error(
+            "rook_session_path_unavailable",
+            "Laplace could not locate local Rook session storage.",
+            &request.operation_id,
+        )
+    })?;
+    let workspace_sessions_dir = app_data_dir
+        .join("rook-sessions")
+        .join(format!("{:x}", Sha256::digest(root.to_string_lossy().as_bytes())));
+    fs::create_dir_all(&workspace_sessions_dir).map_err(|_| {
+        terminal_error(
+            "rook_session_path_unavailable",
+            "Laplace could not prepare local Rook session storage.",
+            &request.operation_id,
+        )
+    })?;
+    let mut child = spawn_rook(
+        &root,
+        &workspace_sessions_dir,
+        rook_bin.as_deref(),
+        &request.operation_id,
+    )?;
     let pending: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<serde_json::Value>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let next_request = Arc::new(AtomicU64::new(10));
@@ -3017,40 +3041,115 @@ async fn start_rook_ask(
             &request.operation_id,
         ));
     }
-    let session_new =
-        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"mode":"ask"}});
-    writeln!(stdin, "{}", session_new).map_err(|_| {
-        terminal_error(
-            "rook_protocol_failed",
-            "The Rook Ask session could not be created.",
-            &request.operation_id,
+    let host_session_storage = result["capabilities"]["hostSessionStorage"] == true;
+    let mut session_summaries = serde_json::json!([]);
+    let (active_session_id, history_messages) = if host_session_storage {
+        let pool = open_domain_database(&app, &database).await?;
+        let prior_session_id: Option<String> = sqlx::query_scalar(
+            "SELECT session_id FROM rook_workspace_sessions WHERE project_id = ?",
         )
-    })?;
-    line.clear();
-    std::io::BufRead::read_line(&mut stdout, &mut line).map_err(|_| {
-        terminal_error(
-            "rook_protocol_failed",
-            "Rook returned no Ask session response.",
+        .bind(root.to_string_lossy().as_ref())
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| {
+            terminal_error(
+                "rook_session_read_failed",
+                "The selected Rook session could not be loaded.",
+                &request.operation_id,
+            )
+        })?;
+        let session_list = rook_rpc(
+            &mut stdin,
+            &mut stdout,
+            2,
+            "session/list",
+            serde_json::json!({}),
             &request.operation_id,
-        )
-    })?;
-    let session_response: serde_json::Value = serde_json::from_str(&line).map_err(|_| {
-        terminal_error(
-            "rook_protocol_invalid",
-            "Rook returned an invalid Ask session response.",
+        )?;
+        let sessions = session_list["sessions"].as_array().ok_or_else(|| {
+            terminal_error(
+                "rook_protocol_invalid",
+                "Rook returned an invalid session list.",
+                &request.operation_id,
+            )
+        })?;
+        let restore = prior_session_id
+            .as_deref()
+            .filter(|saved| sessions.iter().any(|session| session["id"] == *saved));
+        let session_id = if let Some(saved) = restore {
+            let loaded = rook_rpc(
+                &mut stdin,
+                &mut stdout,
+                3,
+                "session/load",
+                serde_json::json!({"sessionId": saved}),
+                &request.operation_id,
+            )?;
+            if loaded["mode"] != "ask" || loaded["sessionId"] != saved {
+                let _ = child.kill();
+                return Err(terminal_error(
+                    "rook_session_failed",
+                    "Rook could not reopen the selected Ask session.",
+                    &request.operation_id,
+                ));
+            }
+            saved.to_owned()
+        } else {
+            let created = rook_rpc(
+                &mut stdin,
+                &mut stdout,
+                3,
+                "session/new",
+                serde_json::json!({"mode":"ask"}),
+                &request.operation_id,
+            )?;
+            created["sessionId"].as_str().ok_or_else(|| {
+                terminal_error(
+                    "rook_session_failed",
+                    "Rook did not create an Ask session.",
+                    &request.operation_id,
+                )
+            })?.to_owned()
+        };
+        let session_list = rook_rpc(
+            &mut stdin,
+            &mut stdout,
+            4,
+            "session/list",
+            serde_json::json!({}),
             &request.operation_id,
-        )
-    })?;
-    if session_response["result"]["mode"] != "ask" {
-        let _ = child.kill();
-        return Err(terminal_error(
-            "rook_session_failed",
-            "Rook did not create an Ask session.",
+        )?;
+        session_summaries = session_list["sessions"].clone();
+        let history = rook_rpc(
+            &mut stdin,
+            &mut stdout,
+            5,
+            "session/history",
+            serde_json::json!({"limit":200}),
             &request.operation_id,
-        ));
-    }
+        )?;
+        save_rook_workspace_session(&pool, &root, &session_id, &request.operation_id).await?;
+        (session_id, history["messages"].clone())
+    } else {
+        let created = rook_rpc(
+            &mut stdin,
+            &mut stdout,
+            2,
+            "session/new",
+            serde_json::json!({"mode":"ask"}),
+            &request.operation_id,
+        )?;
+        let id = created["sessionId"].as_str().ok_or_else(|| {
+            terminal_error(
+                "rook_session_failed",
+                "Rook did not create an Ask session.",
+                &request.operation_id,
+            )
+        })?.to_owned();
+        (id, serde_json::json!([]))
+    };
     let app_events = app.clone();
-    let session_id = request.session_id.clone();
+    let process_id = request.session_id.clone();
     let pending_events = Arc::clone(&pending);
     std::thread::spawn(move || {
         let mut line = String::new();
@@ -3081,7 +3180,7 @@ async fn start_rook_ask(
                                     });
                                     let _ = app_events.emit(
                                         "rook-event",
-                                        serde_json::json!({"sessionId":session_id,"message":settled}),
+                                        serde_json::json!({"sessionId":process_id,"message":settled}),
                                     );
                                 }
                             }
@@ -3097,14 +3196,14 @@ async fn start_rook_ask(
                 {
                     let _ = app_events.emit(
                         "rook-event",
-                        serde_json::json!({"sessionId":session_id,"message":value}),
+                        serde_json::json!({"sessionId":process_id,"message":value}),
                     );
                     line.clear();
                     continue;
                 }
                 let _ = app_events.emit(
                     "rook-event",
-                    serde_json::json!({"sessionId":session_id,"message":value}),
+                    serde_json::json!({"sessionId":process_id,"message":value}),
                 );
             }
             line.clear();
@@ -3112,6 +3211,10 @@ async fn start_rook_ask(
     });
     let response = RookInitResponse {
         session_id: request.session_id.clone(),
+        active_session_id: active_session_id.clone(),
+        sessions: session_summaries,
+        messages: history_messages,
+        host_session_storage,
         workspace_id: result["workspaceId"]
             .as_str()
             .unwrap_or_default()
@@ -3146,6 +3249,7 @@ async fn start_rook_ask(
                 next_request,
                 pending_auth_logins: HashSet::new(),
                 workspace_path: root.clone(),
+                session_storage: host_session_storage,
             })),
         );
     Ok(response)
@@ -3153,6 +3257,7 @@ async fn start_rook_ask(
 
 fn spawn_rook(
     root: &Path,
+    session_dir: &Path,
     rook_bin: Option<&str>,
     operation_id: &str,
 ) -> Result<std::process::Child, IpcError> {
@@ -3168,6 +3273,7 @@ fn spawn_rook(
     command
         .args(["--stdio", "--cwd"])
         .arg(root)
+        .env("LAPLACE_ROOK_SESSION_DIR", session_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -3176,6 +3282,75 @@ fn spawn_rook(
             terminal_error(
                 "rook_unavailable",
                 "Install Rook or set LAPLACE_ROOK_BIN to its executable path.",
+                operation_id,
+            )
+        })
+}
+
+fn rook_rpc(
+    stdin: &mut std::process::ChildStdin,
+    stdout: &mut std::io::BufReader<std::process::ChildStdout>,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+    operation_id: &str,
+) -> Result<serde_json::Value, IpcError> {
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+    )
+    .map_err(|_| {
+        terminal_error(
+            "rook_protocol_failed",
+            "The Rook session request could not be sent.",
+            operation_id,
+        )
+    })?;
+    let mut line = String::new();
+    std::io::BufRead::read_line(stdout, &mut line).map_err(|_| {
+        terminal_error(
+            "rook_protocol_failed",
+            "Rook returned no session response.",
+            operation_id,
+        )
+    })?;
+    let response: serde_json::Value = serde_json::from_str(&line).map_err(|_| {
+        terminal_error(
+            "rook_protocol_invalid",
+            "Rook returned an invalid session response.",
+            operation_id,
+        )
+    })?;
+    if !response["error"].is_null() || response["id"] != id {
+        return Err(terminal_error(
+            "rook_session_failed",
+            response["error"]["message"]
+                .as_str()
+                .unwrap_or("Rook rejected the session request."),
+            operation_id,
+        ));
+    }
+    Ok(response["result"].clone())
+}
+
+async fn save_rook_workspace_session(
+    pool: &SqlitePool,
+    root: &Path,
+    session_id: &str,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    sqlx::query("INSERT INTO rook_workspace_sessions (project_id, session_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at")
+        .bind(root.to_string_lossy().as_ref())
+        .bind(session_id)
+        .bind(now_ms() as i64)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|_| {
+            terminal_error(
+                "rook_session_write_failed",
+                "The selected Rook session could not be saved.",
                 operation_id,
             )
         })
@@ -3392,7 +3567,9 @@ async fn respond_rook_permission(
 
 #[tauri::command]
 async fn rook_provider_request(
+    app: tauri::AppHandle,
     processes: tauri::State<'_, RookProcesses>,
+    database: tauri::State<'_, DomainDatabase>,
     request: RookProviderRequest,
 ) -> Result<serde_json::Value, IpcError> {
     if request.schema_version != IPC_SCHEMA_VERSION
@@ -3407,6 +3584,10 @@ async fn rook_provider_request(
                 | "model/list"
                 | "model/select"
                 | "session/prompt"
+                | "session/list"
+                | "session/new"
+                | "session/load"
+                | "session/history"
         )
     {
         return Err(terminal_error(
@@ -3468,17 +3649,16 @@ async fn rook_provider_request(
             )
         })?)
     };
-    let workspace_path = process
-        .lock()
-        .map_err(|_| {
+    let (workspace_path, session_storage) = {
+        let process = process.lock().map_err(|_| {
             terminal_error(
                 "rook_busy",
                 "This Rook session is temporarily unavailable.",
                 &request.operation_id,
             )
-        })?
-        .workspace_path
-        .clone();
+        })?;
+        (process.workspace_path.clone(), process.session_storage)
+    };
     validate_workspace_provider_config(&workspace_path)?;
     let login_id = request.params["loginId"].as_str().map(str::to_owned);
     let (id, receiver) = {
@@ -3583,10 +3763,18 @@ async fn rook_provider_request(
             &request.operation_id,
         ));
     }
-    Ok(response
+    let result = response
         .get("result")
         .cloned()
-        .unwrap_or(serde_json::Value::Null))
+        .unwrap_or(serde_json::Value::Null);
+    if session_storage && matches!(request.method.as_str(), "session/new" | "session/load") {
+        if let Some(active) = result["sessionId"].as_str() {
+            let pool = open_domain_database(&app, &database).await?;
+            save_rook_workspace_session(&pool, &workspace_path, active, &request.operation_id)
+                .await?;
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -3706,6 +3894,10 @@ struct RookRequest {
 #[serde(rename_all = "camelCase")]
 struct RookInitResponse {
     session_id: String,
+    active_session_id: String,
+    sessions: serde_json::Value,
+    messages: serde_json::Value,
+    host_session_storage: bool,
     workspace_id: String,
     rook_version: String,
     capabilities: serde_json::Value,
@@ -4984,6 +5176,7 @@ mod rook_start_tests {
     fn missing_rook_executable_returns_actionable_error() {
         let error = spawn_rook(
             Path::new("/tmp"),
+            Path::new("/tmp/laplace-test-rook-sessions"),
             Some("/laplace-test/missing-rook"),
             "rook-test-op",
         )

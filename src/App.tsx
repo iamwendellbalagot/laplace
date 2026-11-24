@@ -13,6 +13,7 @@ import type {
   AppEvent,
   RookModel,
   RookProvider,
+  RookSessionSummary,
   RookAuthEvent,
   RookAuthPrompt,
   ProjectEntry,
@@ -59,6 +60,41 @@ function updateRookAssistant(
   const next = [...messages];
   next[index] = update(next[index]);
   return next;
+}
+
+function rookSessionTitle(session: RookSessionSummary) {
+  return (session.name || session.firstMessage || "Untitled Ask").trim();
+}
+
+function groupRookSessions(sessions: RookSessionSummary[], query: string) {
+  const now = new Date();
+  const todayStart = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).getTime();
+  const yesterdayStart = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - 1,
+  ).getTime();
+  const needle = query.trim().toLowerCase();
+  const groups = [
+    { label: "Today", items: [] as RookSessionSummary[] },
+    { label: "Yesterday", items: [] as RookSessionSummary[] },
+    { label: "Older", items: [] as RookSessionSummary[] },
+  ];
+  for (const session of [...sessions].sort((left, right) =>
+    right.modified.localeCompare(left.modified),
+  )) {
+    if (needle && !rookSessionTitle(session).toLowerCase().includes(needle))
+      continue;
+    const time = new Date(session.modified).getTime();
+    groups[time >= todayStart ? 0 : time >= yesterdayStart ? 1 : 2].items.push(
+      session,
+    );
+  }
+  return groups.filter((group) => group.items.length);
 }
 
 const CodeEditor = lazy(() =>
@@ -118,6 +154,9 @@ export function App({ service, browserPreview = false }: AppProps) {
   const rookProjectId = useRef<string | undefined>(undefined);
   const [rookMessages, setRookMessages] = useState<RookChatMessage[]>([]);
   const [rookRunId, setRookRunId] = useState<string>();
+  const [rookSessionStorage, setRookSessionStorage] = useState(false);
+  const [rookSessions, setRookSessions] = useState<RookSessionSummary[]>([]);
+  const [rookActiveSessionId, setRookActiveSessionId] = useState<string>();
   const [rookDraft, setRookDraft] = useState("");
   const rookDraftByProject = useRef<Record<string, string>>({});
   const rookAttemptedProjectId = useRef<string | undefined>(undefined);
@@ -274,6 +313,9 @@ export function App({ service, browserPreview = false }: AppProps) {
         setRookProviderControlsAvailable(false);
         setRookMessages([]);
         setRookRunId(undefined);
+        setRookSessions([]);
+        setRookActiveSessionId(undefined);
+        setRookSessionStorage(false);
         setRookDraft(rookDraftByProject.current[project.id] ?? "");
         setRookError(undefined);
         rookAttemptedProjectId.current = undefined;
@@ -338,9 +380,12 @@ export function App({ service, browserPreview = false }: AppProps) {
       );
       setRookModels(models);
       setRookCurrentModel(currentModel);
-      setRookMessages([]);
+      setRookMessages(result.messages ?? []);
       setRookRunId(undefined);
       setRookError(undefined);
+      setRookSessionStorage(result.hostSessionStorage === true);
+      setRookSessions(result.sessions ?? []);
+      setRookActiveSessionId(result.activeSessionId);
       setRookSession(id);
     } catch (failure) {
       if (sessionId) void service.stopRookAsk(sessionId).catch(() => undefined);
@@ -352,6 +397,33 @@ export function App({ service, browserPreview = false }: AppProps) {
     } finally {
       rookStarting.current = false;
       setRookStartupPending(false);
+    }
+  }
+
+  async function startNewRookChat() {
+    if (!rookSession) return;
+    try {
+      const id = await service.newRookSession(rookSession);
+      setRookActiveSessionId(id);
+      setRookMessages([]);
+      setRookRunId(undefined);
+      setRookError(undefined);
+      setRookSessions(await service.listRookSessions(rookSession));
+    } catch (failure) {
+      setRookError(errorMessage(failure, "The new Ask could not be started."));
+    }
+  }
+
+  async function openRookChat(id: string) {
+    if (!rookSession || id === rookActiveSessionId) return;
+    try {
+      await service.loadRookSession(rookSession, id);
+      setRookActiveSessionId(id);
+      setRookMessages(await service.getRookSessionHistory(rookSession));
+      setRookRunId(undefined);
+      setRookError(undefined);
+    } catch (failure) {
+      setRookError(errorMessage(failure, "That Ask could not be opened."));
     }
   }
 
@@ -483,6 +555,11 @@ export function App({ service, browserPreview = false }: AppProps) {
             );
           }
           setRookRunId(undefined);
+          if (rookSessionStorage)
+            void service
+              .listRookSessions(rookSession)
+              .then(setRookSessions)
+              .catch(() => undefined);
         }
       })
       .then((stop) => {
@@ -493,7 +570,7 @@ export function App({ service, browserPreview = false }: AppProps) {
       disposed = true;
       unlisten?.();
     };
-  }, [browserPreview, rookSession, service]);
+  }, [browserPreview, rookSession, rookSessionStorage, service]);
 
   async function openProjectDirectory(relativePath: string) {
     if (browserPreview) return;
@@ -972,6 +1049,11 @@ export function App({ service, browserPreview = false }: AppProps) {
             rookError={rookStartupError}
             conversationError={rookError}
             rookMessages={rookMessages}
+            rookSessions={rookSessions}
+            rookActiveSessionId={rookActiveSessionId}
+            rookSessionStorage={rookSessionStorage}
+            onRookNewSession={() => void startNewRookChat()}
+            onRookOpenSession={(id) => void openRookChat(id)}
             rookRunId={rookRunId}
             rookDraft={rookDraft}
             onRookDraftChange={setRookDraft}
@@ -1281,6 +1363,11 @@ interface ScreenContentProps {
   rookError?: string;
   conversationError?: string;
   rookMessages: RookChatMessage[];
+  rookSessions: RookSessionSummary[];
+  rookActiveSessionId?: string;
+  rookSessionStorage: boolean;
+  onRookNewSession: () => void;
+  onRookOpenSession: (id: string) => void;
   rookRunId?: string;
   rookDraft: string;
   onRookDraftChange: Dispatch<SetStateAction<string>>;
@@ -1697,6 +1784,11 @@ function RookScreen({
   rookError,
   conversationError,
   rookMessages: messages,
+  rookSessions: sessions,
+  rookActiveSessionId: activeSessionId,
+  rookSessionStorage: sessionStorage,
+  onRookNewSession,
+  onRookOpenSession,
   rookRunId: runId,
   rookDraft: prompt,
   onRookDraftChange: setPrompt,
@@ -1709,6 +1801,7 @@ function RookScreen({
   browserPreview,
 }: ScreenContentProps) {
   const [search, setSearch] = useState("");
+  const [sessionSearch, setSessionSearch] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [setupModel, setSetupModel] = useState<RookModel>();
@@ -1876,11 +1969,73 @@ function RookScreen({
 
   return (
     <section className="content-page rook-page" aria-label="Rook Ask">
+      {sessionStorage && (
+        <aside className="rook-sessions" aria-label="Sessions">
+          <header className="rook-sessions-heading">
+            <h2>Sessions</h2>
+            <button
+              className="rook-new-session"
+              type="button"
+              aria-label="New Ask"
+              title="New Ask"
+              disabled={!session || pending || Boolean(runId)}
+              onClick={onRookNewSession}
+            >
+              +
+            </button>
+          </header>
+          <label className="rook-session-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              aria-label="Search sessions"
+              placeholder="Search sessions…"
+              value={sessionSearch}
+              onChange={(event) => setSessionSearch(event.currentTarget.value)}
+            />
+          </label>
+          {groupRookSessions(sessions, sessionSearch).map((group) => (
+            <div className="rook-session-group" key={group.label}>
+              <h3>{group.label}</h3>
+              {group.items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={item.id === activeSessionId ? "is-active" : ""}
+                  aria-current={
+                    item.id === activeSessionId ? "true" : undefined
+                  }
+                  disabled={!session || Boolean(runId)}
+                  onClick={() => onRookOpenSession(item.id)}
+                >
+                  <span className="rook-session-title">
+                    {rookSessionTitle(item)}
+                  </span>
+                  <time dateTime={item.modified}>
+                    {group.label === "Older"
+                      ? new Date(item.modified).toLocaleDateString([], {
+                          month: "short",
+                          day: "numeric",
+                        })
+                      : new Date(item.modified).toLocaleTimeString([], {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                  </time>
+                </button>
+              ))}
+            </div>
+          ))}
+        </aside>
+      )}
       <div className="rook-chat">
         <header className="rook-chat-topbar">
           <div>
-            <h2>Ask about {activeProject.name}</h2>
-            <p>Reads your project · won’t edit files</p>
+            <h2>
+              {messages
+                .find((message) => message.role === "user")
+                ?.text.slice(0, 80) ?? "New Ask"}
+            </h2>
+            <p>{activeProject.name} · Reads your project · won’t edit files</p>
           </div>
           <div className="rook-chat-actions">
             {providerControlsAvailable && (
