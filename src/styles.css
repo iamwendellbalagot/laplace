@@ -967,7 +967,7 @@ kbd,
 }
 .rook-model-dialog h2 {
   margin: 0 0 5px;
-  font: 400 22px var(--serif);
+  font: 500 20px var(--sans);
 }
 .rook-model-dialog > p {
   margin: 0 0 16px;
@@ -993,7 +993,7 @@ kbd,
 }
 .rook-model-list button {
   display: flex;
-  min-height: 54px;
+  min-height: 48px;
   align-items: center;
   justify-content: space-between;
   padding: 8px 11px;
@@ -1008,6 +1008,37 @@ kbd,
 .rook-model-list button.is-selected {
   border-color: var(--border);
   background: var(--surface-hover);
+}
+.rook-model-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 9px 5px 3px;
+  color: var(--muted);
+  font: 11px var(--sans);
+}
+.rook-model-group h3::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+  content: "";
+}
+.rook-model-setup {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 14px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.rook-model-setup h3,
+.rook-model-setup p {
+  margin: 0;
+}
+.rook-model-setup p {
+  color: var(--muted);
+  font-size: 11px;
 }
 .rook-model-list small,
 .rook-provider-row small {

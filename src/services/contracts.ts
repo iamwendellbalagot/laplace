@@ -250,6 +250,8 @@ export interface RookModel {
   name: string;
   source?: "provider" | "workspace";
   endpoint?: string | null;
+  configured?: boolean;
+  missingEnvironmentVariables?: string[];
 }
 
 export interface RookAuthPrompt {

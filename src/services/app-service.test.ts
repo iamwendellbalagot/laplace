@@ -72,8 +72,7 @@ describe("TauriAppService", () => {
       .mockResolvedValueOnce({ models: [], currentModel: null })
       .mockResolvedValueOnce({
         currentModel: { provider: "p", id: "m", name: "M" },
-      })
-      .mockResolvedValueOnce(undefined);
+      });
     const service = new TauriAppService();
     await service.listRookModels("session1");
     await service.selectRookModel("session1", {
@@ -81,11 +80,6 @@ describe("TauriAppService", () => {
       id: "m",
       name: "M",
     });
-    await service.allowRookWorkspaceProvider(
-      "session1",
-      "workspace-provider",
-      "fingerprint",
-    );
     expect(mocks.invoke).toHaveBeenNthCalledWith(1, "rook_provider_request", {
       request: {
         schemaVersion: 1,
@@ -102,18 +96,6 @@ describe("TauriAppService", () => {
         sessionId: "session1",
         method: "model/select",
         params: { provider: "p", id: "m" },
-      },
-    });
-    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "rook_provider_request", {
-      request: {
-        schemaVersion: 1,
-        operationId: expect.any(String),
-        sessionId: "session1",
-        method: "workspace/allow_provider",
-        params: {
-          providerId: "workspace-provider",
-          endpointFingerprint: "fingerprint",
-        },
       },
     });
   });

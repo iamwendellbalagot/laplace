@@ -126,15 +126,6 @@ export interface AppService {
     value: string,
   ): Promise<void>;
   cancelRookLogin(sessionId: string, loginId: string): Promise<void>;
-  allowRookWorkspaceProvider(
-    sessionId: string,
-    providerId: string,
-    endpointFingerprint: string,
-  ): Promise<void>;
-  logoutRookProvider(
-    sessionId: string,
-    providerId: string,
-  ): Promise<RookProvider[]>;
   openRookAuthUrl(url: string): Promise<void>;
   promptRookAsk(sessionId: string, text: string): Promise<void>;
   listenRook(listener: (event: RookEvent) => void): Promise<UnlistenFn>;
@@ -463,41 +454,6 @@ export class TauriAppService implements AppService {
         params: { loginId },
       },
     });
-  }
-
-  async allowRookWorkspaceProvider(
-    sessionId: string,
-    providerId: string,
-    endpointFingerprint: string,
-  ): Promise<void> {
-    await invoke("rook_provider_request", {
-      request: {
-        schemaVersion: IPC_SCHEMA_VERSION,
-        operationId: crypto.randomUUID(),
-        sessionId,
-        method: "workspace/allow_provider",
-        params: { providerId, endpointFingerprint },
-      },
-    });
-  }
-
-  async logoutRookProvider(
-    sessionId: string,
-    providerId: string,
-  ): Promise<RookProvider[]> {
-    const response = await invoke<{ providers: RookProvider[] }>(
-      "rook_provider_request",
-      {
-        request: {
-          schemaVersion: IPC_SCHEMA_VERSION,
-          operationId: crypto.randomUUID(),
-          sessionId,
-          method: "provider/logout",
-          params: { providerId },
-        },
-      },
-    );
-    return response.providers;
   }
 
   async openRookAuthUrl(url: string): Promise<void> {

@@ -162,11 +162,6 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
     })),
     respondRookAuthPrompt: vi.fn(async () => undefined),
     cancelRookLogin: vi.fn(async () => undefined),
-    allowRookWorkspaceProvider: vi.fn(
-      async (_sessionId: string, _providerId: string, _fingerprint: string) =>
-        undefined,
-    ),
-    logoutRookProvider: vi.fn(async () => []),
     openRookAuthUrl: vi.fn(async () => undefined),
     promptRookAsk: vi.fn(async () => undefined),
     listenRook: vi.fn(async () => () => undefined),
@@ -496,7 +491,7 @@ describe("reference application shell", () => {
     const provider = {
       id: "openai",
       name: "OpenAI",
-      configured: true,
+      configured: false,
       source: "provider" as const,
       authMethods: [
         { type: "api_key" as const, name: "API key", loginLabel: "API key" },
@@ -544,8 +539,9 @@ describe("reference application shell", () => {
       await screen.findByRole("heading", { name: "Ask about laplace fixture" }),
     ).toBeInTheDocument();
     fireEvent.click(
-      await screen.findByRole("button", { name: "Manage providers" }),
+      await screen.findByRole("button", { name: "Choose a model" }),
     );
+    fireEvent.click(await screen.findByRole("button", { name: /Test model/ }));
     fireEvent.click(screen.getByRole("button", { name: "API key" }));
     await waitFor(() =>
       expect(service.loginRookProvider).toHaveBeenCalledWith(
@@ -556,16 +552,15 @@ describe("reference application shell", () => {
       ),
     );
     expect(await screen.findByText("Test model")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Choose a model" }));
     expect(
-      await screen.findByRole("dialog", { name: "Choose a model" }),
+      await screen.findByRole("dialog", { name: "Select Model" }),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("button", { name: /Test model/ }),
     ).toBeInTheDocument();
   });
 
-  it("shows workspace providers without auth methods and offers trust and endpoint approval", async () => {
+  it("shows provider setup inside the model picker without project trust", async () => {
     const provider = {
       id: "RONE_Models",
       name: "RONE Models",
@@ -594,24 +589,15 @@ describe("reference application shell", () => {
     await waitFor(() => expect(service.openProject).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "Rook" }));
     await waitFor(() => expect(service.startRookAsk).toHaveBeenCalled());
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Manage providers" }),
-    );
     expect(
-      await screen.findByText(/RDSEC_API_KEY/, { selector: "small" }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Trust project" }));
-    await waitFor(() => expect(service.trustWorkspace).toHaveBeenCalled());
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Review & allow" }),
-    );
-    await waitFor(() =>
-      expect(service.allowRookWorkspaceProvider).toHaveBeenCalledWith(
-        expect.any(String),
-        "RONE_Models",
-        "endpoint-fingerprint",
-      ),
-    );
+      screen.queryByRole("button", { name: /Manage providers/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Trust project/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Review & allow/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("explains provider/model controls are unavailable with an older Rook handshake", async () => {
