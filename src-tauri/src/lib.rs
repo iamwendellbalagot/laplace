@@ -3686,7 +3686,7 @@ async fn rook_provider_request(
             )
         })?)
     };
-    let (workspace_path, workspace_provider, provider_id) = {
+    let (workspace_path, workspace_provider, provider_id, needs_project_trust, provider_fingerprint) = {
         let process = process.lock().map_err(|_| {
             terminal_error(
                 "rook_busy",
@@ -3704,41 +3704,41 @@ async fn rook_provider_request(
         let is_workspace_provider = provider_id
             .map(str::to_owned)
             .is_some_and(|id| process.workspace_providers.contains(&id));
+        let needs_project_trust = is_workspace_provider
+            && (request.method == "session/prompt"
+                || request.method == "provider/login"
+                || request.method == "model/select"
+                || request.method == "workspace/allow_provider");
+        let provider_fingerprint = if is_workspace_provider
+            && matches!(request.method.as_str(), "provider/login" | "model/select")
+        {
+            let selected_provider = provider_id.unwrap_or_default();
+            Some(workspace_provider_endpoint_fingerprint(
+                &process.workspace_path,
+                selected_provider,
+            )?)
+        } else {
+            None
+        };
         (
             process.workspace_path.clone(),
             is_workspace_provider,
             provider_id.map(str::to_owned),
+            needs_project_trust,
+            provider_fingerprint,
         )
     };
     if workspace_provider {
         validate_workspace_provider_config(&workspace_path)?;
-        if request.method == "model/select" {
-            if let Some(provider_id) = provider_id.as_deref() {
-                let current = process
-                    .lock()
-                    .map_err(|_| {
-                        terminal_error(
-                            "rook_busy",
-                            "This Rook session is temporarily unavailable.",
-                            &request.operation_id,
-                        )
-                    })?
-                    .active_model_provider
-                    .clone();
-                if current.as_deref() != Some(provider_id) {
-                    validate_workspace_provider_config(&workspace_path)?;
-                    if !workspace_provider_ids(&workspace_path)?.contains(provider_id) {
-                        return Err(terminal_error("workspace_provider_changed", "Workspace provider configuration changed or was removed. Reconnect and review it before use.", &request.operation_id));
-                    }
-                    ensure_workspace_trusted(
-                        &app,
-                        &db,
-                        &trusted,
-                        &workspace_path,
-                        &request.operation_id,
-                    )
-                    .await?;
-                }
+        if matches!(request.method.as_str(), "provider/login" | "model/select") {
+            let selected_provider = provider_id.as_deref().unwrap_or_default();
+            if !workspace_provider_ids(&workspace_path)?.contains(selected_provider) {
+                return Err(terminal_error("workspace_provider_changed", "Workspace provider configuration changed or was removed. Reconnect and review it before use.", &request.operation_id));
+            }
+            let fingerprint = provider_fingerprint.as_deref().unwrap_or_default();
+            let approved = process.lock().map_err(|_| terminal_error("rook_busy", "This Rook session is temporarily unavailable.", &request.operation_id))?.allowed_workspace_providers.get(selected_provider).is_some_and(|current| current == &fingerprint);
+            if !approved {
+                return Err(terminal_error("workspace_provider_consent_required", "Review and allow the current workspace provider endpoint before use.", &request.operation_id));
             }
         }
         if request.method == "session/prompt" {
@@ -3777,31 +3777,9 @@ async fn rook_provider_request(
                 return Err(terminal_error("workspace_provider_consent_required", "This provider endpoint is not approved or changed; review it before sending a prompt.", &request.operation_id));
             }
         }
-        if request.method == "provider/login" {
-            if let Some(provider_id) = provider_id.as_deref() {
-                if workspace_provider_ids(&workspace_path)?.contains(provider_id) {
-                    let fingerprint =
-                        workspace_provider_endpoint_fingerprint(&workspace_path, provider_id)?;
-                    let approved = process
-                        .lock()
-                        .map_err(|_| {
-                            terminal_error(
-                                "rook_busy",
-                                "This Rook session is temporarily unavailable.",
-                                &request.operation_id,
-                            )
-                        })?
-                        .allowed_workspace_providers
-                        .get(provider_id)
-                        .is_some_and(|current| current == &fingerprint);
-                    if !approved {
-                        return Err(terminal_error("workspace_provider_consent_required", "Explicitly allow the current workspace provider endpoint before signing in.", &request.operation_id));
-                    }
-                }
-            }
-        }
-        ensure_workspace_trusted(&app, &db, &trusted, &workspace_path, &request.operation_id)
-            .await?;
+    }
+    if needs_project_trust {
+        ensure_workspace_trusted(&app, &db, &trusted, &workspace_path, &request.operation_id).await?;
     }
     let login_id = request.params["loginId"].as_str().map(str::to_owned);
     if request.method == "workspace/allow_provider" {

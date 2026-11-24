@@ -235,6 +235,7 @@ export interface RookProvider {
   source: "provider" | "workspace";
   endpoint?: string;
   endpointFingerprint?: string;
+  missingEnvironmentVariables?: string[];
   authMethods: {
     type: "api_key" | "oauth";
     name: string;

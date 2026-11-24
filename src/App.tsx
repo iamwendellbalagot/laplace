@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
+  Dispatch,
   KeyboardEvent as ReactKeyboardEvent,
   ReactNode,
+  SetStateAction,
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { navigationItems, screenTitles } from "./app/navigation";
@@ -67,6 +69,31 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [nativePending, setNativePending] = useState(false);
   const [activeProject, setActiveProject] = useState<ProjectSummary>();
   const [trustedProjectIds, setTrustedProjectIds] = useState<string[]>([]);
+  const [rookSession, setRookSession] = useState<string>();
+  const [rookProviders, setRookProviders] = useState<RookProvider[]>([]);
+  const [rookProviderControlsAvailable, setRookProviderControlsAvailable] =
+    useState(false);
+  const [rookModels, setRookModels] = useState<RookModel[]>([]);
+  const [rookCurrentModel, setRookCurrentModel] = useState<RookModel | null>(
+    null,
+  );
+  const [rookStartupPending, setRookStartupPending] = useState(false);
+  const [rookStartupError, setRookStartupError] = useState<string>();
+  const [rookError, setRookError] = useState<string>();
+  const rookStarting = useRef(false);
+  const rookProjectId = useRef<string>();
+  const [rookMessages, setRookMessages] = useState<
+    { role: "user" | "assistant"; text: string }[]
+  >([]);
+  const [rookRunId, setRookRunId] = useState<string>();
+  const [rookDraft, setRookDraft] = useState("");
+  const [rookProviderEndpointApprovals, setRookProviderEndpointApprovals] =
+    useState<Record<string, string>>({});
+  const rookEndpointApprovalByProject = useRef<
+    Record<string, Record<string, string>>
+  >({});
+  const rookDraftByProject = useRef<Record<string, string>>({});
+  const rookAttemptedProjectId = useRef<string>();
   const [projectEntries, setProjectEntries] = useState<ProjectEntry[]>([]);
   const [projectEntriesTruncated, setProjectEntriesTruncated] = useState(false);
   const [recentProjects, setRecentProjects] = useState<ProjectSummary[]>([]);
@@ -199,6 +226,12 @@ export function App({ service, browserPreview = false }: AppProps) {
       const project = await service.openProject(selectedPath);
       const listing = await service.listProjectEntries(project.id);
       if (activeProject?.id !== project.id) {
+        if (activeProject)
+          rookDraftByProject.current[activeProject.id] = rookDraft;
+        if (activeProject) {
+          rookEndpointApprovalByProject.current[activeProject.id] =
+            rookProviderEndpointApprovals;
+        }
         setDocuments((opened) =>
           opened.filter(
             (document) => document.content !== document.savedContent,
@@ -206,6 +239,26 @@ export function App({ service, browserPreview = false }: AppProps) {
         );
         setActiveDocumentKey(undefined);
       }
+      if (activeProject?.id !== project.id) {
+        rookProjectId.current = project.id;
+        rookStarting.current = false;
+        if (rookSession)
+          void service.stopRookAsk(rookSession).catch(() => undefined);
+        setRookSession(undefined);
+        setRookProviders([]);
+        setRookModels([]);
+        setRookCurrentModel(null);
+        setRookProviderControlsAvailable(false);
+        setRookProviderEndpointApprovals(
+          rookEndpointApprovalByProject.current[project.id] ?? {},
+        );
+        setRookMessages([]);
+        setRookRunId(undefined);
+        setRookDraft(rookDraftByProject.current[project.id] ?? "");
+        setRookError(undefined);
+        rookAttemptedProjectId.current = undefined;
+      }
+      rookProjectId.current = project.id;
       setActiveProject(project);
       setChanges(await service.listChanges(project.id).catch(() => []));
       setExecutions(await service.listExecutions(project.id).catch(() => []));
@@ -232,6 +285,146 @@ export function App({ service, browserPreview = false }: AppProps) {
       setProjectPending(false);
     }
   }
+
+  async function ensureRookSession(project: ProjectSummary) {
+    if (rookStarting.current || rookSession) return;
+    rookProjectId.current = project.id;
+    rookAttemptedProjectId.current = project.id;
+    rookStarting.current = true;
+    setRookStartupPending(true);
+    setRookStartupError(undefined);
+    let sessionId: string | undefined;
+    try {
+      const id = (sessionId = crypto.randomUUID().replaceAll("-", ""));
+      const result = await service.startRookAsk(id, project.path);
+      if (rookProjectId.current !== project.id) {
+        await service.stopRookAsk(id).catch(() => undefined);
+        return;
+      }
+      let models: RookModel[] = [];
+      let currentModel = result.currentModel;
+      if (result.capabilities.modelCatalog === true) {
+        const catalog = await service.listRookModels(id);
+        models = catalog.models;
+        currentModel = catalog.currentModel;
+      }
+      if (rookProjectId.current !== project.id) {
+        await service.stopRookAsk(id).catch(() => undefined);
+        return;
+      }
+      setRookProviders(result.providers);
+      setRookProviderControlsAvailable(
+        result.capabilities.providerControls !== undefined,
+      );
+      setRookModels(models);
+      setRookCurrentModel(
+        !result.capabilities.modelCatalog ||
+          (currentModel &&
+            models.some(
+              (model) =>
+                model.provider === currentModel.provider &&
+                model.id === currentModel.id,
+            ))
+          ? currentModel
+          : null,
+      );
+      setRookMessages([]);
+      setRookRunId(undefined);
+      setRookError(undefined);
+      setRookSession(id);
+    } catch (failure) {
+      if (sessionId) void service.stopRookAsk(sessionId).catch(() => undefined);
+      if (rookProjectId.current === project.id) {
+        setRookStartupError(
+          errorMessage(failure, "Rook could not be started."),
+        );
+      }
+    } finally {
+      rookStarting.current = false;
+      setRookStartupPending(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!activeProject || browserPreview) return;
+    if (
+      rookSession ||
+      rookStarting.current ||
+      rookAttemptedProjectId.current === activeProject.id
+    )
+      return;
+    void ensureRookSession(activeProject);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id, browserPreview, rookSession, rookStartupPending]);
+
+  useEffect(() => {
+    if (!rookSession || browserPreview) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void service
+      .listenRook((event) => {
+        if (event.sessionId !== rookSession) return;
+        const params = event.message.params as
+          | Record<string, unknown>
+          | undefined;
+        const agentEvent = params?.event as Record<string, unknown> | undefined;
+        if (typeof params?.runId === "string") setRookRunId(params.runId);
+        if (agentEvent?.type === "model_request_started") {
+          setRookError(undefined);
+          setRookMessages((items) => [
+            ...items,
+            { role: "assistant", text: "" },
+          ]);
+        } else if (
+          agentEvent?.type === "text_delta" &&
+          typeof agentEvent.text === "string"
+        ) {
+          setRookMessages((items) => {
+            const last = items.at(-1);
+            return last?.role === "assistant"
+              ? [
+                  ...items.slice(0, -1),
+                  { ...last, text: last.text + agentEvent.text },
+                ]
+              : [
+                  ...items,
+                  { role: "assistant", text: agentEvent.text as string },
+                ];
+          });
+        } else if (
+          agentEvent?.type === "message_complete" &&
+          typeof agentEvent.text === "string"
+        ) {
+          setRookMessages((items) => {
+            const last = items.at(-1);
+            return last?.role === "assistant"
+              ? [
+                  ...items.slice(0, -1),
+                  { ...last, text: agentEvent.text as string },
+                ]
+              : [
+                  ...items,
+                  { role: "assistant", text: agentEvent.text as string },
+                ];
+          });
+        } else if (
+          agentEvent?.type === "error" &&
+          typeof agentEvent.message === "string"
+        ) {
+          setRookError(agentEvent.message);
+        } else if (agentEvent?.type === "run_settled") {
+          setRookRunId(undefined);
+        }
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [browserPreview, rookSession, service]);
 
   async function openProjectDirectory(relativePath: string) {
     if (browserPreview) return;
@@ -572,7 +765,14 @@ export function App({ service, browserPreview = false }: AppProps) {
             </span>
           )}
           <span className="connection-state">
-            <span className="status-dot status-dot-muted" /> Rook not connected
+            <span
+              className={`status-dot${rookSession ? "" : " status-dot-muted"}`}
+            />
+            {rookStartupPending
+              ? "Connecting to Rook"
+              : rookSession
+                ? "Rook connected"
+                : "Rook not connected"}
           </span>
           <button
             type="button"
@@ -702,6 +902,38 @@ export function App({ service, browserPreview = false }: AppProps) {
                   ? items
                   : [...items, activeProject.id],
               );
+            }}
+            rookSession={rookSession}
+            rookProviders={rookProviders}
+            rookProviderControlsAvailable={rookProviderControlsAvailable}
+            rookModels={rookModels}
+            rookCurrentModel={rookCurrentModel}
+            rookPending={rookStartupPending}
+            rookError={rookStartupError}
+            conversationError={rookError}
+            providerEndpointApprovals={rookProviderEndpointApprovals}
+            onProviderEndpointApprovalsChange={setRookProviderEndpointApprovals}
+            onProviderEndpointApprovalSave={(approvals) => {
+              if (activeProject)
+                rookEndpointApprovalByProject.current[activeProject.id] =
+                  approvals;
+            }}
+            rookMessages={rookMessages}
+            rookRunId={rookRunId}
+            rookDraft={rookDraft}
+            onRookDraftChange={setRookDraft}
+            onRookDraftSave={(draft) => {
+              if (activeProject) {
+                rookDraftByProject.current[activeProject.id] = draft;
+              }
+            }}
+            onRookMessagesChange={setRookMessages}
+            onRookProvidersChange={setRookProviders}
+            onRookModelsChange={setRookModels}
+            onRookModelChange={setRookCurrentModel}
+            onRookStart={() => {
+              rookAttemptedProjectId.current = undefined;
+              if (activeProject) void ensureRookSession(activeProject);
             }}
             recentProjects={recentProjects}
             projectEntries={projectEntries}
@@ -989,6 +1221,31 @@ interface ScreenContentProps {
   activeProject?: ProjectSummary;
   projectTrusted: boolean;
   onTrustProject: () => Promise<void>;
+  rookSession?: string;
+  rookProviders: RookProvider[];
+  rookProviderControlsAvailable: boolean;
+  rookModels: RookModel[];
+  rookCurrentModel: RookModel | null;
+  rookPending: boolean;
+  rookError?: string;
+  conversationError?: string;
+  providerEndpointApprovals: Record<string, string>;
+  onProviderEndpointApprovalsChange: Dispatch<
+    SetStateAction<Record<string, string>>
+  >;
+  onProviderEndpointApprovalSave: (approvals: Record<string, string>) => void;
+  rookMessages: { role: "user" | "assistant"; text: string }[];
+  rookRunId?: string;
+  rookDraft: string;
+  onRookDraftChange: Dispatch<SetStateAction<string>>;
+  onRookDraftSave: (draft: string) => void;
+  onRookMessagesChange: Dispatch<
+    SetStateAction<{ role: "user" | "assistant"; text: string }[]>
+  >;
+  onRookProvidersChange: (providers: RookProvider[]) => void;
+  onRookModelsChange: (models: RookModel[]) => void;
+  onRookModelChange: (model: RookModel | null) => void;
+  onRookStart: () => void;
   recentProjects: ProjectSummary[];
   projectEntries: ProjectEntry[];
   projectEntriesTruncated: boolean;
@@ -1017,7 +1274,10 @@ function ScreenContent(props: ScreenContentProps) {
   if (page === "home") return <HomeScreen {...props} />;
   if (page === "changes") return <ChangesScreen {...props} />;
   if (page === "verify") return <VerifyScreen {...props} />;
-  if (page === "rook") return <RookScreen {...props} />;
+  if (page === "rook")
+    return (
+      <RookScreen key={props.activeProject?.id ?? "no-project"} {...props} />
+    );
 
   const item = navigationItems.find((entry) => entry.id === page);
   const details: Record<
@@ -1386,16 +1646,32 @@ function RookScreen({
   activeProject,
   projectTrusted,
   onTrustProject,
+  rookSession: session,
+  rookProviders: providers,
+  rookProviderControlsAvailable: providerControlsAvailable,
+  rookModels: models,
+  rookCurrentModel: currentModel,
+  rookPending,
+  rookError,
+  conversationError,
+  providerEndpointApprovals,
+  onProviderEndpointApprovalsChange,
+  onProviderEndpointApprovalSave,
+  rookMessages: messages,
+  rookRunId: runId,
+  rookDraft: prompt,
+  onRookDraftChange: setPrompt,
+  onRookDraftSave,
+  onRookMessagesChange: setMessages,
+  onRookProvidersChange: setProviders,
+  onRookModelsChange: setModels,
+  onRookModelChange: setCurrentModel,
+  onRookStart,
   browserPreview,
 }: ScreenContentProps) {
-  const [session, setSession] = useState<string>();
-  const [rookVersion, setRookVersion] = useState<string>();
-  const [providers, setProviders] = useState<RookProvider[]>([]);
-  const [providerControlsAvailable, setProviderControlsAvailable] =
-    useState(false);
-  const [models, setModels] = useState<RookModel[]>([]);
-  const [currentModel, setCurrentModel] = useState<RookModel | null>(null);
   const [search, setSearch] = useState("");
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
   const [authPrompt, setAuthPrompt] = useState<{
     id: string;
     prompt: RookAuthPrompt;
@@ -1403,12 +1679,6 @@ function RookScreen({
   const [authEvent, setAuthEvent] = useState<RookAuthEvent>();
   const [authValue, setAuthValue] = useState("");
   const [activeLogin, setActiveLogin] = useState<string>();
-  const [allowedWorkspaceProviders, setAllowedWorkspaceProviders] = useState<
-    string[]
-  >([]);
-  const [prompt, setPrompt] = useState("");
-  const [events, setEvents] = useState<string[]>([]);
-  const [runId, setRunId] = useState<string>();
   const [permission, setPermission] = useState<{
     permissionId: string;
     request: Record<string, unknown>;
@@ -1416,8 +1686,40 @@ function RookScreen({
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
   useEffect(() => {
+    setPermission(undefined);
+    setAuthPrompt(undefined);
+    setAuthEvent(undefined);
+    setActiveLogin(undefined);
+    setProviderSettingsOpen(false);
+    setModelPickerOpen(false);
+  }, [session]);
+  const availableModels = models.filter(
+    (model) =>
+      (model.source !== "workspace" && providerControlsAvailable) ||
+      (model.source === "workspace" &&
+        providerEndpointApprovals[model.provider] ===
+          providers.find((provider) => provider.id === model.provider)
+            ?.endpointFingerprint),
+  );
+  const selectedModelAvailable = Boolean(
+    currentModel &&
+      (currentModel.source !== "workspace" ||
+        providerEndpointApprovals[currentModel.provider] ===
+          providers.find((provider) => provider.id === currentModel.provider)
+            ?.endpointFingerprint),
+  );
+
+  useEffect(() => setError(conversationError), [conversationError]);
+  useEffect(() => {
+    setPermission(undefined);
+    setAuthPrompt(undefined);
+    setAuthEvent(undefined);
+    setActiveLogin(undefined);
+  }, [session]);
+  useEffect(() => {
     if (!session || browserPreview) return;
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     void service
       .listenRook((event) => {
         if (event.sessionId !== session) return;
@@ -1427,22 +1729,19 @@ function RookScreen({
         if (
           event.message.method === "session/request_permission" &&
           typeof event.message.id === "string" &&
-          params &&
-          typeof params.request === "object" &&
-          params.request !== null
+          params?.request &&
+          typeof params.request === "object"
         ) {
           setPermission({
             permissionId: event.message.id,
             request: params.request as Record<string, unknown>,
           });
         }
-        if (typeof params?.runId === "string") setRunId(params.runId);
         if (
           event.message.method === "provider/auth_prompt" &&
           typeof event.message.id === "string" &&
-          params &&
-          typeof params.prompt === "object" &&
-          params.prompt !== null
+          params?.prompt &&
+          typeof params.prompt === "object"
         ) {
           setAuthPrompt({
             id: event.message.id,
@@ -1452,20 +1751,12 @@ function RookScreen({
         }
         if (
           event.message.method === "provider/auth_event" &&
-          params &&
-          typeof params.loginId === "string"
+          typeof params?.loginId === "string"
         ) {
-          setAuthEvent({
-            ...(params.event as RookAuthEvent),
-            loginId: params.loginId,
-          });
-          if (
-            ["auth_url", "device_code"].includes(
-              String((params.event as Record<string, unknown>)?.type),
-            )
-          ) {
-            const eventData = params.event as RookAuthEvent;
-            const url = eventData.url ?? eventData.verificationUri;
+          const auth = params.event as RookAuthEvent;
+          setAuthEvent({ ...auth, loginId: params.loginId });
+          if (["auth_url", "device_code"].includes(String(auth?.type))) {
+            const url = auth.url ?? auth.verificationUri;
             if (url && /^https?:\/\//i.test(url)) {
               void service
                 .openRookAuthUrl(url)
@@ -1480,298 +1771,350 @@ function RookScreen({
             }
           }
         }
-        if (event.message.method === "workspace/providers_changed") {
-          const providers = params?.providers;
-          if (Array.isArray(providers)) {
-            const updated = providers as RookProvider[];
-            setProviders(updated);
-            setAllowedWorkspaceProviders([]);
-          }
-        }
         if (
-          (params?.event as Record<string, unknown> | undefined)?.type ===
-          "run_settled"
-        )
-          setRunId(undefined);
-        setEvents((items) =>
-          [...items, JSON.stringify(event.message)].slice(-100),
-        );
+          event.message.method === "workspace/providers_changed" &&
+          Array.isArray(params?.providers)
+        ) {
+          const updated = params.providers as RookProvider[];
+          setProviders(updated);
+          onProviderEndpointApprovalsChange((approvals) => {
+            const next = { ...approvals };
+            for (const provider of updated) {
+              if (
+                provider.source === "workspace" &&
+                next[provider.id] !== provider.endpointFingerprint
+              )
+                delete next[provider.id];
+            }
+            onProviderEndpointApprovalSave(next);
+            return next;
+          });
+        }
       })
       .then((stop) => {
-        unlisten = stop;
+        if (disposed) stop();
+        else unlisten = stop;
       });
     return () => {
+      disposed = true;
       unlisten?.();
-      void service.stopRookAsk(session).catch(() => undefined);
     };
-  }, [browserPreview, service, session]);
-  async function connect() {
-    if (!activeProject) return;
-    setPending(true);
-    setError(undefined);
-    try {
-      const id = crypto.randomUUID().replaceAll("-", "");
-      const result = await service.startRookAsk(id, activeProject.path);
-      setSession(id);
-      setRookVersion(result.rookVersion);
-      setProviders(result.providers);
-      setProviderControlsAvailable(
-        result.capabilities.providerControls !== undefined,
-      );
-      setAllowedWorkspaceProviders([]);
-      setCurrentModel(result.currentModel);
-      if (result.capabilities.modelCatalog === true) {
-        const catalog = await service.listRookModels(id);
-        setModels(catalog.models);
-        setCurrentModel(catalog.currentModel);
-      } else {
-        setModels([]);
-        setCurrentModel(null);
-      }
-    } catch (failure) {
-      setError(errorMessage(failure, "Rook could not be started."));
-    } finally {
-      setPending(false);
-    }
-  }
-  return (
-    <section className="content-page" aria-labelledby="screen-title">
-      <PageHeading
-        eyebrow={activeProject?.name ?? "Project required"}
-        title="Rook Ask"
-      />
-      {browserPreview || !activeProject ? (
+  }, [
+    browserPreview,
+    service,
+    session,
+    setProviders,
+    onProviderEndpointApprovalsChange,
+    onProviderEndpointApprovalSave,
+  ]);
+
+  if (browserPreview || !activeProject) {
+    return (
+      <section className="content-page" aria-labelledby="screen-title">
+        <PageHeading
+          eyebrow={activeProject?.name ?? "Project required"}
+          title="Rook Ask"
+        />
         <EmptyState
           title="Desktop project required"
           description="Rook is a native process scoped to an open workspace."
           label="Desktop only"
         />
-      ) : (
-        <>
-          {!session ? (
-            <button
-              className="button button-primary"
-              type="button"
-              disabled={pending}
-              onClick={() => void connect()}
-            >
-              {pending ? "Connecting…" : "Start read-only Ask"}
-            </button>
-          ) : (
-            <>
-              <p role="status">
-                Rook {rookVersion} · immutable read-only Ask · Build unavailable
-              </p>
-              {providerControlsAvailable && (
-                <section
-                  className="rook-provider-controls"
-                  aria-label="Provider and model"
-                >
-                  <h2>Provider and model</h2>
-                  {providers
-                    .filter((provider) => provider.authMethods.length > 0)
-                    .map((provider) => (
-                      <div key={provider.id}>
-                        <strong>{provider.name}</strong>
-                        <span>
-                          {provider.configured ? "Signed in" : "Not signed in"}
-                          {provider.source === "workspace"
-                            ? ` · Workspace · ${provider.endpoint ?? "custom endpoint"}`
-                            : " · Rook/Pi"}
-                        </span>
-                        {provider.source === "workspace" &&
-                          (!projectTrusted ? (
-                            <button
-                              type="button"
-                              className="button button-quiet"
-                              onClick={() =>
-                                void onTrustProject().catch((failure) =>
-                                  setError(
-                                    errorMessage(
-                                      failure,
-                                      "Project trust could not be saved.",
-                                    ),
-                                  ),
-                                )
-                              }
-                            >
-                              Trust project for this provider
-                            </button>
-                          ) : allowedWorkspaceProviders.includes(
-                              provider.id,
-                            ) ? (
-                            <p role="status">
-                              Workspace provider allowed for this session.
-                            </p>
-                          ) : (
-                            <button
-                              type="button"
-                              className="button button-quiet"
-                              onClick={() =>
-                                void service
-                                  .allowRookWorkspaceProvider(
-                                    session,
-                                    provider.id,
-                                    provider.endpointFingerprint ?? "",
-                                  )
-                                  .then(() =>
-                                    setAllowedWorkspaceProviders((items) => [
-                                      ...items,
-                                      provider.id,
-                                    ]),
-                                  )
-                                  .catch((failure) =>
-                                    setError(
-                                      errorMessage(
-                                        failure,
-                                        "Workspace provider consent failed.",
-                                      ),
-                                    ),
-                                  )
-                              }
-                            >
-                              Allow this workspace provider
-                            </button>
-                          ))}
-                        {provider.configured && (
+      </section>
+    );
+  }
+
+  return (
+    <section className="content-page rook-page" aria-labelledby="screen-title">
+      <PageHeading eyebrow={activeProject.name} title="Rook Ask" />
+      <div className="rook-chat">
+        <header className="rook-chat-topbar">
+          <div>
+            <h2>Ask about {activeProject.name}</h2>
+            <p>Reads your project · won’t edit files</p>
+          </div>
+          <div className="rook-chat-actions">
+            {providerControlsAvailable && (
+              <Dialog.Root
+                open={modelPickerOpen}
+                onOpenChange={(open) => {
+                  setModelPickerOpen(open);
+                  if (open) setSearch("");
+                }}
+              >
+                <Dialog.Trigger asChild>
+                  <button
+                    className="rook-model-trigger"
+                    type="button"
+                    disabled={!session || !models.length}
+                  >
+                    <span>{currentModel?.name ?? "Choose a model"}</span>
+                    <span aria-hidden="true">⌄</span>
+                  </button>
+                </Dialog.Trigger>
+                <Dialog.Portal>
+                  <Dialog.Overlay className="palette-overlay" />
+                  <Dialog.Content className="rook-model-dialog">
+                    <Dialog.Title>Choose a model</Dialog.Title>
+                    <Dialog.Description>
+                      Only models available to this workspace are shown.
+                    </Dialog.Description>
+                    <input
+                      aria-label="Search models"
+                      placeholder="Search models…"
+                      value={search}
+                      onChange={(event) => setSearch(event.currentTarget.value)}
+                    />
+                    <div className="rook-model-list">
+                      {availableModels
+                        .filter((model) =>
+                          `${model.name} ${model.provider} ${model.id}`
+                            .toLowerCase()
+                            .includes(search.toLowerCase()),
+                        )
+                        .map((model) => (
                           <button
+                            key={`${model.provider}/${model.id}`}
                             type="button"
-                            className="button button-quiet"
-                            disabled={Boolean(activeLogin)}
-                            onClick={() =>
+                            className={
+                              currentModel?.provider === model.provider &&
+                              currentModel.id === model.id
+                                ? "is-selected"
+                                : ""
+                            }
+                            disabled={pending}
+                            onClick={() => {
+                              setPending(true);
                               void service
-                                .logoutRookProvider(session, provider.id)
-                                .then(setProviders)
+                                .selectRookModel(session!, model)
+                                .then((confirmed) => {
+                                  setCurrentModel(confirmed);
+                                  setError(undefined);
+                                  setModelPickerOpen(false);
+                                })
                                 .catch((failure) =>
                                   setError(
                                     errorMessage(
                                       failure,
-                                      "Provider sign-out failed.",
+                                      "Model selection failed.",
                                     ),
                                   ),
                                 )
-                            }
+                                .finally(() => setPending(false));
+                            }}
                           >
-                            Sign out
+                            <span>
+                              {model.name}
+                              <small>
+                                {model.provider}
+                                {model.endpoint ? ` · ${model.endpoint}` : ""}
+                              </small>
+                            </span>
+                            {currentModel?.provider === model.provider &&
+                              currentModel.id === model.id && (
+                                <span aria-label="Selected">✓</span>
+                              )}
                           </button>
-                        )}
-                        {!provider.configured &&
-                          provider.authMethods.map((method) => (
-                            <button
-                              key={method.type}
-                              type="button"
-                              className="button button-quiet"
-                              disabled={Boolean(activeLogin)}
-                              onClick={() => {
-                                const loginId = crypto
-                                  .randomUUID()
-                                  .replaceAll("-", "");
-                                setActiveLogin(loginId);
-                                setAuthEvent(undefined);
-                                void service
-                                  .loginRookProvider(
-                                    session,
-                                    loginId,
-                                    provider.id,
-                                    method.type,
-                                  )
-                                  .then((result) => {
-                                    setProviders(result.providers);
-                                    setModels(result.models);
-                                    setCurrentModel(result.currentModel);
-                                  })
-                                  .catch((failure) =>
-                                    setError(
-                                      errorMessage(
-                                        failure,
-                                        "Provider sign-in failed.",
-                                      ),
-                                    ),
-                                  )
-                                  .finally(() => {
-                                    setActiveLogin(undefined);
-                                    setAuthPrompt(undefined);
-                                  });
-                              }}
-                            >
-                              {method.loginLabel ?? method.name}
-                            </button>
-                          ))}
-                      </div>
-                    ))}
-                  <label htmlFor="rook-model-search">Search models</label>
-                  <input
-                    id="rook-model-search"
-                    value={search}
-                    onChange={(event) => setSearch(event.currentTarget.value)}
-                  />
-                  <label htmlFor="rook-model">Active model</label>
-                  <select
-                    id="rook-model"
-                    value={
-                      currentModel
-                        ? `${currentModel.provider}/${currentModel.id}`
-                        : ""
-                    }
-                    onChange={(event) => {
-                      const model = models.find(
-                        (item) =>
-                          `${item.provider}/${item.id}` ===
-                          event.currentTarget.value,
-                      );
-                      if (model)
-                        void service
-                          .selectRookModel(session, model)
-                          .then(setCurrentModel)
-                          .catch((failure) =>
-                            setError(
-                              errorMessage(failure, "Model selection failed."),
-                            ),
-                          );
-                    }}
-                  >
-                    <option value="">Select a model</option>
-                    {models
-                      .filter((model) =>
-                        `${model.provider} ${model.name} ${model.id}`
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
+                        ))}
+                      {!availableModels.length && (
+                        <p>
+                          No models are currently available for this workspace.
+                        </p>
+                      )}
+                    </div>
+                    <Dialog.Close asChild>
+                      <button className="button button-quiet" type="button">
+                        Close
+                      </button>
+                    </Dialog.Close>
+                  </Dialog.Content>
+                </Dialog.Portal>
+              </Dialog.Root>
+            )}
+            {providerControlsAvailable && (
+              <button
+                className="button button-quiet"
+                type="button"
+                disabled={!session}
+                onClick={() => setProviderSettingsOpen((open) => !open)}
+              >
+                Manage providers
+              </button>
+            )}
+          </div>
+        </header>
+        {rookPending && !session && (
+          <p role="status">Connecting to Rook… your draft is safe here.</p>
+        )}
+        {rookError && !session && (
+          <div className="rook-startup-error" role="alert">
+            <p>{rookError}</p>
+            <button
+              className="button button-quiet"
+              type="button"
+              disabled={rookPending}
+              onClick={onRookStart}
+            >
+              Retry connection
+            </button>
+          </div>
+        )}
+        {providerSettingsOpen && session && providerControlsAvailable && (
+          <section
+            className="rook-provider-controls"
+            aria-label="Provider settings"
+          >
+            <div className="rook-provider-heading">
+              <h3>Providers</h3>
+              <button
+                type="button"
+                onClick={() => setProviderSettingsOpen(false)}
+              >
+                Done
+              </button>
+            </div>
+            {providers.map((provider) => (
+              <div className="rook-provider-row" key={provider.id}>
+                <div>
+                  <strong>{provider.name}</strong>
+                  <small>
+                    {provider.missingEnvironmentVariables?.length
+                      ? `Missing ${provider.missingEnvironmentVariables.join(", ")}`
+                      : provider.configured
+                        ? "Ready"
+                        : "Not signed in"}
+                    {provider.source === "workspace"
+                      ? ` · Workspace · ${provider.endpoint ?? "custom endpoint"}`
+                      : " · Rook/Pi"}
+                  </small>
+                </div>
+                {provider.source === "workspace" && !projectTrusted ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void onTrustProject().catch((failure) =>
+                        setError(
+                          errorMessage(
+                            failure,
+                            "Project trust could not be saved.",
+                          ),
+                        ),
                       )
-                      .map((model) => (
-                        <option
-                          key={`${model.provider}/${model.id}`}
-                          value={`${model.provider}/${model.id}`}
-                        >
-                          {model.name} · {model.provider}
-                          {model.source === "workspace"
-                            ? ` · ${model.endpoint ?? "workspace"}`
-                            : ""}
-                        </option>
-                      ))}
-                  </select>
-                  {currentModel && (
-                    <p role="status">
-                      Using {currentModel.name} · {currentModel.provider}/
-                      {currentModel.id}
-                    </p>
+                    }
+                  >
+                    Trust project
+                  </button>
+                ) : provider.source === "workspace" &&
+                  !provider.missingEnvironmentVariables?.length &&
+                  providerEndpointApprovals[provider.id] !==
+                    provider.endpointFingerprint ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void service
+                        .allowRookWorkspaceProvider(
+                          session,
+                          provider.id,
+                          provider.endpointFingerprint ?? "",
+                        )
+                        .then(() =>
+                          onProviderEndpointApprovalsChange((items) => {
+                            const updated = {
+                              ...items,
+                              [provider.id]: provider.endpointFingerprint ?? "",
+                            };
+                            onProviderEndpointApprovalSave(updated);
+                            return updated;
+                          }),
+                        )
+                        .catch((failure) =>
+                          setError(
+                            errorMessage(
+                              failure,
+                              "Workspace provider approval failed.",
+                            ),
+                          ),
+                        )
+                    }
+                  >
+                    Review &amp; allow
+                  </button>
+                ) : null}
+                {provider.configured &&
+                  !provider.missingEnvironmentVariables?.length && (
+                    <button
+                      type="button"
+                      disabled={Boolean(activeLogin)}
+                      onClick={() =>
+                        void service
+                          .logoutRookProvider(session, provider.id)
+                          .then(setProviders)
+                          .catch((failure) =>
+                            setError(errorMessage(failure, "Sign-out failed.")),
+                          )
+                      }
+                    >
+                      Sign out
+                    </button>
                   )}
-                </section>
-              )}
-              {!providerControlsAvailable && (
-                <p role="status">
-                  This Rook version does not advertise native provider or model
-                  controls. Sign in and select a model in Rook, then reconnect.
-                </p>
-              )}
-              {activeLogin && (
-                <p role="status">
-                  Provider sign-in is in progress. Cancel to stop it.
-                </p>
-              )}
-              {activeLogin && (
+                {(!provider.configured ||
+                  provider.missingEnvironmentVariables?.length) &&
+                  provider.authMethods.map((method) => (
+                    <button
+                      type="button"
+                      key={method.type}
+                      disabled={
+                        Boolean(activeLogin) ||
+                        (provider.source === "workspace" &&
+                          (!projectTrusted ||
+                            providerEndpointApprovals[provider.id] !==
+                              provider.endpointFingerprint))
+                      }
+                      onClick={() => {
+                        const loginId = crypto.randomUUID().replaceAll("-", "");
+                        setActiveLogin(loginId);
+                        setAuthEvent(undefined);
+                        void service
+                          .loginRookProvider(
+                            session,
+                            loginId,
+                            provider.id,
+                            method.type,
+                          )
+                          .then((result) => {
+                            setProviders(result.providers);
+                            setModels(result.models);
+                            setCurrentModel(
+                              result.currentModel &&
+                                result.models.some(
+                                  (model) =>
+                                    model.provider ===
+                                      result.currentModel?.provider &&
+                                    model.id === result.currentModel?.id,
+                                )
+                                ? result.currentModel
+                                : null,
+                            );
+                          })
+                          .catch((failure) =>
+                            setError(errorMessage(failure, "Sign-in failed.")),
+                          )
+                          .finally(() => {
+                            setActiveLogin(undefined);
+                            setAuthPrompt(undefined);
+                          });
+                      }}
+                    >
+                      {method.loginLabel ?? method.name}
+                    </button>
+                  ))}
+              </div>
+            ))}
+            {activeLogin && (
+              <div className="rook-auth-status" role="status">
+                <span>Sign-in in progress</span>
                 <button
                   type="button"
-                  className="button button-quiet"
                   onClick={() =>
                     void service
                       .cancelRookLogin(session, activeLogin)
@@ -1782,167 +2125,231 @@ function RookScreen({
                       )
                   }
                 >
-                  Cancel sign-in
+                  Cancel
                 </button>
-              )}
-              {authEvent && (
-                <section className="rook-auth-event" aria-live="polite">
-                  {authEvent.type === "device_code" ? (
-                    <>
-                      <p>
-                        Open {authEvent.verificationUri} and enter this code:
-                      </p>
-                      <strong>{authEvent.userCode}</strong>
-                    </>
-                  ) : (
-                    (authEvent.message ??
-                    authEvent.instructions ??
-                    authEvent.url)
-                  )}
-                </section>
-              )}
-              {authPrompt && (
-                <form
-                  className="rook-auth-prompt"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void service
-                      .respondRookAuthPrompt(session, authPrompt.id, authValue)
-                      .then(() => {
-                        setAuthPrompt(undefined);
-                        setAuthValue("");
-                      })
-                      .catch((failure) =>
-                        setError(
-                          errorMessage(failure, "Sign-in response failed."),
-                        ),
-                      );
-                  }}
-                >
-                  <label htmlFor="rook-auth-input">
-                    {authPrompt.prompt.message}
-                  </label>
-                  {authPrompt.prompt.type === "select" ? (
-                    <select
-                      id="rook-auth-input"
-                      value={authValue}
-                      onChange={(event) =>
-                        setAuthValue(event.currentTarget.value)
-                      }
-                    >
-                      <option value="">Choose…</option>
-                      {authPrompt.prompt.options?.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                          {option.description ? ` — ${option.description}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      id="rook-auth-input"
-                      type={
-                        authPrompt.prompt.type === "secret"
-                          ? "password"
-                          : "text"
-                      }
-                      placeholder={authPrompt.prompt.placeholder}
-                      autoComplete="off"
-                      value={authValue}
-                      onChange={(event) =>
-                        setAuthValue(event.currentTarget.value)
-                      }
-                    />
-                  )}
-                  <button
-                    className="button button-primary"
-                    disabled={!authValue}
-                  >
-                    Continue
-                  </button>
-                </form>
-              )}
-              {permission && (
-                <section
-                  className="permission-card"
-                  aria-label="Rook permission request"
-                >
-                  <p>
-                    Rook requests{" "}
-                    {String(permission.request.access ?? "external access")}{" "}
-                    with {String(permission.request.toolName ?? "tool")}
-                  </p>
-                  <pre>{JSON.stringify(permission.request, null, 2)}</pre>
-                  {(["once", "session", "deny"] as const).map((choice) => (
-                    <button
-                      key={choice}
-                      type="button"
-                      onClick={() =>
-                        void service
-                          .respondRookPermission(
-                            session,
-                            permission.permissionId,
-                            choice,
-                          )
-                          .then(() => setPermission(undefined))
-                          .catch((failure) => setError(String(failure)))
-                      }
-                    >
-                      {choice === "deny" ? "Deny" : `Allow ${choice}`}
-                    </button>
-                  ))}
-                </section>
-              )}
+              </div>
+            )}
+            {authEvent && (
+              <p className="rook-auth-event" aria-live="polite">
+                {authEvent.type === "device_code" ? (
+                  <>
+                    Open {authEvent.verificationUri} and enter{" "}
+                    <strong>{authEvent.userCode}</strong>
+                  </>
+                ) : (
+                  (authEvent.message ?? authEvent.instructions ?? authEvent.url)
+                )}
+              </p>
+            )}
+            {authPrompt && (
               <form
-                className="change-create"
+                className="rook-auth-prompt"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void service
-                    .promptRookAsk(session, prompt)
+                    .respondRookAuthPrompt(session, authPrompt.id, authValue)
                     .then(() => {
-                      setPrompt("");
+                      setAuthPrompt(undefined);
+                      setAuthValue("");
                     })
-                    .catch((failure) => setError(String(failure)));
+                    .catch((failure) =>
+                      setError(
+                        errorMessage(failure, "Sign-in response failed."),
+                      ),
+                    );
                 }}
               >
-                <label htmlFor="rook-prompt">Ask about this workspace</label>
-                <textarea
-                  id="rook-prompt"
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  maxLength={64000}
-                />
-                {runId ? (
-                  <button
-                    className="button button-quiet"
-                    type="button"
-                    onClick={() => void service.cancelRookAsk(session, runId)}
+                <label htmlFor="rook-auth-input">
+                  {authPrompt.prompt.message}
+                </label>
+                {authPrompt.prompt.type === "select" ? (
+                  <select
+                    id="rook-auth-input"
+                    value={authValue}
+                    onChange={(event) =>
+                      setAuthValue(event.currentTarget.value)
+                    }
                   >
-                    Cancel Ask
-                  </button>
+                    <option value="">Choose…</option>
+                    {authPrompt.prompt.options?.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                        {option.description ? ` — ${option.description}` : ""}
+                      </option>
+                    ))}
+                  </select>
                 ) : (
-                  <button
-                    className="button button-primary"
-                    disabled={!prompt.trim()}
-                  >
-                    Ask
-                  </button>
+                  <input
+                    id="rook-auth-input"
+                    placeholder={authPrompt.prompt.placeholder}
+                    type={
+                      authPrompt.prompt.type === "secret" ? "password" : "text"
+                    }
+                    autoComplete="off"
+                    value={authValue}
+                    onChange={(event) =>
+                      setAuthValue(event.currentTarget.value)
+                    }
+                  />
                 )}
+                <button className="button button-primary" disabled={!authValue}>
+                  Continue
+                </button>
               </form>
-              <ol className="rook-events" aria-label="Rook session events">
-                {events.map((event, index) => (
-                  <li key={`${index}-${event}`}>{event}</li>
-                ))}
-              </ol>
-            </>
+            )}
+          </section>
+        )}
+        <div className="rook-conversation" aria-live="polite">
+          {messages.length === 0 && (
+            <div className="rook-welcome">
+              <span aria-hidden="true">✳</span>
+              <h3>What would you like to know?</h3>
+              <p>Ask about code, architecture, or how this project works.</p>
+            </div>
           )}
-          {error && (
-            <p className="inline-error" role="alert">
-              {error}
+          {messages.length > 0 &&
+            messages.map((message, index) => (
+              <article
+                className={`rook-message rook-message-${message.role}`}
+                key={`${index}-${message.role}`}
+              >
+                <strong>{message.role === "user" ? "You" : "Rook"}</strong>
+                <p>
+                  {message.text || (runId ? "Thinking…" : "No response text.")}
+                </p>
+              </article>
+            ))}
+        </div>
+        {session && permission && (
+          <section
+            className="permission-card"
+            aria-label="Rook permission request"
+          >
+            <p>
+              Rook requests{" "}
+              {String(permission.request.access ?? "external access")} with{" "}
+              {String(permission.request.toolName ?? "tool")}
             </p>
+            <pre>{JSON.stringify(permission.request, null, 2)}</pre>
+            {(["once", "session", "deny"] as const).map((choice) => (
+              <button
+                key={choice}
+                type="button"
+                onClick={() =>
+                  void service
+                    .respondRookPermission(
+                      session,
+                      permission.permissionId,
+                      choice,
+                    )
+                    .then(() => setPermission(undefined))
+                    .catch((failure) => setError(String(failure)))
+                }
+              >
+                {choice === "deny" ? "Deny" : `Allow ${choice}`}
+              </button>
+            ))}
+          </section>
+        )}
+        <form
+          className="rook-composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const text = prompt.trim();
+            if (!text) return;
+            if (
+              !session ||
+              (!currentModel && providerControlsAvailable) ||
+              (providerControlsAvailable && !selectedModelAvailable)
+            ) {
+              setError("Choose an available model before sending.");
+              return;
+            }
+            setMessages((items) => [...items, { role: "user", text }]);
+            setPrompt("");
+            setError(undefined);
+            void service.promptRookAsk(session, text).catch((failure) => {
+              setMessages((items) =>
+                items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
+              );
+              setPrompt(text);
+              setError(
+                errorMessage(failure, "Your message could not be sent."),
+              );
+            });
+          }}
+        >
+          {session && providerControlsAvailable && !availableModels.length && (
+            <div className="rook-setup-hint">
+              No available models.{" "}
+              <button
+                type="button"
+                onClick={() => setProviderSettingsOpen(true)}
+              >
+                Set up a provider
+              </button>
+            </div>
           )}
-        </>
-      )}
+          {prompt.trim() && !session && !rookPending && !rookError && (
+            <button
+              className="rook-draft-action"
+              type="button"
+              onClick={onRookStart}
+            >
+              Connect to send your draft
+            </button>
+          )}
+          <textarea
+            id="rook-prompt"
+            aria-label="Ask about this project"
+            value={prompt}
+            onChange={(event) => {
+              setPrompt(event.target.value);
+              onRookDraftSave(event.target.value);
+            }}
+            maxLength={64000}
+            placeholder="Message Rook…"
+            disabled={Boolean(runId)}
+          />
+          {session && runId ? (
+            <button
+              className="button button-quiet"
+              type="button"
+              onClick={() => void service.cancelRookAsk(session, runId)}
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              className="button button-primary"
+              disabled={
+                !session ||
+                (!currentModel && providerControlsAvailable) ||
+                (providerControlsAvailable && !selectedModelAvailable) ||
+                !prompt.trim()
+              }
+            >
+              Ask
+            </button>
+          )}
+        </form>
+        {!providerControlsAvailable && session && (
+          <p className="rook-version-note" role="status">
+            This Rook version doesn’t provide native model controls. Ask will
+            use its current Rook model.
+          </p>
+        )}
+        {error && (
+          <p className="inline-error" role="alert">
+            {error}
+          </p>
+        )}
+        {rookError && session && (
+          <p className="inline-error" role="alert">
+            {rookError}
+          </p>
+        )}
+      </div>
     </section>
   );
 }

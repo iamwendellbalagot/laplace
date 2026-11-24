@@ -645,6 +645,16 @@ kbd,
   margin: 0 auto;
   padding: 34px clamp(24px, 4vw, 62px) 60px;
 }
+.content-page:has(.rook-chat) {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+.rook-page > .page-heading {
+  padding-bottom: 10px;
+}
 .page-heading {
   padding-bottom: 23px;
   border-bottom: 1px solid var(--border);
@@ -806,6 +816,293 @@ kbd,
   color: var(--text-secondary);
   font: 9px/1.5 var(--mono);
   overflow-wrap: anywhere;
+}
+.rook-chat {
+  display: flex;
+  width: min(940px, 100%);
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  margin: 0 auto;
+}
+.rook-startup-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--red);
+  border-radius: 5px;
+  color: var(--text-secondary);
+}
+.rook-startup-error p {
+  margin: 0;
+}
+.rook-chat-topbar,
+.rook-chat-actions,
+.rook-provider-heading,
+.rook-provider-row,
+.rook-composer > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.rook-chat-topbar {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.rook-chat-topbar h2 {
+  margin: 0;
+  font: 400 23px var(--serif);
+}
+.rook-chat-topbar p,
+.rook-version-note {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.rook-chat-actions {
+  justify-content: flex-end;
+}
+.rook-model-trigger {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 18px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.rook-conversation {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  padding: 24px 4px;
+}
+.rook-welcome {
+  display: grid;
+  flex: 1;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+}
+.rook-welcome > span {
+  color: var(--brass);
+  font-size: 29px;
+}
+.rook-welcome h3 {
+  margin: 10px 0 4px;
+  font: 400 23px var(--serif);
+}
+.rook-welcome p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rook-message {
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+.rook-message strong {
+  color: var(--brass);
+  font: 10px var(--mono);
+}
+.rook-message p {
+  margin: 6px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rook-message-user {
+  padding: 12px 15px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.rook-composer {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+}
+.rook-composer textarea {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.6 var(--serif);
+}
+.rook-composer > div:last-child {
+  justify-content: flex-end;
+}
+.rook-model-dialog {
+  position: fixed;
+  z-index: 11;
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(650px, 82vh);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  padding: 21px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 45%);
+}
+.rook-model-dialog h2 {
+  margin: 0 0 5px;
+  font: 400 22px var(--serif);
+}
+.rook-model-dialog > p {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.rook-model-dialog > input {
+  width: 100%;
+  min-height: 40px;
+  margin-bottom: 10px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+.rook-model-list {
+  display: grid;
+  max-height: 47vh;
+  overflow: auto;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.rook-model-list button {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.rook-model-list button:hover,
+.rook-model-list button.is-selected {
+  border-color: var(--border);
+  background: var(--surface-hover);
+}
+.rook-model-list small,
+.rook-provider-row small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font: 9px var(--mono);
+}
+.rook-provider-controls {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.rook-provider-heading h3 {
+  margin: 0;
+  font: 400 17px var(--serif);
+}
+.rook-provider-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.rook-provider-row > div {
+  min-width: 220px;
+  flex: 1;
+}
+.rook-setup-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+.rook-draft-action {
+  justify-self: end;
+  border: 0;
+  background: transparent;
+  color: var(--brass-light);
+  cursor: pointer;
+  font-size: 11px;
+}
+.rook-setup-hint button {
+  border: 0;
+  background: none;
+  color: var(--brass);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.rook-auth-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+.rook-auth-prompt label {
+  width: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
+.rook-auth-prompt input,
+.rook-auth-prompt select {
+  min-height: 36px;
+  flex: 1;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+.rook-auth-event {
+  padding: 10px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.rook-auth-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+.rook-version-note {
+  align-self: center;
+}
+@media (max-width: 720px) {
+  .rook-chat-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .rook-chat-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 .permission-card {
   margin: 14px 0;
