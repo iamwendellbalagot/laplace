@@ -678,7 +678,7 @@ export function App({ service, browserPreview = false }: AppProps) {
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell${page === "rook" ? " app-shell-rook" : ""}`}
       data-theme={preferences.theme}
       data-density={preferences.density}
       style={
@@ -827,7 +827,8 @@ export function App({ service, browserPreview = false }: AppProps) {
         <main
           className="screen"
           id="main-content"
-          aria-labelledby="screen-title"
+          aria-label={page === "rook" ? "Rook Ask" : undefined}
+          aria-labelledby={page === "rook" ? undefined : "screen-title"}
         >
           <ScreenContent
             service={service}
@@ -1773,11 +1774,7 @@ function RookScreen({
 
   if (browserPreview || !activeProject) {
     return (
-      <section className="content-page" aria-labelledby="screen-title">
-        <PageHeading
-          eyebrow={activeProject?.name ?? "Project required"}
-          title="Rook Ask"
-        />
+      <section className="content-page" aria-label="Rook Ask">
         <EmptyState
           title="Desktop project required"
           description="Rook is a native process scoped to an open workspace."
@@ -1788,8 +1785,7 @@ function RookScreen({
   }
 
   return (
-    <section className="content-page rook-page" aria-labelledby="screen-title">
-      <PageHeading eyebrow={activeProject.name} title="Rook Ask" />
+    <section className="content-page rook-page" aria-label="Rook Ask">
       <div className="rook-chat">
         <header className="rook-chat-topbar">
           <div>

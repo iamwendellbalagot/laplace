@@ -3070,6 +3070,21 @@ async fn start_rook_ask(
                 if let Some(id) = value["id"].as_u64() {
                     if let Ok(mut waiting) = pending_events.lock() {
                         if let Some(sender) = waiting.remove(&id) {
+                            if value["result"]["settled"] == true {
+                                if let Some(run_id) = value["result"]["runId"].as_str() {
+                                    let settled = serde_json::json!({
+                                        "method": "session/update",
+                                        "params": {
+                                            "runId": run_id,
+                                            "event": { "type": "run_settled", "aborted": false }
+                                        }
+                                    });
+                                    let _ = app_events.emit(
+                                        "rook-event",
+                                        serde_json::json!({"sessionId":session_id,"message":settled}),
+                                    );
+                                }
+                            }
                             let _ = sender.send(value);
                             line.clear();
                             continue;

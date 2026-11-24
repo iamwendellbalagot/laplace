@@ -652,8 +652,8 @@ kbd,
   padding-top: 20px;
   padding-bottom: 20px;
 }
-.rook-page > .page-heading {
-  padding-bottom: 10px;
+.app-shell-rook > .topbar {
+  display: none;
 }
 .page-heading {
   padding-bottom: 23px;
