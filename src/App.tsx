@@ -26,6 +26,38 @@ import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
 
+type RookChatTool = {
+  id: string;
+  name: string;
+  summary: string;
+  status: "running" | "ok" | "error";
+};
+type RookChatMessage = {
+  role: "user" | "assistant";
+  text: string;
+  runId?: string;
+  tools?: RookChatTool[];
+};
+
+function updateRookAssistant(
+  messages: RookChatMessage[],
+  runId: string | undefined,
+  update: (message: RookChatMessage) => RookChatMessage,
+): RookChatMessage[] {
+  let index = messages.length - 1;
+  while (
+    index >= 0 &&
+    (messages[index].role !== "assistant" ||
+      (runId && messages[index].runId !== runId))
+  )
+    index--;
+  if (index < 0)
+    return [...messages, update({ role: "assistant", text: "", runId })];
+  const next = [...messages];
+  next[index] = update(next[index]);
+  return next;
+}
+
 const CodeEditor = lazy(() =>
   import("./features/editor/CodeEditor").then((module) => ({
     default: module.CodeEditor,
@@ -81,9 +113,7 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [rookError, setRookError] = useState<string>();
   const rookStarting = useRef(false);
   const rookProjectId = useRef<string | undefined>(undefined);
-  const [rookMessages, setRookMessages] = useState<
-    { role: "user" | "assistant"; text: string }[]
-  >([]);
+  const [rookMessages, setRookMessages] = useState<RookChatMessage[]>([]);
   const [rookRunId, setRookRunId] = useState<string>();
   const [rookDraft, setRookDraft] = useState("");
   const rookDraftByProject = useRef<Record<string, string>>({});
@@ -345,45 +375,76 @@ export function App({ service, browserPreview = false }: AppProps) {
           | Record<string, unknown>
           | undefined;
         const agentEvent = params?.event as Record<string, unknown> | undefined;
-        if (typeof params?.runId === "string") setRookRunId(params.runId);
+        const runId =
+          typeof params?.runId === "string" ? params.runId : undefined;
+        if (runId) setRookRunId(runId);
         if (agentEvent?.type === "model_request_started") {
           setRookError(undefined);
-          setRookMessages((items) => [
-            ...items,
-            { role: "assistant", text: "" },
-          ]);
+          setRookMessages((items) =>
+            items.some(
+              (message) =>
+                message.role === "assistant" && message.runId === runId,
+            )
+              ? items
+              : [...items, { role: "assistant", text: "", runId, tools: [] }],
+          );
+        } else if (
+          agentEvent?.type === "tool_started" &&
+          typeof agentEvent.id === "string" &&
+          typeof agentEvent.name === "string" &&
+          typeof agentEvent.summary === "string"
+        ) {
+          setRookMessages((items) =>
+            updateRookAssistant(items, runId, (message) => ({
+              ...message,
+              tools: [
+                ...(message.tools ?? []).filter(
+                  (tool) => tool.id !== agentEvent.id,
+                ),
+                {
+                  id: agentEvent.id as string,
+                  name: agentEvent.name as string,
+                  summary: agentEvent.summary as string,
+                  status: "running",
+                },
+              ],
+            })),
+          );
+        } else if (
+          agentEvent?.type === "tool_finished" &&
+          typeof agentEvent.id === "string" &&
+          (agentEvent.status === "ok" || agentEvent.status === "error")
+        ) {
+          setRookMessages((items) =>
+            updateRookAssistant(items, runId, (message) => ({
+              ...message,
+              tools: (message.tools ?? []).map((tool) =>
+                tool.id === agentEvent.id
+                  ? { ...tool, status: agentEvent.status as "ok" | "error" }
+                  : tool,
+              ),
+            })),
+          );
         } else if (
           agentEvent?.type === "text_delta" &&
           typeof agentEvent.text === "string"
         ) {
-          setRookMessages((items) => {
-            const last = items.at(-1);
-            return last?.role === "assistant"
-              ? [
-                  ...items.slice(0, -1),
-                  { ...last, text: last.text + agentEvent.text },
-                ]
-              : [
-                  ...items,
-                  { role: "assistant", text: agentEvent.text as string },
-                ];
-          });
+          setRookMessages((items) =>
+            updateRookAssistant(items, runId, (message) => ({
+              ...message,
+              text: message.text + (agentEvent.text as string),
+            })),
+          );
         } else if (
           agentEvent?.type === "message_complete" &&
           typeof agentEvent.text === "string"
         ) {
-          setRookMessages((items) => {
-            const last = items.at(-1);
-            return last?.role === "assistant"
-              ? [
-                  ...items.slice(0, -1),
-                  { ...last, text: agentEvent.text as string },
-                ]
-              : [
-                  ...items,
-                  { role: "assistant", text: agentEvent.text as string },
-                ];
-          });
+          setRookMessages((items) =>
+            updateRookAssistant(items, runId, (message) => ({
+              ...message,
+              text: agentEvent.text as string,
+            })),
+          );
         } else if (
           agentEvent?.type === "error" &&
           typeof agentEvent.message === "string"
@@ -1188,14 +1249,12 @@ interface ScreenContentProps {
   rookPending: boolean;
   rookError?: string;
   conversationError?: string;
-  rookMessages: { role: "user" | "assistant"; text: string }[];
+  rookMessages: RookChatMessage[];
   rookRunId?: string;
   rookDraft: string;
   onRookDraftChange: Dispatch<SetStateAction<string>>;
   onRookDraftSave: (draft: string) => void;
-  onRookMessagesChange: Dispatch<
-    SetStateAction<{ role: "user" | "assistant"; text: string }[]>
-  >;
+  onRookMessagesChange: Dispatch<SetStateAction<RookChatMessage[]>>;
   onRookProvidersChange: Dispatch<SetStateAction<RookProvider[]>>;
   onRookModelsChange: Dispatch<SetStateAction<RookModel[]>>;
   onRookModelChange: (model: RookModel | null) => void;
@@ -2222,17 +2281,52 @@ function RookScreen({
             </div>
           )}
           {messages.length > 0 &&
-            messages.map((message, index) => (
-              <article
-                className={`rook-message rook-message-${message.role}`}
-                key={`${index}-${message.role}`}
-              >
-                <strong>{message.role === "user" ? "You" : "Rook"}</strong>
-                <p>
-                  {message.text || (runId ? "Thinking…" : "No response text.")}
-                </p>
-              </article>
-            ))}
+            messages.map((message, index) => {
+              if (
+                message.role === "assistant" &&
+                !message.text &&
+                !message.tools?.length &&
+                message.runId !== runId
+              )
+                return null;
+              return (
+                <article
+                  className={`rook-message rook-message-${message.role}`}
+                  key={`${index}-${message.role}`}
+                >
+                  <strong>{message.role === "user" ? "You" : "Rook"}</strong>
+                  {message.tools?.map((tool) => (
+                    <div
+                      className={`rook-tool-activity rook-tool-${tool.status}`}
+                      key={tool.id}
+                    >
+                      <span aria-hidden="true">
+                        {tool.status === "running"
+                          ? "◌"
+                          : tool.status === "ok"
+                            ? "✓"
+                            : "!"}
+                      </span>
+                      <span>{tool.name.replaceAll("_", " ")}</span>
+                      <span>{tool.summary}</span>
+                      <span>
+                        {tool.status === "running"
+                          ? "Checking"
+                          : tool.status === "ok"
+                            ? "Done"
+                            : "Failed"}
+                      </span>
+                    </div>
+                  ))}
+                  {message.text ? (
+                    <p>{message.text}</p>
+                  ) : message.role === "assistant" &&
+                    message.runId === runId ? (
+                    <p className="rook-thinking">Thinking…</p>
+                  ) : null}
+                </article>
+              );
+            })}
         </div>
         {session && permission && (
           <section
