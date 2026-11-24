@@ -3027,20 +3027,13 @@ async fn start_rook_ask(
             &request.operation_id,
         )
     })?;
-    let result = &value["result"];
-    if result["protocolVersion"] != 1
-        || result["capabilities"]["buildSessions"] != false
-        || result["capabilities"]["immutableReadOnlyTools"]
-            .as_array()
-            .is_none()
-    {
-        let _ = child.kill();
-        return Err(terminal_error(
-            "rook_capability_mismatch",
-            "Rook did not advertise the immutable read-only Ask capability.",
-            &request.operation_id,
-        ));
-    }
+    let result = match parse_rook_initialize_response(&value, &request.operation_id) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+    };
     let host_session_storage = result["capabilities"]["hostSessionStorage"] == true;
     let mut session_summaries = serde_json::json!([]);
     let (active_session_id, history_messages) = if host_session_storage {
@@ -3253,6 +3246,35 @@ async fn start_rook_ask(
             })),
         );
     Ok(response)
+}
+
+fn parse_rook_initialize_response<'a>(
+    value: &'a serde_json::Value,
+    operation_id: &str,
+) -> Result<&'a serde_json::Value, IpcError> {
+    if !value["error"].is_null() {
+        return Err(terminal_error(
+            "rook_protocol_failed",
+            value["error"]["message"]
+                .as_str()
+                .unwrap_or("Rook rejected initialization."),
+            operation_id,
+        ));
+    }
+    let result = &value["result"];
+    if result["protocolVersion"] != 1
+        || result["capabilities"]["buildSessions"] != false
+        || result["capabilities"]["immutableReadOnlyTools"]
+            .as_array()
+            .is_none()
+    {
+        return Err(terminal_error(
+            "rook_capability_mismatch",
+            "Rook did not advertise the immutable read-only Ask capability.",
+            operation_id,
+        ));
+    }
+    Ok(result)
 }
 
 fn spawn_rook(
@@ -5238,6 +5260,33 @@ mod rook_start_tests {
         assert!(!auth_url_is_safe("file:///etc/passwd"));
         assert!(!auth_url_is_safe("javascript:alert(1)"));
         assert!(!auth_url_is_safe("https://user:pass@example.com/"));
+    }
+
+    #[test]
+    fn initialize_surfaces_json_rpc_error_instead_of_capability_mismatch() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32020, "message": "PLYTH is not installed." }
+        });
+        let error = parse_rook_initialize_response(&response, "rook-init-err").unwrap_err();
+        assert_eq!(error.code, "rook_protocol_failed");
+        assert_eq!(error.message, "PLYTH is not installed.");
+        assert_eq!(error.operation_id, "rook-init-err");
+    }
+
+    #[test]
+    fn initialize_rejects_missing_immutable_read_only_tools() {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": 1,
+                "capabilities": { "buildSessions": false }
+            }
+        });
+        let error = parse_rook_initialize_response(&response, "rook-init-cap").unwrap_err();
+        assert_eq!(error.code, "rook_capability_mismatch");
     }
 }
 
