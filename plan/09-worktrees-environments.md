@@ -1,6 +1,6 @@
 # 09 — Worktrees and reproducible environments
 
-Status: Change-bound candidate worktrees under app data and bounded project recipe execution implemented; agent Build and durable cleanup reconciliation remain open
+Status: Authorized Rook Build implemented directly in the active repository per explicit user decision (no mandatory candidate worktree creation); optional worktree creation and bounded recipes remain in place, while live provider-backed Build smoke and durable cleanup reconciliation remain open
 Depends on: [08](08-rook-delegation.md)  
 Next: [10 — Verification](10-verification-evidence.md)
 
@@ -18,7 +18,7 @@ Authorized Build operates in an identifiable isolated Git workspace while the de
 - [ ] Do not copy node_modules blindly; define dependency setup behavior and dependency-lockfile handling.
 - [ ] Reference secrets securely; do not copy sensitive ignored files into history or all worktrees automatically.
 - [ ] Document external database/service sharing and filesystem-versus-security isolation.
-- [ ] Launch Rook Build with explicit authorized candidate scope and effective execution policy. Rook 0.1.6 protocol explicitly advertises `buildSessions: false`; requires Rook protocol support.
+- [x] Launch Rook Build with explicit authorized scope and effective execution policy (process-pinned `--mode build` in `../rook`, trust-gated in Rust, running directly in the active repository per user decision, surfacing OS sandbox status and blocking conflicting Monaco saves during active Build runs).
 - [ ] Enforce handoff: block new agent writes, settle active mutations, then permit manual editing.
 - [ ] Associate tabs, terminals, language servers, processes, and agent events with their workspace.
 - [ ] Add safe cleanup eligibility; dirty/unintegrated work requires explicit preservation/discard decisions.

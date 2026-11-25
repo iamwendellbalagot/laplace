@@ -219,12 +219,22 @@ export interface ExecutionRecord {
   finishedAt: number | null;
 }
 
+export type RookMode = "ask" | "build";
+
+export interface RookSandboxStatus {
+  enabled: boolean;
+  runtime: "seatbelt" | "bwrap" | null;
+  available: boolean;
+}
+
 export interface RookInitResponse {
   sessionId: string;
   activeSessionId?: string;
   sessions?: RookSessionSummary[];
   messages?: RookSessionMessage[];
   hostSessionStorage?: boolean;
+  mode?: RookMode;
+  sandbox?: RookSandboxStatus | null;
   workspaceId: string;
   rookVersion: string;
   capabilities: Record<string, unknown>;
@@ -292,13 +302,6 @@ export interface RookAuthEvent {
   copyCodeOnConfirm?: boolean;
   intervalSeconds?: number;
   expiresInSeconds?: number;
-}
-
-export interface RookAuthPrompt {
-  type: "text" | "secret" | "manual_code" | "select";
-  message: string;
-  placeholder?: string;
-  options?: { id: string; label: string; description?: string }[];
 }
 
 export interface RookEvent {

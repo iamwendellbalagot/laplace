@@ -11,8 +11,10 @@ import { navigationItems, screenTitles } from "./app/navigation";
 import { AppServiceError, type AppService } from "./services/app-service";
 import type {
   AppEvent,
+  RookMode,
   RookModel,
   RookProvider,
+  RookSandboxStatus,
   RookSessionSummary,
   RookAuthEvent,
   RookAuthPrompt,
@@ -26,6 +28,7 @@ import type {
 import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
+import { RookPermissionCard } from "./features/rook/RookPermissionCard";
 
 type RookChatTool = {
   id: string;
@@ -140,6 +143,12 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [nativePending, setNativePending] = useState(false);
   const [activeProject, setActiveProject] = useState<ProjectSummary>();
   const [rookSession, setRookSession] = useState<string>();
+  const [rookMode, setRookMode] = useState<RookMode>("ask");
+  const [rookSandbox, setRookSandbox] = useState<RookSandboxStatus | null>(
+    null,
+  );
+  const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
+  const [rookTrustPromptPending, setRookTrustPromptPending] = useState(false);
   const [rookProviders, setRookProviders] = useState<RookProvider[]>([]);
   const [rookProviderControlsAvailable, setRookProviderControlsAvailable] =
     useState(false);
@@ -307,6 +316,9 @@ export function App({ service, browserPreview = false }: AppProps) {
         if (rookSession)
           void service.stopRookAsk(rookSession).catch(() => undefined);
         setRookSession(undefined);
+        setRookMode("ask");
+        setRookSandbox(null);
+        setRookTrustPromptPending(false);
         setRookProviders([]);
         setRookModels([]);
         setRookCurrentModel(null);
@@ -322,6 +334,9 @@ export function App({ service, browserPreview = false }: AppProps) {
       }
       rookProjectId.current = project.id;
       setActiveProject(project);
+      setWorkspaceTrusted(
+        await service.getWorkspaceTrust(project.id).catch(() => false),
+      );
       setChanges(await service.listChanges(project.id).catch(() => []));
       setExecutions(await service.listExecutions(project.id).catch(() => []));
       setProjectEntries(listing.entries);
@@ -348,8 +363,12 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
-  async function ensureRookSession(project: ProjectSummary) {
-    if (rookStarting.current || rookSession) return;
+  async function ensureRookSession(
+    project: ProjectSummary,
+    targetMode: RookMode = rookMode,
+    forceRestart = false,
+  ) {
+    if (rookStarting.current || (rookSession && !forceRestart)) return;
     rookProjectId.current = project.id;
     rookAttemptedProjectId.current = project.id;
     rookStarting.current = true;
@@ -358,7 +377,10 @@ export function App({ service, browserPreview = false }: AppProps) {
     let sessionId: string | undefined;
     try {
       const id = (sessionId = crypto.randomUUID().replaceAll("-", ""));
-      const result = await service.startRookAsk(id, project.path);
+      const result =
+        targetMode === "build"
+          ? await service.startRookBuild(id, project.path)
+          : await service.startRookAsk(id, project.path);
       if (rookProjectId.current !== project.id) {
         await service.stopRookAsk(id).catch(() => undefined);
         return;
@@ -374,6 +396,8 @@ export function App({ service, browserPreview = false }: AppProps) {
         await service.stopRookAsk(id).catch(() => undefined);
         return;
       }
+      setRookMode(result.mode ?? targetMode);
+      setRookSandbox(result.sandbox ?? null);
       setRookProviders(result.providers);
       setRookProviderControlsAvailable(
         result.capabilities.providerControls !== undefined,
@@ -400,17 +424,67 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
+  async function switchRookMode(nextMode: RookMode) {
+    if (
+      !activeProject ||
+      nextMode === rookMode ||
+      rookStarting.current ||
+      Boolean(rookRunId)
+    )
+      return;
+    if (nextMode === "build" && !workspaceTrusted) {
+      setRookTrustPromptPending(true);
+      return;
+    }
+    setRookTrustPromptPending(false);
+    const previousSession = rookSession;
+    setRookSession(undefined);
+    setRookMode(nextMode);
+    setRookSandbox(null);
+    if (previousSession)
+      await service.stopRookAsk(previousSession).catch(() => undefined);
+    await ensureRookSession(activeProject, nextMode, true);
+  }
+
+  async function trustAndEnableBuild() {
+    if (!activeProject || rookStarting.current || Boolean(rookRunId)) return;
+    setRookError(undefined);
+    try {
+      await service.trustWorkspace(activeProject.id);
+      setWorkspaceTrusted(true);
+      setRookTrustPromptPending(false);
+      const previousSession = rookSession;
+      setRookSession(undefined);
+      setRookMode("build");
+      setRookSandbox(null);
+      if (previousSession)
+        await service.stopRookAsk(previousSession).catch(() => undefined);
+      await ensureRookSession(activeProject, "build", true);
+    } catch (failure) {
+      setRookError(
+        errorMessage(failure, "Project trust could not be enabled."),
+      );
+    }
+  }
+
   async function startNewRookChat() {
     if (!rookSession) return;
     try {
-      const id = await service.newRookSession(rookSession);
+      const id = await service.newRookSession(rookSession, rookMode);
       setRookActiveSessionId(id);
       setRookMessages([]);
       setRookRunId(undefined);
       setRookError(undefined);
       setRookSessions(await service.listRookSessions(rookSession));
     } catch (failure) {
-      setRookError(errorMessage(failure, "The new Ask could not be started."));
+      setRookError(
+        errorMessage(
+          failure,
+          rookMode === "build"
+            ? "The new Build session could not be started."
+            : "The new Ask could not be started.",
+        ),
+      );
     }
   }
 
@@ -1041,6 +1115,13 @@ export function App({ service, browserPreview = false }: AppProps) {
             onNavigate={navigate}
             activeProject={activeProject}
             rookSession={rookSession}
+            rookMode={rookMode}
+            rookSandbox={rookSandbox}
+            workspaceTrusted={workspaceTrusted}
+            rookTrustPromptPending={rookTrustPromptPending}
+            onRookModeChange={(mode) => void switchRookMode(mode)}
+            onRookTrustBuild={() => void trustAndEnableBuild()}
+            onRookDismissTrustPrompt={() => setRookTrustPromptPending(false)}
             rookProviders={rookProviders}
             rookProviderControlsAvailable={rookProviderControlsAvailable}
             rookModels={rookModels}
@@ -1068,7 +1149,8 @@ export function App({ service, browserPreview = false }: AppProps) {
             onRookModelChange={setRookCurrentModel}
             onRookStart={() => {
               rookAttemptedProjectId.current = undefined;
-              if (activeProject) void ensureRookSession(activeProject);
+              if (activeProject)
+                void ensureRookSession(activeProject, rookMode, true);
             }}
             recentProjects={recentProjects}
             projectEntries={projectEntries}
@@ -1355,6 +1437,13 @@ interface ScreenContentProps {
   onNavigate: (page: PageId) => void;
   activeProject?: ProjectSummary;
   rookSession?: string;
+  rookMode: RookMode;
+  rookSandbox: RookSandboxStatus | null;
+  workspaceTrusted: boolean;
+  rookTrustPromptPending: boolean;
+  onRookModeChange: (mode: RookMode) => void;
+  onRookTrustBuild: () => void;
+  onRookDismissTrustPrompt: () => void;
   rookProviders: RookProvider[];
   rookProviderControlsAvailable: boolean;
   rookModels: RookModel[];
@@ -1772,10 +1861,25 @@ function VerifyScreen({
   );
 }
 
+function sandboxSummary(sandbox: RookSandboxStatus | null): string {
+  if (!sandbox) return "Sandbox policy active";
+  if (!sandbox.enabled) return "Unsandboxed host opt-out";
+  if (!sandbox.available) return "Sandbox unavailable · shell blocked";
+  if (sandbox.runtime === "seatbelt") return "Seatbelt sandbox · network off";
+  if (sandbox.runtime === "bwrap") return "Bubblewrap sandbox · network off";
+  return "OS sandbox active · network off";
+}
+
 function RookScreen({
   service,
   activeProject,
   rookSession: session,
+  rookMode,
+  rookSandbox,
+  rookTrustPromptPending,
+  onRookModeChange,
+  onRookTrustBuild,
+  onRookDismissTrustPrompt,
   rookProviders: providers,
   rookProviderControlsAvailable: providerControlsAvailable,
   rookModels: models,
@@ -1976,8 +2080,8 @@ function RookScreen({
             <button
               className="rook-new-session"
               type="button"
-              aria-label="New Ask"
-              title="New Ask"
+              aria-label={rookMode === "build" ? "New Build" : "New Ask"}
+              title={rookMode === "build" ? "New Build" : "New Ask"}
               disabled={!session || pending || Boolean(runId)}
               onClick={onRookNewSession}
             >
@@ -2033,11 +2137,40 @@ function RookScreen({
             <h2>
               {messages
                 .find((message) => message.role === "user")
-                ?.text.slice(0, 80) ?? "New Ask"}
+                ?.text.slice(0, 80) ??
+                (rookMode === "build" ? "New Build" : "New Ask")}
             </h2>
-            <p>{activeProject.name} · Reads your project · won’t edit files</p>
+            <p>
+              {rookMode === "build"
+                ? `${activeProject.name} · Edits this repository directly · ${sandboxSummary(rookSandbox)}`
+                : `${activeProject.name} · Reads your project · won’t edit files`}
+            </p>
           </div>
           <div className="rook-chat-actions">
+            <div
+              className="rook-mode-toggle"
+              role="group"
+              aria-label="Rook mode"
+            >
+              <button
+                type="button"
+                aria-pressed={rookMode === "ask"}
+                className={rookMode === "ask" ? "is-active" : ""}
+                disabled={rookPending || Boolean(runId)}
+                onClick={() => onRookModeChange("ask")}
+              >
+                Ask
+              </button>
+              <button
+                type="button"
+                aria-pressed={rookMode === "build"}
+                className={rookMode === "build" ? "is-active" : ""}
+                disabled={rookPending || Boolean(runId)}
+                onClick={() => onRookModeChange("build")}
+              >
+                Build
+              </button>
+            </div>
             {providerControlsAvailable && (
               <Dialog.Root
                 open={modelPickerOpen}
@@ -2458,12 +2591,50 @@ function RookScreen({
             </button>
           </div>
         )}
+        {rookTrustPromptPending && (
+          <div
+            className="rook-trust-banner"
+            role="region"
+            aria-label="Trust project for Build"
+          >
+            <p>
+              <strong>Trust {activeProject.name} to enable Build?</strong> Rook
+              Build edits files and runs sandboxed commands directly in this
+              repository.
+            </p>
+            <div className="rook-trust-banner-actions">
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={rookPending}
+                onClick={onRookTrustBuild}
+              >
+                Trust project &amp; switch to Build
+              </button>
+              <button
+                className="button button-quiet"
+                type="button"
+                onClick={onRookDismissTrustPrompt}
+              >
+                Stay in Ask
+              </button>
+            </div>
+          </div>
+        )}
         <div className="rook-conversation" aria-live="polite">
           {messages.length === 0 && (
             <div className="rook-welcome">
               <span aria-hidden="true">✳</span>
-              <h3>What would you like to know?</h3>
-              <p>Ask about code, architecture, or how this project works.</p>
+              <h3>
+                {rookMode === "build"
+                  ? "What would you like to build?"
+                  : "What would you like to know?"}
+              </h3>
+              <p>
+                {rookMode === "build"
+                  ? "Edit files and run checks directly in this repository."
+                  : "Ask about code, architecture, or how this project works."}
+              </p>
             </div>
           )}
           {messages.length > 0 &&
@@ -2520,35 +2691,15 @@ function RookScreen({
             })}
         </div>
         {session && permission && (
-          <section
-            className="permission-card"
-            aria-label="Rook permission request"
-          >
-            <p>
-              Rook requests{" "}
-              {String(permission.request.access ?? "external access")} with{" "}
-              {String(permission.request.toolName ?? "tool")}
-            </p>
-            <pre>{JSON.stringify(permission.request, null, 2)}</pre>
-            {(["once", "session", "deny"] as const).map((choice) => (
-              <button
-                key={choice}
-                type="button"
-                onClick={() =>
-                  void service
-                    .respondRookPermission(
-                      session,
-                      permission.permissionId,
-                      choice,
-                    )
-                    .then(() => setPermission(undefined))
-                    .catch((failure) => setError(String(failure)))
-                }
-              >
-                {choice === "deny" ? "Deny" : `Allow ${choice}`}
-              </button>
-            ))}
-          </section>
+          <RookPermissionCard
+            request={permission.request}
+            onRespond={(choice) =>
+              void service
+                .respondRookPermission(session, permission.permissionId, choice)
+                .then(() => setPermission(undefined))
+                .catch((failure) => setError(String(failure)))
+            }
+          />
         )}
         <form
           className="rook-composer"
@@ -2600,14 +2751,22 @@ function RookScreen({
           )}
           <textarea
             id="rook-prompt"
-            aria-label="Ask about this project"
+            aria-label={
+              rookMode === "build"
+                ? "Instruct Rook Build for this project"
+                : "Ask about this project"
+            }
             value={prompt}
             onChange={(event) => {
               setPrompt(event.target.value);
               onRookDraftSave(event.target.value);
             }}
             maxLength={64000}
-            placeholder="Message Rook…"
+            placeholder={
+              rookMode === "build"
+                ? "Describe changes to make in this repository…"
+                : "Message Rook…"
+            }
             disabled={Boolean(runId)}
           />
           {session && runId ? (
@@ -2628,7 +2787,7 @@ function RookScreen({
                 !prompt.trim()
               }
             >
-              Ask
+              {rookMode === "build" ? "Build" : "Ask"}
             </button>
           )}
         </form>

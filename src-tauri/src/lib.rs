@@ -39,6 +39,22 @@ static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 #[derive(Default)]
 struct DomainDatabase(Mutex<Option<SqlitePool>>);
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum RookMode {
+    Ask,
+    Build,
+}
+
+impl RookMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Build => "build",
+        }
+    }
+}
+
 #[derive(Default)]
 struct RookProcesses(Mutex<HashMap<String, Arc<Mutex<RookProcess>>>>);
 
@@ -50,6 +66,8 @@ struct RookProcess {
     pending_auth_logins: HashSet<String>,
     workspace_path: PathBuf,
     session_storage: bool,
+    mode: RookMode,
+    active_run: Arc<AtomicBool>,
 }
 
 impl Drop for RookProcesses {
@@ -96,9 +114,26 @@ impl RookProcesses {
             if let Ok(mut pending) = process.pending.lock() {
                 pending.clear();
             }
+            process.active_run.store(false, Ordering::SeqCst);
             let _ = process.child.kill();
         }
         Ok(())
+    }
+
+    fn has_active_build(&self, workspace_root: &Path) -> bool {
+        let Ok(processes) = self.0.lock() else {
+            return false;
+        };
+        processes.values().any(|entry| {
+            entry
+                .lock()
+                .map(|process| {
+                    process.mode == RookMode::Build
+                        && process.workspace_path == workspace_root
+                        && process.active_run.load(Ordering::SeqCst)
+                })
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -1826,6 +1861,7 @@ async fn read_project_file(
 
 #[tauri::command]
 async fn save_project_file(
+    processes: tauri::State<'_, RookProcesses>,
     request: SaveProjectFileRequest,
 ) -> Result<SaveProjectFileResponse, IpcError> {
     if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
@@ -1836,6 +1872,16 @@ async fn save_project_file(
             request.operation_id,
             false,
         ));
+    }
+    if let Ok(canonical) = fs::canonicalize(&request.project_id) {
+        if processes.has_active_build(&canonical) {
+            return Err(IpcError::new(
+                "build_run_active",
+                "Stop Rook Build before saving files in this workspace.",
+                request.operation_id,
+                true,
+            ));
+        }
     }
     save_project_file_contents(
         &request.project_id,
@@ -2048,6 +2094,60 @@ async fn start_terminal(
 }
 
 #[tauri::command]
+async fn get_workspace_trust(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    trusted: tauri::State<'_, TrustedWorkspaces>,
+    request: GitRequest,
+) -> Result<bool, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_trust_request",
+            "The workspace trust request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = fs::canonicalize(&request.project_id).map_err(|_| {
+        terminal_error(
+            "workspace_unavailable",
+            "The workspace is no longer available.",
+            &request.operation_id,
+        )
+    })?;
+    if trusted.contains(&root)? {
+        return Ok(true);
+    }
+    let pool = open_domain_database(&app, &db).await?;
+    let row = sqlx::query("SELECT project_id FROM trusted_workspaces WHERE project_id = ?")
+        .bind(root.to_string_lossy().as_ref())
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| {
+            terminal_error(
+                "trust_read_failed",
+                "Workspace trust could not be checked.",
+                &request.operation_id,
+            )
+        })?;
+    if row.is_some() {
+        trusted
+            .0
+            .lock()
+            .map_err(|_| {
+                terminal_error(
+                    "trust_unavailable",
+                    "Workspace trust is temporarily unavailable.",
+                    &request.operation_id,
+                )
+            })?
+            .insert(root.to_string_lossy().into_owned());
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[tauri::command]
 async fn trust_workspace(
     app: tauri::AppHandle,
     db: tauri::State<'_, DomainDatabase>,
@@ -2152,6 +2252,7 @@ async fn untrust_workspace(
                         if let Ok(mut pending) = process.pending.lock() {
                             pending.clear();
                         }
+                        process.active_run.store(false, Ordering::SeqCst);
                         let _ = process.child.kill();
                     }
                 }
@@ -2918,7 +3019,30 @@ async fn start_rook_ask(
     app: tauri::AppHandle,
     processes: tauri::State<'_, RookProcesses>,
     database: tauri::State<'_, DomainDatabase>,
+    trusted: tauri::State<'_, TrustedWorkspaces>,
     request: RookRequest,
+) -> Result<RookInitResponse, IpcError> {
+    start_rook_session(app, processes, database, trusted, request, RookMode::Ask).await
+}
+
+#[tauri::command]
+async fn start_rook_build(
+    app: tauri::AppHandle,
+    processes: tauri::State<'_, RookProcesses>,
+    database: tauri::State<'_, DomainDatabase>,
+    trusted: tauri::State<'_, TrustedWorkspaces>,
+    request: RookRequest,
+) -> Result<RookInitResponse, IpcError> {
+    start_rook_session(app, processes, database, trusted, request, RookMode::Build).await
+}
+
+async fn start_rook_session(
+    app: tauri::AppHandle,
+    processes: tauri::State<'_, RookProcesses>,
+    database: tauri::State<'_, DomainDatabase>,
+    trusted: tauri::State<'_, TrustedWorkspaces>,
+    request: RookRequest,
+    mode: RookMode,
 ) -> Result<RookInitResponse, IpcError> {
     if request.schema_version != IPC_SCHEMA_VERSION
         || !validate_operation_id(&request.operation_id)
@@ -2944,12 +3068,42 @@ async fn start_rook_ask(
             &request.operation_id,
         ));
     }
+    if mode == RookMode::Build {
+        let mut is_trusted = trusted.contains(&root)?;
+        if !is_trusted {
+            let pool = open_domain_database(&app, &database).await?;
+            let row = sqlx::query("SELECT project_id FROM trusted_workspaces WHERE project_id = ?")
+                .bind(root.to_string_lossy().as_ref())
+                .fetch_optional(&pool)
+                .await
+                .map_err(|_| {
+                    terminal_error(
+                        "trust_read_failed",
+                        "Workspace trust could not be checked.",
+                        &request.operation_id,
+                    )
+                })?;
+            if row.is_some() {
+                if let Ok(mut guard) = trusted.0.lock() {
+                    guard.insert(root.to_string_lossy().into_owned());
+                }
+                is_trusted = true;
+            }
+        }
+        if !is_trusted {
+            return Err(terminal_error(
+                "workspace_not_trusted",
+                "Trust this project before starting Rook Build.",
+                &request.operation_id,
+            ));
+        }
+    }
     let rook_bin = if tauri::is_dev() {
         let settings = read_rook_dev_settings(&rook_dev_settings_path(&app)?)?;
         let path = settings.checkout_path.ok_or_else(|| {
             terminal_error(
                 "rook_checkout_required",
-                "Select a local Rook checkout in Settings → Developer before starting Ask.",
+                "Select a local Rook checkout in Settings → Developer before starting Rook.",
                 &request.operation_id,
             )
         })?;
@@ -2971,9 +3125,10 @@ async fn start_rook_ask(
             &request.operation_id,
         )
     })?;
-    let workspace_sessions_dir = app_data_dir
-        .join("rook-sessions")
-        .join(format!("{:x}", Sha256::digest(root.to_string_lossy().as_bytes())));
+    let workspace_sessions_dir = app_data_dir.join("rook-sessions").join(format!(
+        "{:x}",
+        Sha256::digest(root.to_string_lossy().as_bytes())
+    ));
     fs::create_dir_all(&workspace_sessions_dir).map_err(|_| {
         terminal_error(
             "rook_session_path_unavailable",
@@ -2985,11 +3140,13 @@ async fn start_rook_ask(
         &root,
         &workspace_sessions_dir,
         rook_bin.as_deref(),
+        mode,
         &request.operation_id,
     )?;
     let pending: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<serde_json::Value>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let next_request = Arc::new(AtomicU64::new(10));
+    let active_run = Arc::new(AtomicBool::new(false));
     let mut stdin = child.stdin.take().ok_or_else(|| {
         terminal_error(
             "rook_start_failed",
@@ -3021,13 +3178,22 @@ async fn start_rook_ask(
         )
     })?;
     let value: serde_json::Value = serde_json::from_str(&line).map_err(|_| {
+        let _ = child.kill();
         terminal_error(
             "rook_protocol_invalid",
-            "Rook returned an invalid initialization response.",
+            if mode == RookMode::Build {
+                "Rook returned an invalid initialization response. Update your Rook checkout for Build mode."
+            } else {
+                "Rook returned an invalid initialization response."
+            },
             &request.operation_id,
         )
     })?;
-    let result = match parse_rook_initialize_response(&value, &request.operation_id) {
+    let parsed = match mode {
+        RookMode::Ask => parse_rook_initialize_response(&value, &request.operation_id),
+        RookMode::Build => parse_rook_build_initialize_response(&value, &request.operation_id),
+    };
+    let result = match parsed {
         Ok(result) => result,
         Err(error) => {
             let _ = child.kill();
@@ -3078,11 +3244,11 @@ async fn start_rook_ask(
                 serde_json::json!({"sessionId": saved}),
                 &request.operation_id,
             )?;
-            if loaded["mode"] != "ask" || loaded["sessionId"] != saved {
+            if loaded["mode"] != mode.as_str() || loaded["sessionId"] != saved {
                 let _ = child.kill();
                 return Err(terminal_error(
                     "rook_session_failed",
-                    "Rook could not reopen the selected Ask session.",
+                    "Rook could not reopen the selected session.",
                     &request.operation_id,
                 ));
             }
@@ -3093,16 +3259,19 @@ async fn start_rook_ask(
                 &mut stdout,
                 3,
                 "session/new",
-                serde_json::json!({"mode":"ask"}),
+                serde_json::json!({"mode": mode.as_str()}),
                 &request.operation_id,
             )?;
-            created["sessionId"].as_str().ok_or_else(|| {
-                terminal_error(
-                    "rook_session_failed",
-                    "Rook did not create an Ask session.",
-                    &request.operation_id,
-                )
-            })?.to_owned()
+            created["sessionId"]
+                .as_str()
+                .ok_or_else(|| {
+                    terminal_error(
+                        "rook_session_failed",
+                        "Rook did not create a session.",
+                        &request.operation_id,
+                    )
+                })?
+                .to_owned()
         };
         let session_list = rook_rpc(
             &mut stdin,
@@ -3129,26 +3298,33 @@ async fn start_rook_ask(
             &mut stdout,
             2,
             "session/new",
-            serde_json::json!({"mode":"ask"}),
+            serde_json::json!({"mode": mode.as_str()}),
             &request.operation_id,
         )?;
-        let id = created["sessionId"].as_str().ok_or_else(|| {
-            terminal_error(
-                "rook_session_failed",
-                "Rook did not create an Ask session.",
-                &request.operation_id,
-            )
-        })?.to_owned();
+        let id = created["sessionId"]
+            .as_str()
+            .ok_or_else(|| {
+                terminal_error(
+                    "rook_session_failed",
+                    "Rook did not create a session.",
+                    &request.operation_id,
+                )
+            })?
+            .to_owned();
         (id, serde_json::json!([]))
     };
     let app_events = app.clone();
     let process_id = request.session_id.clone();
     let pending_events = Arc::clone(&pending);
+    let active_run_events = Arc::clone(&active_run);
     std::thread::spawn(move || {
         let mut line = String::new();
         while std::io::BufRead::read_line(&mut stdout, &mut line).unwrap_or(0) > 0 {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                 if value["method"] == "session/update" {
+                    if value["params"]["event"]["type"] == "run_settled" {
+                        active_run_events.store(false, Ordering::SeqCst);
+                    }
                     if let Some(request_id) = value["params"]["requestId"].as_u64() {
                         if let Ok(mut waiting) = pending_events.lock() {
                             if let Some(sender) = waiting.remove(&request_id) {
@@ -3163,6 +3339,7 @@ async fn start_rook_ask(
                     if let Ok(mut waiting) = pending_events.lock() {
                         if let Some(sender) = waiting.remove(&id) {
                             if value["result"]["settled"] == true {
+                                active_run_events.store(false, Ordering::SeqCst);
                                 if let Some(run_id) = value["result"]["runId"].as_str() {
                                     let settled = serde_json::json!({
                                         "method": "session/update",
@@ -3176,6 +3353,8 @@ async fn start_rook_ask(
                                         serde_json::json!({"sessionId":process_id,"message":settled}),
                                     );
                                 }
+                            } else if !value["error"].is_null() {
+                                active_run_events.store(false, Ordering::SeqCst);
                             }
                             let _ = sender.send(value);
                             line.clear();
@@ -3201,6 +3380,7 @@ async fn start_rook_ask(
             }
             line.clear();
         }
+        active_run_events.store(false, Ordering::SeqCst);
     });
     let response = RookInitResponse {
         session_id: request.session_id.clone(),
@@ -3208,6 +3388,11 @@ async fn start_rook_ask(
         sessions: session_summaries,
         messages: history_messages,
         host_session_storage,
+        mode,
+        sandbox: result["capabilities"]
+            .get("sandbox")
+            .filter(|value| !value.is_null())
+            .cloned(),
         workspace_id: result["workspaceId"]
             .as_str()
             .unwrap_or_default()
@@ -3243,6 +3428,8 @@ async fn start_rook_ask(
                 pending_auth_logins: HashSet::new(),
                 workspace_path: root.clone(),
                 session_storage: host_session_storage,
+                mode,
+                active_run,
             })),
         );
     Ok(response)
@@ -3277,10 +3464,39 @@ fn parse_rook_initialize_response<'a>(
     Ok(result)
 }
 
+fn parse_rook_build_initialize_response<'a>(
+    value: &'a serde_json::Value,
+    operation_id: &str,
+) -> Result<&'a serde_json::Value, IpcError> {
+    if !value["error"].is_null() {
+        return Err(terminal_error(
+            "rook_protocol_failed",
+            value["error"]["message"]
+                .as_str()
+                .unwrap_or("Rook rejected Build initialization."),
+            operation_id,
+        ));
+    }
+    let result = &value["result"];
+    if result["protocolVersion"] != 1
+        || result["capabilities"]["mode"] != "build"
+        || result["capabilities"]["buildSessions"] != true
+        || result["capabilities"]["buildTools"].as_array().is_none()
+    {
+        return Err(terminal_error(
+            "rook_build_unsupported",
+            "This Rook version does not advertise authorized Build sessions.",
+            operation_id,
+        ));
+    }
+    Ok(result)
+}
+
 fn spawn_rook(
     root: &Path,
     session_dir: &Path,
     rook_bin: Option<&str>,
+    mode: RookMode,
     operation_id: &str,
 ) -> Result<std::process::Child, IpcError> {
     let mut command = if let Some(path) = rook_bin.filter(|path| path.ends_with(".mjs")) {
@@ -3292,9 +3508,11 @@ fn spawn_rook(
     } else {
         Command::new("rook")
     };
+    command.args(["--stdio", "--cwd"]).arg(root);
+    if mode == RookMode::Build {
+        command.args(["--mode", "build"]);
+    }
     command
-        .args(["--stdio", "--cwd"])
-        .arg(root)
         .env("LAPLACE_ROOK_SESSION_DIR", session_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -3365,7 +3583,7 @@ async fn save_rook_workspace_session(
     sqlx::query("INSERT INTO rook_workspace_sessions (project_id, session_id, updated_at) VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at")
         .bind(root.to_string_lossy().as_ref())
         .bind(session_id)
-        .bind(now_ms() as i64)
+        .bind(now_ms())
         .execute(pool)
         .await
         .map(|_| ())
@@ -3446,13 +3664,15 @@ async fn prompt_rook_ask(
             )
         })?
         .insert(request_id, tokio::sync::oneshot::channel().0);
+    process.active_run.store(true, Ordering::SeqCst);
     if writeln!(process.stdin, "{}", prompt).is_err() {
+        process.active_run.store(false, Ordering::SeqCst);
         if let Ok(mut pending) = process.pending.lock() {
             pending.remove(&request_id);
         }
         return Err(terminal_error(
             "rook_protocol_failed",
-            "The Ask prompt could not be sent.",
+            "The prompt could not be sent.",
             &request.operation_id,
         ));
     }
@@ -3713,10 +3933,16 @@ async fn rook_provider_request(
         let mut params = request.params;
         if request.method == "session/prompt" {
             params["context"] = serde_json::json!("");
+            process.active_run.store(true, Ordering::SeqCst);
+        } else if request.method == "session/new" && params.get("mode").is_none() {
+            params["mode"] = serde_json::json!(process.mode.as_str());
         }
         let message =
             serde_json::json!({"jsonrpc":"2.0","id":id,"method":request.method,"params":params});
         if writeln!(process.stdin, "{message}").is_err() {
+            if request.method == "session/prompt" {
+                process.active_run.store(false, Ordering::SeqCst);
+            }
             process
                 .pending
                 .lock()
@@ -3920,6 +4146,9 @@ struct RookInitResponse {
     sessions: serde_json::Value,
     messages: serde_json::Value,
     host_session_storage: bool,
+    mode: RookMode,
+    #[serde(default)]
+    sandbox: Option<serde_json::Value>,
     workspace_id: String,
     rook_version: String,
     capabilities: serde_json::Value,
@@ -5200,6 +5429,7 @@ mod rook_start_tests {
             Path::new("/tmp"),
             Path::new("/tmp/laplace-test-rook-sessions"),
             Some("/laplace-test/missing-rook"),
+            RookMode::Ask,
             "rook-test-op",
         )
         .unwrap_err();
@@ -5288,6 +5518,84 @@ mod rook_start_tests {
         let error = parse_rook_initialize_response(&response, "rook-init-cap").unwrap_err();
         assert_eq!(error.code, "rook_capability_mismatch");
     }
+
+    #[test]
+    fn build_initialize_accepts_build_capabilities_and_rejects_ask_only() {
+        let build_ok = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": 1,
+                "capabilities": {
+                    "mode": "build",
+                    "buildSessions": true,
+                    "buildTools": ["read", "edit", "write", "bash"],
+                    "sandbox": { "enabled": true, "runtime": "seatbelt", "available": true }
+                }
+            }
+        });
+        let parsed = parse_rook_build_initialize_response(&build_ok, "rook-build-ok").unwrap();
+        assert_eq!(parsed["capabilities"]["mode"], "build");
+        assert_eq!(
+            parse_rook_initialize_response(&build_ok, "rook-ask-reject")
+                .unwrap_err()
+                .code,
+            "rook_capability_mismatch"
+        );
+        let ask_only = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "protocolVersion": 1,
+                "capabilities": {
+                    "mode": "ask",
+                    "buildSessions": false,
+                    "immutableReadOnlyTools": ["read"]
+                }
+            }
+        });
+        assert_eq!(
+            parse_rook_build_initialize_response(&ask_only, "rook-build-old")
+                .unwrap_err()
+                .code,
+            "rook_build_unsupported"
+        );
+    }
+
+    #[test]
+    fn active_build_guard_blocks_only_running_build_workspace() {
+        let processes = RookProcesses::default();
+        let workspace = PathBuf::from("/tmp/laplace-build-guard");
+        let active_run = Arc::new(AtomicBool::new(true));
+        let child = Command::new("/bin/sh")
+            .args(["-c", "sleep 5"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut child = child;
+        let stdin = child.stdin.take().unwrap();
+        processes.0.lock().unwrap().insert(
+            "build-1".to_owned(),
+            Arc::new(Mutex::new(RookProcess {
+                child,
+                stdin,
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                next_request: Arc::new(AtomicU64::new(10)),
+                pending_auth_logins: HashSet::new(),
+                workspace_path: workspace.clone(),
+                session_storage: false,
+                mode: RookMode::Build,
+                active_run: Arc::clone(&active_run),
+            })),
+        );
+        assert!(processes.has_active_build(&workspace));
+        assert!(!processes.has_active_build(Path::new("/tmp/other")));
+        active_run.store(false, Ordering::SeqCst);
+        assert!(!processes.has_active_build(&workspace));
+        processes.stop("build-1", "op-stop").unwrap();
+    }
 }
 
 pub fn run() {
@@ -5312,6 +5620,7 @@ pub fn run() {
             start_terminal,
             write_terminal,
             stop_terminal,
+            get_workspace_trust,
             trust_workspace,
             untrust_workspace,
             list_changes,
@@ -5326,6 +5635,7 @@ pub fn run() {
             run_project_recipe,
             cancel_check,
             start_rook_ask,
+            start_rook_build,
             prompt_rook_ask,
             stop_rook_ask,
             cancel_rook_ask,

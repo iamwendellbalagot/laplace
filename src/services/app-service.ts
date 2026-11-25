@@ -33,6 +33,7 @@ import {
   type WorktreeRecord,
   type ExecutionRecord,
   type RookInitResponse,
+  type RookMode,
   type RookEvent,
   type RookPermissionChoice,
   type RookModel,
@@ -77,6 +78,7 @@ export interface AppService {
     cols?: number,
   ): Promise<void>;
   stopTerminal(sessionId: string, workspaceId: string): Promise<void>;
+  getWorkspaceTrust(projectId: string): Promise<boolean>;
   trustWorkspace(projectId: string): Promise<void>;
   untrustWorkspace(projectId: string): Promise<void>;
   listChanges(projectId: string): Promise<ChangeRecord[]>;
@@ -108,8 +110,12 @@ export interface AppService {
     sessionId: string,
     workspaceId: string,
   ): Promise<RookInitResponse>;
+  startRookBuild(
+    sessionId: string,
+    workspaceId: string,
+  ): Promise<RookInitResponse>;
   listRookSessions(sessionId: string): Promise<RookSessionSummary[]>;
-  newRookSession(sessionId: string): Promise<string>;
+  newRookSession(sessionId: string, mode?: RookMode): Promise<string>;
   loadRookSession(sessionId: string, rookSessionId: string): Promise<void>;
   getRookSessionHistory(sessionId: string): Promise<RookSessionMessage[]>;
   listRookModels(
@@ -195,6 +201,15 @@ export class TauriAppService implements AppService {
     await invoke("stop_terminal", {
       request: this.terminalRequest(sessionId, workspaceId),
     });
+  }
+
+  async getWorkspaceTrust(projectId: string): Promise<boolean> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<boolean>("get_workspace_trust", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async trustWorkspace(projectId: string): Promise<void> {
@@ -361,13 +376,35 @@ export class TauriAppService implements AppService {
     }
   }
 
+  async startRookBuild(
+    sessionId: string,
+    workspaceId: string,
+  ): Promise<RookInitResponse> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      sessionId,
+      workspaceId,
+    };
+    try {
+      return await invoke("start_rook_build", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
   async listRookSessions(sessionId: string): Promise<RookSessionSummary[]> {
     const result = await this.rookSessionRequest(sessionId, "session/list");
     return (result.sessions ?? []) as RookSessionSummary[];
   }
 
-  async newRookSession(sessionId: string): Promise<string> {
-    const result = await this.rookSessionRequest(sessionId, "session/new");
+  async newRookSession(
+    sessionId: string,
+    mode: RookMode = "ask",
+  ): Promise<string> {
+    const result = await this.rookSessionRequest(sessionId, "session/new", {
+      mode,
+    });
     return result.sessionId as string;
   }
 
@@ -400,7 +437,7 @@ export class TauriAppService implements AppService {
         operationId: crypto.randomUUID(),
         sessionId,
         method,
-        params: method === "session/new" ? { mode: "ask" } : params,
+        params,
       },
     });
   }

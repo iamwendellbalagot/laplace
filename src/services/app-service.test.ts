@@ -49,6 +49,58 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("checks workspace trust and starts Rook Build sessions over native IPC", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce({
+        sessionId: "build1",
+        workspaceId: "file:///work/project",
+        rookVersion: "0.1.6",
+        mode: "build",
+        sandbox: { enabled: true, runtime: "seatbelt", available: true },
+        capabilities: { mode: "build", buildSessions: true },
+        providers: [],
+        currentModel: null,
+      })
+      .mockResolvedValueOnce({ sessionId: "session-build-2" });
+    const service = new TauriAppService();
+
+    await expect(service.getWorkspaceTrust("/work/project")).resolves.toBe(
+      true,
+    );
+    await expect(
+      service.startRookBuild("build1", "/work/project"),
+    ).resolves.toMatchObject({ mode: "build" });
+    await expect(service.newRookSession("build1", "build")).resolves.toBe(
+      "session-build-2",
+    );
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_workspace_trust", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "start_rook_build", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "build1",
+        workspaceId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "rook_provider_request", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "build1",
+        method: "session/new",
+        params: { mode: "build" },
+      },
+    });
+  });
+
   it("sends Rook prompts without a separate context field", async () => {
     mocks.invoke.mockResolvedValue(undefined);
 
