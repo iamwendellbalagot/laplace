@@ -54,6 +54,83 @@ function clampPanelSize(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function EdgeBracketTab({
+  side,
+  icon,
+  className,
+  ariaControls,
+  ariaExpanded,
+  ariaHidden,
+  ariaLabel,
+  title,
+  tabIndex,
+  onClick,
+}: {
+  side: "left" | "right";
+  icon: "files" | "rook";
+  className: string;
+  ariaControls: string;
+  ariaExpanded: boolean;
+  ariaHidden?: boolean;
+  ariaLabel: string;
+  title: string;
+  tabIndex?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`edge-bracket-tab edge-bracket-${side} ${className}`}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
+      aria-hidden={ariaHidden}
+      tabIndex={tabIndex}
+      aria-label={ariaLabel}
+      title={title}
+      onClick={onClick}
+    >
+      <svg
+        className="edge-bracket-frame"
+        width="28"
+        height="72"
+        viewBox="0 0 28 72"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          className="edge-bracket-fill"
+          d="M 0 0 C 0 11 21 10 25 20 V 52 C 21 62 0 61 0 72 Z"
+        />
+        <path
+          className="edge-bracket-stroke"
+          d="M 1 2 C 2 11 21 10.5 25 20 V 52 C 21 61.5 2 61 1 70"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+        />
+      </svg>
+      <span className="edge-bracket-icon" aria-hidden="true">
+        {icon === "files" ? (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M5 3.5v8.75M5 10.25c0-2.1 4.25-1.6 4.25-3.75"
+              stroke="currentColor"
+              strokeWidth="1.45"
+              strokeLinecap="round"
+            />
+            <circle cx="5" cy="3.25" r="1.35" fill="currentColor" />
+            <circle cx="5" cy="12.5" r="1.35" fill="currentColor" />
+            <circle cx="9.25" cy="6.25" r="1.35" fill="currentColor" />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M4.2 2.5h1.5v1.6h1.55V2.5h1.5v1.6h1.55V2.5h1.5v3.1l-1.2 1.15v4.75l1.1 1.15V14H4.3v-1.35l1.1-1.15V6.75L4.2 5.6V2.5Z" />
+          </svg>
+        )}
+      </span>
+    </button>
+  );
+}
+
 function WorkspaceTools({
   service,
   activeProject,
@@ -905,14 +982,15 @@ export function WorkspaceScreen({
             />
           )}
 
-          <button
-            type="button"
+          <EdgeBracketTab
+            side="left"
+            icon="files"
             className="files-dock-toggle"
-            aria-expanded={!explorerCollapsed}
-            aria-controls="workspace-files-dock"
-            aria-hidden={!explorerCollapsed}
+            ariaExpanded={!explorerCollapsed}
+            ariaControls="workspace-files-dock"
+            ariaHidden={!explorerCollapsed}
             tabIndex={explorerCollapsed ? 0 : -1}
-            aria-label="Show file explorer"
+            ariaLabel="Show file explorer"
             title="Show file explorer (⌘B)"
             onClick={() =>
               void onPreferencesChange({
@@ -920,11 +998,7 @@ export function WorkspaceScreen({
                 explorerCollapsed: false,
               })
             }
-          >
-            <span className="files-dock-toggle-icon" aria-hidden="true">
-              ›
-            </span>
-          </button>
+          />
         </div>
       )}
 
@@ -1535,12 +1609,13 @@ export function WorkspaceScreen({
       <div
         className={`rook-dock-floating${preferences.inspectorCollapsed ? " is-collapsed" : ""}${isResizingInspector ? " is-resizing" : ""}`}
       >
-        <button
-          type="button"
+        <EdgeBracketTab
+          side="right"
+          icon="rook"
           className="rook-dock-toggle"
-          aria-expanded={!preferences.inspectorCollapsed}
-          aria-controls="workspace-rook-dock"
-          aria-label={
+          ariaExpanded={!preferences.inspectorCollapsed}
+          ariaControls="workspace-rook-dock"
+          ariaLabel={
             preferences.inspectorCollapsed ? "Show Rook dock" : "Hide Rook dock"
           }
           title={
@@ -1554,24 +1629,7 @@ export function WorkspaceScreen({
               inspectorCollapsed: !preferences.inspectorCollapsed,
             })
           }
-        >
-          <svg
-            className="rook-dock-toggle-icon"
-            width="14"
-            height="14"
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M6.25 3.5L10.75 8L6.25 12.5"
-              stroke="currentColor"
-              strokeWidth="1.75"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        />
 
         {!preferences.inspectorCollapsed && (
           <div

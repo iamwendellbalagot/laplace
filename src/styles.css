@@ -5194,48 +5194,67 @@ kbd,
   border-right-width: 0;
   transform: translate3d(-10px, 0, 0);
 }
-.rook-dock-toggle,
-.files-dock-toggle {
+.edge-bracket-tab {
   position: absolute;
   top: 50%;
   z-index: 3;
   display: grid;
-  width: 24px;
-  height: 56px;
+  width: 28px;
+  height: 72px;
   padding: 0;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--border) 95%, white 10%);
-  background: color-mix(in srgb, var(--shell) 94%, transparent);
-  backdrop-filter: blur(14px);
-  color: var(--muted);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
   cursor: pointer;
   pointer-events: auto;
   transform: translateY(-50%);
   transition:
-    color 140ms ease,
-    background-color 140ms ease,
-    border-color 140ms ease,
-    box-shadow 140ms ease;
-}
-.rook-dock-toggle {
-  left: -24px;
-  border-right: 0;
-  border-radius: 8px 0 0 8px;
-  box-shadow: -6px 4px 16px rgb(0 0 0 / 26%);
-}
-.files-dock-toggle {
-  right: -24px;
-  border-left: 0;
-  border-radius: 0 8px 8px 0;
-  box-shadow: 6px 4px 16px rgb(0 0 0 / 22%);
-  transition:
-    color 140ms ease,
-    background-color 140ms ease,
-    border-color 140ms ease,
-    box-shadow 140ms ease,
     opacity 160ms ease,
     transform 180ms ease,
-    visibility 160ms ease;
+    visibility 160ms ease,
+    filter 140ms ease;
+}
+.edge-bracket-frame {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 32%));
+}
+.edge-bracket-right .edge-bracket-frame {
+  transform: scaleX(-1);
+}
+.edge-bracket-fill {
+  fill: var(--canvas);
+  transition: fill 140ms ease;
+}
+.app-shell[data-theme="light"] .edge-bracket-fill {
+  fill: var(--surface);
+}
+.edge-bracket-stroke {
+  stroke: var(--green);
+  transition: stroke 140ms ease;
+}
+.edge-bracket-icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+}
+.edge-bracket-left .edge-bracket-icon {
+  transform: translateX(-2px);
+}
+.edge-bracket-right .edge-bracket-icon {
+  transform: translateX(2px);
+}
+.rook-dock-toggle {
+  left: -27px;
+}
+.files-dock-toggle {
+  right: -28px;
 }
 .files-side-dock:not(.is-collapsed) .files-dock-toggle {
   opacity: 0;
@@ -5243,44 +5262,16 @@ kbd,
   pointer-events: none;
   transform: translate(-8px, -50%);
 }
-.app-shell[data-theme="light"] .rook-dock-toggle {
-  border-color: var(--border);
-  box-shadow: -6px 4px 16px rgb(15 23 42 / 10%);
+.edge-bracket-tab:hover .edge-bracket-fill,
+.edge-bracket-tab:focus-visible .edge-bracket-fill {
+  fill: var(--shell);
 }
-.app-shell[data-theme="light"] .files-dock-toggle {
-  border-color: var(--border);
-  box-shadow: 6px 4px 16px rgb(15 23 42 / 10%);
+.edge-bracket-tab:hover .edge-bracket-stroke,
+.edge-bracket-tab:focus-visible .edge-bracket-stroke {
+  stroke: var(--brass-light);
 }
-.rook-dock-toggle:hover,
-.rook-dock-toggle:focus-visible,
-.files-dock-toggle:hover,
-.files-dock-toggle:focus-visible {
-  border-color: color-mix(in srgb, var(--brass) 55%, var(--border));
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.rook-dock-floating.is-collapsed .rook-dock-toggle,
-.files-side-dock.is-collapsed .files-dock-toggle {
-  border-color: color-mix(in srgb, var(--green) 42%, var(--border));
-  background: color-mix(in srgb, var(--green) 10%, var(--surface-raised));
-  color: var(--green);
-}
-.rook-dock-floating.is-collapsed .rook-dock-toggle {
-  box-shadow: -6px 4px 18px rgb(0 0 0 / 30%);
-}
-.files-side-dock.is-collapsed .files-dock-toggle {
-  box-shadow: 6px 4px 18px rgb(0 0 0 / 30%);
-}
-.rook-dock-floating.is-collapsed .rook-dock-toggle:hover,
-.rook-dock-floating.is-collapsed .rook-dock-toggle:focus-visible,
-.files-side-dock.is-collapsed .files-dock-toggle:hover,
-.files-side-dock.is-collapsed .files-dock-toggle:focus-visible {
-  border-color: color-mix(in srgb, var(--green) 65%, var(--border));
-  background: color-mix(in srgb, var(--green) 16%, var(--surface-hover));
-  color: var(--brass-light);
-}
-.rook-dock-floating.is-collapsed .rook-dock-toggle-icon {
-  transform: rotate(180deg);
+.edge-bracket-tab:hover .edge-bracket-frame {
+  filter: drop-shadow(0 6px 16px rgb(0 0 0 / 42%));
 }
 @media (prefers-reduced-motion: no-preference) {
   .rook-dock-floating {
@@ -5301,10 +5292,6 @@ kbd,
     transition:
       opacity 160ms ease-out,
       transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
-  }
-  .rook-dock-toggle-icon,
-  .files-dock-toggle-icon {
-    transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
 .rook-dock-resizer {
