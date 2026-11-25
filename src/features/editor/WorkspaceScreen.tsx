@@ -910,23 +910,19 @@ export function WorkspaceScreen({
             className="files-dock-toggle"
             aria-expanded={!explorerCollapsed}
             aria-controls="workspace-files-dock"
-            aria-label={
-              explorerCollapsed ? "Show file explorer" : "Hide file explorer"
-            }
-            title={
-              explorerCollapsed
-                ? "Show file explorer (⌘B)"
-                : "Hide file explorer (⌘B)"
-            }
+            aria-hidden={!explorerCollapsed}
+            tabIndex={explorerCollapsed ? 0 : -1}
+            aria-label="Show file explorer"
+            title="Show file explorer (⌘B)"
             onClick={() =>
               void onPreferencesChange({
                 ...preferences,
-                explorerCollapsed: !explorerCollapsed,
+                explorerCollapsed: false,
               })
             }
           >
             <span className="files-dock-toggle-icon" aria-hidden="true">
-              ‹
+              ›
             </span>
           </button>
         </div>

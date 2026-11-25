@@ -5228,6 +5228,20 @@ kbd,
   border-left: 0;
   border-radius: 0 8px 8px 0;
   box-shadow: 6px 4px 16px rgb(0 0 0 / 22%);
+  transition:
+    color 140ms ease,
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    opacity 160ms ease,
+    transform 180ms ease,
+    visibility 160ms ease;
+}
+.files-side-dock:not(.is-collapsed) .files-dock-toggle {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-8px, -50%);
 }
 .app-shell[data-theme="light"] .rook-dock-toggle {
   border-color: var(--border);
@@ -5265,8 +5279,7 @@ kbd,
   background: color-mix(in srgb, var(--green) 16%, var(--surface-hover));
   color: var(--brass-light);
 }
-.rook-dock-floating.is-collapsed .rook-dock-toggle-icon,
-.files-side-dock.is-collapsed .files-dock-toggle-icon {
+.rook-dock-floating.is-collapsed .rook-dock-toggle-icon {
   transform: rotate(180deg);
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -5330,8 +5343,8 @@ kbd,
   background: transparent;
 }
 .files-dock-surface .explorer-heading {
-  height: 34px;
-  min-height: 34px;
+  height: 38px;
+  min-height: 38px;
   padding: 0 8px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--shell) 90%, transparent);
