@@ -277,6 +277,14 @@ pub struct UiPreferences {
     pub navigation_collapsed: bool,
     pub inspector_collapsed: bool,
     pub inspector_width: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explorer_collapsed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explorer_width: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom_drawer_collapsed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom_drawer_height: Option<u16>,
 }
 
 impl Default for UiPreferences {
@@ -288,6 +296,10 @@ impl Default for UiPreferences {
             navigation_collapsed: false,
             inspector_collapsed: false,
             inspector_width: 286,
+            explorer_collapsed: None,
+            explorer_width: None,
+            bottom_drawer_collapsed: None,
+            bottom_drawer_height: None,
         }
     }
 }
@@ -530,6 +542,12 @@ fn validate_operation_id(operation_id: &str) -> bool {
 fn validate_preferences(preferences: &UiPreferences) -> bool {
     (10..=24).contains(&preferences.editor_font_size)
         && (220..=560).contains(&preferences.inspector_width)
+        && preferences
+            .explorer_width
+            .is_none_or(|width| (170..=420).contains(&width))
+        && preferences
+            .bottom_drawer_height
+            .is_none_or(|height| (140..=480).contains(&height))
 }
 
 fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, IpcError> {
@@ -2477,9 +2495,27 @@ mod tests {
             inspector_width: 600,
             ..UiPreferences::default()
         };
+        let invalid_explorer_width = UiPreferences {
+            explorer_width: Some(120),
+            ..UiPreferences::default()
+        };
+        let invalid_drawer_height = UiPreferences {
+            bottom_drawer_height: Some(800),
+            ..UiPreferences::default()
+        };
+        let valid_workspace_panels = UiPreferences {
+            explorer_collapsed: Some(true),
+            explorer_width: Some(260),
+            bottom_drawer_collapsed: Some(false),
+            bottom_drawer_height: Some(220),
+            ..UiPreferences::default()
+        };
 
         assert!(!validate_preferences(&invalid_font_size));
         assert!(!validate_preferences(&invalid_inspector_width));
+        assert!(!validate_preferences(&invalid_explorer_width));
+        assert!(!validate_preferences(&invalid_drawer_height));
+        assert!(validate_preferences(&valid_workspace_panels));
         assert!(validate_preferences(&UiPreferences::default()));
     }
 

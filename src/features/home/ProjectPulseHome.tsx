@@ -28,9 +28,15 @@ export function ProjectPulseHome({
 }) {
   const dirtyTotal =
     (workspacePulse?.dirtyCount ?? 0) + (workspacePulse?.untrackedCount ?? 0);
+  const hasSecondaryLists =
+    (Boolean(activeProject) && rookSessions.length > 0) ||
+    recentProjects.length > 0;
 
   return (
-    <section className="home-page" aria-labelledby="screen-title">
+    <section
+      className={`home-page${hasSecondaryLists ? " home-page-with-lists" : ""}`}
+      aria-labelledby="screen-title"
+    >
       <div className="home-copy">
         <p className="eyebrow">A focused desktop workspace</p>
         <h1 id="screen-title">
@@ -68,118 +74,142 @@ export function ProjectPulseHome({
         </p>
 
         <div className="home-actions">
-          <button
-            className="button button-primary"
-            type="button"
-            disabled={projectPending || browserPreview}
-            onClick={() => onOpenProject()}
-          >
-            {browserPreview
-              ? "Open project · desktop app only"
-              : projectPending
-                ? "Opening…"
-                : "Open project folder"}
-            {!projectPending && !browserPreview && (
-              <span aria-hidden="true">→</span>
-            )}
-          </button>
-          <button
-            className="button button-quiet"
-            type="button"
-            onClick={() => onNavigate("editor")}
-          >
-            {activeProject ? "Return to workspace" : "View workspace shell"}
-          </button>
+          {activeProject ? (
+            <>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => onNavigate("editor")}
+              >
+                Return to workspace
+                <span aria-hidden="true">→</span>
+              </button>
+              <button
+                className="button button-quiet"
+                type="button"
+                disabled={projectPending || browserPreview}
+                onClick={() => onOpenProject()}
+              >
+                {browserPreview
+                  ? "Open project · desktop app only"
+                  : projectPending
+                    ? "Opening…"
+                    : "Open project folder"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={projectPending || browserPreview}
+                onClick={() => onOpenProject()}
+              >
+                {browserPreview
+                  ? "Open project · desktop app only"
+                  : projectPending
+                    ? "Opening…"
+                    : "Open project folder"}
+                {!projectPending && !browserPreview && (
+                  <span aria-hidden="true">→</span>
+                )}
+              </button>
+              <button
+                className="button button-quiet"
+                type="button"
+                onClick={() => onNavigate("editor")}
+              >
+                View workspace shell
+              </button>
+            </>
+          )}
           {activeProject?.isGitRepository && (
             <button
               className="button button-quiet"
               type="button"
               onClick={() => onNavigate("changes")}
             >
-              Review changes
+              Review changes{dirtyTotal > 0 ? ` (${dirtyTotal})` : ""}
             </button>
           )}
-          <button
-            className="button button-quiet"
-            type="button"
-            onClick={() => onNavigate("settings")}
-          >
-            Appearance settings
-          </button>
         </div>
-
-        {activeProject && rookSessions.length > 0 && (
-          <section
-            className="recent-projects"
-            aria-label="Recent Rook sessions"
-          >
-            <p className="eyebrow">Recent Rook sessions</p>
-            {rookSessions.slice(0, 4).map((session) => (
-              <button
-                className="recent-project-item"
-                key={session.id}
-                type="button"
-                onClick={() => onResumeRookSession(session.id)}
-              >
-                <span className="project-avatar" aria-hidden="true">
-                  ◉
-                </span>
-                <span>
-                  <strong>
-                    {(
-                      session.name ||
-                      session.firstMessage ||
-                      "Untitled Ask"
-                    ).trim()}
-                  </strong>
-                  <small>
-                    {session.messageCount} messages ·{" "}
-                    {new Date(session.modified).toLocaleString([], {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </section>
-        )}
-
-        {recentProjects.length > 0 && (
-          <section className="recent-projects" aria-label="Recent projects">
-            <p className="eyebrow">Recent folders · no tools run</p>
-            {recentProjects.map((project) => (
-              <button
-                className="recent-project-item"
-                key={project.id}
-                type="button"
-                disabled={projectPending}
-                onClick={() => onOpenProject(project.path)}
-              >
-                <span className="project-avatar" aria-hidden="true">
-                  {project.name.slice(0, 1)}
-                </span>
-                <span>
-                  <strong>{project.name}</strong>
-                  <small>{project.path}</small>
-                </span>
-              </button>
-            ))}
-          </section>
-        )}
       </div>
 
-      <div className="home-orbit" aria-hidden="true">
-        <span className="orbit-ring orbit-ring-outer" />
-        <span className="orbit-ring orbit-ring-middle" />
-        <span className="orbit-ring orbit-ring-inner" />
-        <span className="orbit-axis orbit-axis-one" />
-        <span className="orbit-axis orbit-axis-two" />
-        <span className="orbit-glyph">ℒ</span>
-        <span className="orbit-caption">LOCAL · EXPLICIT · REVIEWABLE</span>
-      </div>
+      {hasSecondaryLists ? (
+        <div className="home-secondary">
+          {activeProject && rookSessions.length > 0 && (
+            <section
+              className="recent-projects"
+              aria-label="Recent Rook sessions"
+            >
+              <p className="eyebrow">Recent Rook sessions</p>
+              {rookSessions.slice(0, 4).map((session) => (
+                <button
+                  className="recent-project-item"
+                  key={session.id}
+                  type="button"
+                  onClick={() => onResumeRookSession(session.id)}
+                >
+                  <span className="project-avatar" aria-hidden="true">
+                    ◉
+                  </span>
+                  <span>
+                    <strong>
+                      {(
+                        session.name ||
+                        session.firstMessage ||
+                        "Untitled Ask"
+                      ).trim()}
+                    </strong>
+                    <small>
+                      {session.messageCount} messages ·{" "}
+                      {new Date(session.modified).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </small>
+                  </span>
+                </button>
+              ))}
+            </section>
+          )}
+
+          {recentProjects.length > 0 && (
+            <section className="recent-projects" aria-label="Recent projects">
+              <p className="eyebrow">Recent folders · no tools run</p>
+              {recentProjects.map((project) => (
+                <button
+                  className="recent-project-item"
+                  key={project.id}
+                  type="button"
+                  disabled={projectPending}
+                  onClick={() => onOpenProject(project.path)}
+                >
+                  <span className="project-avatar" aria-hidden="true">
+                    {project.name.slice(0, 1)}
+                  </span>
+                  <span>
+                    <strong>{project.name}</strong>
+                    <small>{project.path}</small>
+                  </span>
+                </button>
+              ))}
+            </section>
+          )}
+        </div>
+      ) : (
+        <div className="home-orbit" aria-hidden="true">
+          <span className="orbit-ring orbit-ring-outer" />
+          <span className="orbit-ring orbit-ring-middle" />
+          <span className="orbit-ring orbit-ring-inner" />
+          <span className="orbit-axis orbit-axis-one" />
+          <span className="orbit-axis orbit-axis-two" />
+          <span className="orbit-glyph">ℒ</span>
+          <span className="orbit-caption">LOCAL · EXPLICIT · REVIEWABLE</span>
+        </div>
+      )}
     </section>
   );
 }

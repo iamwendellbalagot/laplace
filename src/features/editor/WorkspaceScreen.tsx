@@ -50,12 +50,18 @@ const CodeEditor = lazy(() =>
   })),
 );
 
+function clampPanelSize(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function WorkspaceTools({
   service,
   activeProject,
   documents,
   tab,
+  collapsed,
   onTabChange,
+  onToggleCollapse,
   workspaceTrusted,
   onTrustWorkspace,
   gitStatus,
@@ -79,7 +85,9 @@ function WorkspaceTools({
   activeProject: ProjectSummary;
   documents: EditorDocument[];
   tab: BottomDrawerTab;
+  collapsed: boolean;
   onTabChange: (next: BottomDrawerTab) => void;
+  onToggleCollapse: () => void;
   workspaceTrusted: boolean;
   onTrustWorkspace: () => Promise<void>;
   gitStatus?: GitStatus;
@@ -127,8 +135,16 @@ function WorkspaceTools({
       .catch(() => undefined);
   }, [activeProject.id, browserPreview, onGitStatusChange, service, tab]);
 
+  const selectToolTab = (next: BottomDrawerTab) => {
+    onTabChange(next);
+    if (collapsed) onToggleCollapse();
+  };
+
   return (
-    <section className="workspace-tools" aria-label="Workspace tools">
+    <section
+      className={`workspace-tools${collapsed ? " workspace-tools-collapsed" : ""}`}
+      aria-label="Workspace tools"
+    >
       <div
         className="workspace-tool-tabs"
         role="tablist"
@@ -136,30 +152,30 @@ function WorkspaceTools({
       >
         <button
           role="tab"
-          aria-selected={tab === "terminal"}
-          onClick={() => onTabChange("terminal")}
+          aria-selected={!collapsed && tab === "terminal"}
+          onClick={() => selectToolTab("terminal")}
         >
           Terminal
         </button>
         <button
           role="tab"
-          aria-selected={tab === "run"}
-          onClick={() => onTabChange("run")}
+          aria-selected={!collapsed && tab === "run"}
+          onClick={() => selectToolTab("run")}
         >
           Run
         </button>
         <button
           role="tab"
-          aria-selected={tab === "git"}
-          onClick={() => onTabChange("git")}
+          aria-selected={!collapsed && tab === "git"}
+          onClick={() => selectToolTab("git")}
         >
           Git changes
           {gitStatus?.files.length ? ` (${gitStatus.files.length})` : ""}
         </button>
         <button
           role="tab"
-          aria-selected={tab === "verify"}
-          onClick={() => onTabChange("verify")}
+          aria-selected={!collapsed && tab === "verify"}
+          onClick={() => selectToolTab("verify")}
         >
           Verify
         </button>
@@ -174,10 +190,25 @@ function WorkspaceTools({
           >
             {verifySummary.label}
           </span>
+          <button
+            type="button"
+            className="workspace-drawer-toggle"
+            aria-label={
+              collapsed ? "Expand tools drawer" : "Collapse tools drawer"
+            }
+            title={collapsed ? "Expand drawer (⌘J)" : "Collapse drawer (⌘J)"}
+            onClick={onToggleCollapse}
+          >
+            {collapsed ? "⌃" : "⌄"}
+          </button>
         </div>
       </div>
 
-      <div className={tab === "terminal" ? "workspace-tool-body" : "is-hidden"}>
+      <div
+        className={
+          !collapsed && tab === "terminal" ? "workspace-tool-body" : "is-hidden"
+        }
+      >
         {!terminalStarted ? (
           <div className="terminal-panel">
             <p>Starting a shell can execute project-controlled commands.</p>
@@ -223,7 +254,11 @@ function WorkspaceTools({
         )}
       </div>
 
-      <div className={tab === "run" ? "workspace-tool-body" : "is-hidden"}>
+      <div
+        className={
+          !collapsed && tab === "run" ? "workspace-tool-body" : "is-hidden"
+        }
+      >
         <RunPanel
           service={service}
           projectId={activeProject.id}
@@ -236,7 +271,7 @@ function WorkspaceTools({
         />
       </div>
 
-      {tab === "git" && (
+      {!collapsed && tab === "git" && (
         <div className="workspace-tool-body">
           {browserPreview ? (
             <p role="status">Git access requires the native desktop app.</p>
@@ -258,7 +293,7 @@ function WorkspaceTools({
         </div>
       )}
 
-      {tab === "verify" && (
+      {!collapsed && tab === "verify" && (
         <div className="workspace-tool-body">
           <VerifyDrawerPanel
             service={service}
@@ -493,7 +528,17 @@ export function WorkspaceScreen({
     return [...paths];
   }, [rookMessages]);
 
+  const explorerCollapsed = Boolean(preferences.explorerCollapsed);
+  const bottomDrawerCollapsed = Boolean(preferences.bottomDrawerCollapsed);
+  const resolvedExplorerWidth = preferences.explorerWidth ?? 238;
+  const resolvedDrawerHeight = preferences.bottomDrawerHeight ?? 240;
+
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
+  const [draftExplorerWidth, setDraftExplorerWidth] = useState(
+    resolvedExplorerWidth,
+  );
+  const [draftDrawerHeight, setDraftDrawerHeight] =
+    useState(resolvedDrawerHeight);
   const [gitDiffText, setGitDiffText] = useState("");
   const [inlineCommandTarget, setInlineCommandTarget] = useState<{
     filePath: string;
@@ -520,12 +565,38 @@ export function WorkspaceScreen({
     (document) => document.projectId === activeProject?.id,
   );
   const draftWidthRef = useRef(preferences.inspectorWidth);
+  const draftExplorerWidthRef = useRef(resolvedExplorerWidth);
+  const draftDrawerHeightRef = useRef(resolvedDrawerHeight);
   const drag = useRef<{ x: number; width: number } | undefined>(undefined);
+  const explorerDrag = useRef<{ x: number; width: number } | undefined>(
+    undefined,
+  );
+  const drawerDrag = useRef<{ y: number; height: number } | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     setDraftWidth(preferences.inspectorWidth);
     draftWidthRef.current = preferences.inspectorWidth;
   }, [preferences.inspectorWidth]);
+
+  useEffect(() => {
+    setDraftExplorerWidth(resolvedExplorerWidth);
+    draftExplorerWidthRef.current = resolvedExplorerWidth;
+    document.documentElement.style.setProperty(
+      "--explorer-width-live",
+      `${resolvedExplorerWidth}px`,
+    );
+  }, [resolvedExplorerWidth]);
+
+  useEffect(() => {
+    setDraftDrawerHeight(resolvedDrawerHeight);
+    draftDrawerHeightRef.current = resolvedDrawerHeight;
+    document.documentElement.style.setProperty(
+      "--drawer-height-live",
+      `${resolvedDrawerHeight}px`,
+    );
+  }, [resolvedDrawerHeight]);
 
   useEffect(() => {
     if (browserPreview || !activeProject || !activeProject.isGitRepository) {
@@ -568,11 +639,31 @@ export function WorkspaceScreen({
   );
 
   const changeWidth = (width: number) => {
-    const bounded = Math.max(220, Math.min(560, width));
+    const bounded = clampPanelSize(width, 220, 560);
     draftWidthRef.current = bounded;
     setDraftWidth(bounded);
     document.documentElement.style.setProperty(
       "--inspector-width-live",
+      `${bounded}px`,
+    );
+  };
+
+  const changeExplorerWidth = (width: number) => {
+    const bounded = clampPanelSize(width, 170, 420);
+    draftExplorerWidthRef.current = bounded;
+    setDraftExplorerWidth(bounded);
+    document.documentElement.style.setProperty(
+      "--explorer-width-live",
+      `${bounded}px`,
+    );
+  };
+
+  const changeDrawerHeight = (height: number) => {
+    const bounded = clampPanelSize(height, 140, 480);
+    draftDrawerHeightRef.current = bounded;
+    setDraftDrawerHeight(bounded);
+    document.documentElement.style.setProperty(
+      "--drawer-height-live",
       `${bounded}px`,
     );
   };
@@ -623,70 +714,164 @@ export function WorkspaceScreen({
 
   return (
     <section className="editor-shell" aria-label="Editor workspace">
-      {activeProject && (
-        <aside className="project-explorer" aria-label="Project files">
-          <div className="explorer-heading explorer-heading-tabs">
-            <div
-              className="explorer-mode-tabs"
-              role="tablist"
-              aria-label="Workspace explorer mode"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={leftSidebarTab === "files"}
-                className={leftSidebarTab === "files" ? "is-active" : ""}
-                onClick={() => setLeftSidebarTab("files")}
-              >
-                Files
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={leftSidebarTab === "search"}
-                className={leftSidebarTab === "search" ? "is-active" : ""}
-                onClick={() => setLeftSidebarTab("search")}
-              >
-                Search
-              </button>
-            </div>
-          </div>
+      {activeProject &&
+        (!explorerCollapsed ? (
+          <>
+            <aside className="project-explorer" aria-label="Project files">
+              <div className="explorer-heading explorer-heading-tabs">
+                <div
+                  className="explorer-mode-tabs"
+                  role="tablist"
+                  aria-label="Workspace explorer mode"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={leftSidebarTab === "files"}
+                    className={leftSidebarTab === "files" ? "is-active" : ""}
+                    onClick={() => setLeftSidebarTab("files")}
+                  >
+                    Files
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={leftSidebarTab === "search"}
+                    className={leftSidebarTab === "search" ? "is-active" : ""}
+                    onClick={() => setLeftSidebarTab("search")}
+                  >
+                    Search
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="panel-collapse-button"
+                  aria-label="Hide file explorer"
+                  title="Hide file explorer (⌘B)"
+                  onClick={() =>
+                    void onPreferencesChange({
+                      ...preferences,
+                      explorerCollapsed: true,
+                    })
+                  }
+                >
+                  ‹
+                </button>
+              </div>
 
-          {leftSidebarTab === "files" ? (
-            <FileTreeExplorer
-              service={service}
-              browserPreview={browserPreview}
-              activeProject={activeProject}
-              gitStatus={editorGitStatus}
-              syncVersion={workspaceSyncVersion}
-              selectedFilePath={selectedFilePath}
-              projectPending={projectPending}
-              rookTouchedPaths={rookTouchedPaths}
-              rookBuildRunning={Boolean(rookRunId && rookMode === "build")}
-              onOpenProjectFile={onOpenProjectFile}
-              onOpenProject={() => onOpenProject()}
-              onEntryRenamed={(from, to) => onEntryRenamed?.(from, to)}
-              onEntryDeleted={(rel) => onEntryDeleted?.(rel)}
-              onRefreshWorkspace={() =>
-                onRefreshWorkspace
-                  ? onRefreshWorkspace()
-                  : void onOpenProjectDirectory(projectDirectory)
-              }
+              {leftSidebarTab === "files" ? (
+                <FileTreeExplorer
+                  service={service}
+                  browserPreview={browserPreview}
+                  activeProject={activeProject}
+                  gitStatus={editorGitStatus}
+                  syncVersion={workspaceSyncVersion}
+                  selectedFilePath={selectedFilePath}
+                  projectPending={projectPending}
+                  rookTouchedPaths={rookTouchedPaths}
+                  rookBuildRunning={Boolean(rookRunId && rookMode === "build")}
+                  onOpenProjectFile={onOpenProjectFile}
+                  onOpenProject={() => onOpenProject()}
+                  onEntryRenamed={(from, to) => onEntryRenamed?.(from, to)}
+                  onEntryDeleted={(rel) => onEntryDeleted?.(rel)}
+                  onRefreshWorkspace={() =>
+                    onRefreshWorkspace
+                      ? onRefreshWorkspace()
+                      : void onOpenProjectDirectory(projectDirectory)
+                  }
+                />
+              ) : (
+                <WorkspaceSearchPanel
+                  service={service}
+                  browserPreview={browserPreview}
+                  activeProject={activeProject}
+                  focusNonce={searchFocusNonce}
+                  onOpenLocation={(relPath, line, col) =>
+                    onJumpToLocation(relPath, line, col, true)
+                  }
+                  onAttachToRook={(chip) =>
+                    onAttachContextChipToRook(chip, "ask")
+                  }
+                />
+              )}
+            </aside>
+            <div
+              className="inspector-separator explorer-separator"
+              role="separator"
+              aria-label="Resize file explorer"
+              aria-orientation="vertical"
+              aria-valuemin={170}
+              aria-valuemax={420}
+              aria-valuenow={draftExplorerWidth}
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  event.preventDefault();
+                  const delta = event.key === "ArrowRight" ? 16 : -16;
+                  const width = clampPanelSize(
+                    draftExplorerWidth + delta,
+                    170,
+                    420,
+                  );
+                  changeExplorerWidth(width);
+                  void onPreferencesChange({
+                    ...preferences,
+                    explorerWidth: width,
+                  });
+                } else if (event.key === "Home" || event.key === "End") {
+                  event.preventDefault();
+                  const width = event.key === "Home" ? 170 : 420;
+                  changeExplorerWidth(width);
+                  void onPreferencesChange({
+                    ...preferences,
+                    explorerWidth: width,
+                  });
+                }
+              }}
+              onPointerDown={(event) => {
+                explorerDrag.current = {
+                  x: event.clientX,
+                  width: draftExplorerWidth,
+                };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (explorerDrag.current) {
+                  changeExplorerWidth(
+                    explorerDrag.current.width +
+                      event.clientX -
+                      explorerDrag.current.x,
+                  );
+                }
+              }}
+              onPointerUp={() => {
+                if (!explorerDrag.current) return;
+                explorerDrag.current = undefined;
+                void onPreferencesChange({
+                  ...preferences,
+                  explorerWidth: draftExplorerWidthRef.current,
+                });
+              }}
+              onPointerCancel={() => {
+                explorerDrag.current = undefined;
+              }}
             />
-          ) : (
-            <WorkspaceSearchPanel
-              service={service}
-              browserPreview={browserPreview}
-              activeProject={activeProject}
-              focusNonce={searchFocusNonce}
-              onOpenLocation={(relPath, line, col) =>
-                onJumpToLocation(relPath, line, col, true)
-              }
-              onAttachToRook={(chip) => onAttachContextChipToRook(chip, "ask")}
-            />
-          )}
-        </aside>
-      )}
+          </>
+        ) : (
+          <button
+            className="show-inspector-button show-explorer-button"
+            type="button"
+            title="Show file explorer (⌘B)"
+            onClick={() =>
+              void onPreferencesChange({
+                ...preferences,
+                explorerCollapsed: false,
+              })
+            }
+          >
+            Files
+          </button>
+        ))}
 
       <div className="editor-placeholder">
         <div className="editor-placeholder-top">
@@ -1171,35 +1356,107 @@ export function WorkspaceScreen({
         </div>
 
         {activeProject && (
-          <WorkspaceTools
-            service={service}
-            activeProject={activeProject}
-            documents={documents}
-            tab={bottomDrawerTab}
-            onTabChange={setBottomDrawerTab}
-            workspaceTrusted={workspaceTrusted}
-            onTrustWorkspace={onTrustWorkspace}
-            gitStatus={editorGitStatus}
-            onGitStatusChange={onEditorGitStatusChange}
-            executions={executions.filter(
-              (item) => item.projectId === activeProject.id,
+          <>
+            {!bottomDrawerCollapsed && (
+              <div
+                className="drawer-separator"
+                role="separator"
+                aria-label="Resize bottom tools drawer"
+                aria-orientation="horizontal"
+                aria-valuemin={140}
+                aria-valuemax={480}
+                aria-valuenow={draftDrawerHeight}
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                    event.preventDefault();
+                    const delta = event.key === "ArrowUp" ? 16 : -16;
+                    const height = clampPanelSize(
+                      draftDrawerHeight + delta,
+                      140,
+                      480,
+                    );
+                    changeDrawerHeight(height);
+                    void onPreferencesChange({
+                      ...preferences,
+                      bottomDrawerHeight: height,
+                    });
+                  } else if (event.key === "Home" || event.key === "End") {
+                    event.preventDefault();
+                    const height = event.key === "Home" ? 140 : 480;
+                    changeDrawerHeight(height);
+                    void onPreferencesChange({
+                      ...preferences,
+                      bottomDrawerHeight: height,
+                    });
+                  }
+                }}
+                onPointerDown={(event) => {
+                  drawerDrag.current = {
+                    y: event.clientY,
+                    height: draftDrawerHeight,
+                  };
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={(event) => {
+                  if (drawerDrag.current) {
+                    changeDrawerHeight(
+                      drawerDrag.current.height +
+                        drawerDrag.current.y -
+                        event.clientY,
+                    );
+                  }
+                }}
+                onPointerUp={() => {
+                  if (!drawerDrag.current) return;
+                  drawerDrag.current = undefined;
+                  void onPreferencesChange({
+                    ...preferences,
+                    bottomDrawerHeight: draftDrawerHeightRef.current,
+                  });
+                }}
+                onPointerCancel={() => {
+                  drawerDrag.current = undefined;
+                }}
+              />
             )}
-            projectRecipes={projectRecipes}
-            verifyChangeId={verifyChangeId}
-            savingFiles={savingFiles}
-            syncVersion={workspaceSyncVersion}
-            onSaveDocuments={onSaveDocuments}
-            onRunCheck={onRunCheck}
-            onRunProjectRecipe={onRunProjectRecipe}
-            onPruneExecutions={onPruneExecutions}
-            onOpenFile={(path) => onOpenProjectFile(path)}
-            onJumpToLocation={(relativePath, line, column) =>
-              onJumpToLocation(relativePath, line, column)
-            }
-            onInvestigateInRook={onAttachContextChipToRook}
-            onContinueAsChange={onPromoteEditsToChange}
-            browserPreview={browserPreview}
-          />
+            <WorkspaceTools
+              service={service}
+              activeProject={activeProject}
+              documents={documents}
+              tab={bottomDrawerTab}
+              collapsed={bottomDrawerCollapsed}
+              onTabChange={setBottomDrawerTab}
+              onToggleCollapse={() =>
+                void onPreferencesChange({
+                  ...preferences,
+                  bottomDrawerCollapsed: !bottomDrawerCollapsed,
+                })
+              }
+              workspaceTrusted={workspaceTrusted}
+              onTrustWorkspace={onTrustWorkspace}
+              gitStatus={editorGitStatus}
+              onGitStatusChange={onEditorGitStatusChange}
+              executions={executions.filter(
+                (item) => item.projectId === activeProject.id,
+              )}
+              projectRecipes={projectRecipes}
+              verifyChangeId={verifyChangeId}
+              savingFiles={savingFiles}
+              syncVersion={workspaceSyncVersion}
+              onSaveDocuments={onSaveDocuments}
+              onRunCheck={onRunCheck}
+              onRunProjectRecipe={onRunProjectRecipe}
+              onPruneExecutions={onPruneExecutions}
+              onOpenFile={(path) => onOpenProjectFile(path)}
+              onJumpToLocation={(relativePath, line, column) =>
+                onJumpToLocation(relativePath, line, column)
+              }
+              onInvestigateInRook={onAttachContextChipToRook}
+              onContinueAsChange={onPromoteEditsToChange}
+              browserPreview={browserPreview}
+            />
+          </>
         )}
       </div>
 

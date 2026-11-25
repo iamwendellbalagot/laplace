@@ -270,10 +270,49 @@ export function SettingsScreen({
               </button>
             </PreferenceRow>
             <PreferenceRow
+              title="File explorer"
+              description="Show or hide the workspace file tree and search sidebar (⌘B)."
+            >
+              <button
+                type="button"
+                className="button button-quiet"
+                aria-pressed={Boolean(preferences.explorerCollapsed)}
+                disabled={savingPreferences}
+                onClick={() =>
+                  void onPreferencesChange({
+                    ...preferences,
+                    explorerCollapsed: !preferences.explorerCollapsed,
+                  })
+                }
+              >
+                {preferences.explorerCollapsed ? "Hidden" : "Shown"}
+              </button>
+            </PreferenceRow>
+            <PreferenceRow
+              title="Bottom tools drawer"
+              description="Show or hide Terminal, Run, Git, and Verify below the editor (⌘J)."
+            >
+              <button
+                type="button"
+                className="button button-quiet"
+                aria-pressed={Boolean(preferences.bottomDrawerCollapsed)}
+                disabled={savingPreferences}
+                onClick={() =>
+                  void onPreferencesChange({
+                    ...preferences,
+                    bottomDrawerCollapsed: !preferences.bottomDrawerCollapsed,
+                  })
+                }
+              >
+                {preferences.bottomDrawerCollapsed ? "Hidden" : "Shown"}
+              </button>
+            </PreferenceRow>
+            <PreferenceRow
               title="Panel width"
-              description="Resize the right panel with its divider or arrow keys."
+              description="Resize Workspace sidebars and drawer with their dividers or arrow keys."
             >
               <span className="mono-value">
+                {preferences.explorerWidth ?? 238} ·{" "}
                 {preferences.inspectorWidth} px
               </span>
             </PreferenceRow>

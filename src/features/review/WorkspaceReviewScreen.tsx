@@ -597,187 +597,216 @@ export function WorkspaceReviewScreen({
       className="content-page review-page"
       aria-label="Working tree review and commit"
     >
-      <div className="review-layout">
-        <div className="review-center">
-          <div className="review-top-bar">
-            <div className="review-inline-actions">
-              <h1 id="screen-title" className="review-compact-title">
-                Review
-              </h1>
-              {snapshot && (
-                <div className="review-meta">
-                  <span>{snapshot.branch ?? "detached"}</span>
-                  <span>HEAD {snapshot.headRevision.slice(0, 8)}</span>
-                  <span>{snapshot.changedFiles.length} changed</span>
-                </div>
-              )}
+      <div className="review-top-bar">
+        <div className="review-inline-actions">
+          <h1 id="screen-title" className="review-compact-title">
+            Review
+          </h1>
+          {snapshot && (
+            <div className="review-meta">
+              <span>{snapshot.branch ?? "detached"}</span>
+              <span>HEAD {snapshot.headRevision.slice(0, 8)}</span>
+              <span>{snapshot.changedFiles.length} changed</span>
             </div>
-            <div className="review-inline-actions">
+          )}
+        </div>
+        <div className="review-inline-actions">
+          {snapshot?.lastCheckpointDigest && (
+            <div
+              className="review-baseline-toggle"
+              role="group"
+              aria-label="Diff baseline"
+            >
+              <button
+                type="button"
+                className={`button button-quiet${diffBaseline === "head" ? " is-active" : ""}`}
+                onClick={() => setDiffBaseline("head")}
+              >
+                All uncommitted ({snapshot.changedFiles.length})
+              </button>
+              <button
+                type="button"
+                className={`button button-quiet${diffBaseline === "last_review" ? " is-active" : ""}`}
+                title={snapshot.lastCheckpointLabel ?? "Last checkpoint"}
+                onClick={() => setDiffBaseline("last_review")}
+              >
+                Since {snapshot.lastCheckpointLabel ?? "checkpoint"} (
+                {snapshot.changedSinceCheckpoint.length})
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={actionPending || loading}
+            onClick={() => void handleSaveCheckpoint()}
+          >
+            Save checkpoint
+          </button>
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={!snapshot}
+            onClick={handleCopyBundle}
+          >
+            Copy summary
+          </button>
+          <button
+            type="button"
+            className="button button-quiet"
+            disabled={loading}
+            onClick={() => void loadReview()}
+          >
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <p className="inline-error" role="alert">
+          {error}
+        </p>
+      )}
+      {statusMessage && (
+        <p className="review-status-note" role="status">
+          {statusMessage}
+        </p>
+      )}
+      {(dirtyCount > 0 || inlineDirty) && (
+        <div className="verify-dirty-banner" role="status">
+          <p>
+            <strong>Unsaved edits detected.</strong> Save so the diff and commit
+            match disk.
+          </p>
+          <div className="review-inline-actions">
+            {inlineDirty && (
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={savingInline}
+                onClick={() => void saveInlineEdit()}
+              >
+                {savingInline ? "Saving…" : "Save diff edit"}
+              </button>
+            )}
+            {dirtyCount > 0 && (
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={savingFiles}
+                onClick={() =>
+                  void onSaveAllDirty().then((ok) => {
+                    if (ok) void loadReview();
+                  })
+                }
+              >
+                {savingFiles ? "Saving…" : `Save ${dirtyCount} editor tab(s)`}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="review-layout">
+        {snapshot && visibleFiles.length > 0 && (
+          <aside className="review-files-sidebar" aria-label="Changed files">
+            <div className="review-files-sidebar-head">
+              <div className="review-files-sidebar-title">
+                <input
+                  type="checkbox"
+                  aria-label="Select all changed files for commit"
+                  checked={
+                    visibleFiles.length > 0 &&
+                    visibleFiles.every((f) => selectedPaths.includes(f.path))
+                  }
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      setSelectedPaths(visibleFiles.map((f) => f.path));
+                    } else {
+                      setSelectedPaths([]);
+                    }
+                  }}
+                />
+                <span>Changed ({visibleFiles.length})</span>
+              </div>
               {impactReport && impactReport.files.length > 0 && (
                 <button
                   type="button"
                   className={`button button-quiet${groupByRole ? " is-active" : ""}`}
                   onClick={() => setGroupByRole((v) => !v)}
                 >
-                  {groupByRole ? "Grouped by role" : "Flat file list"}
+                  {groupByRole ? "By role" : "Flat"}
                 </button>
               )}
-              {snapshot?.lastCheckpointDigest && (
-                <div
-                  className="review-baseline-toggle"
-                  role="group"
-                  aria-label="Diff baseline"
-                >
-                  <button
-                    type="button"
-                    className={`button button-quiet${diffBaseline === "head" ? " is-active" : ""}`}
-                    onClick={() => setDiffBaseline("head")}
-                  >
-                    All uncommitted ({snapshot.changedFiles.length})
-                  </button>
-                  <button
-                    type="button"
-                    className={`button button-quiet${diffBaseline === "last_review" ? " is-active" : ""}`}
-                    title={snapshot.lastCheckpointLabel ?? "Last checkpoint"}
-                    onClick={() => setDiffBaseline("last_review")}
-                  >
-                    Since {snapshot.lastCheckpointLabel ?? "checkpoint"} (
-                    {snapshot.changedSinceCheckpoint.length})
-                  </button>
+            </div>
+            <div
+              className="review-file-list"
+              role="list"
+              aria-label="Changed files list"
+            >
+              {groupedVisibleFiles.map((group) => (
+                <div className="review-role-group" key={group.role}>
+                  {groupedVisibleFiles.length > 1 && (
+                    <span className="review-role-heading">
+                      {group.label} ({group.files.length})
+                    </span>
+                  )}
+                  {group.files.map((file) => {
+                    const checked = selectedPaths.includes(file.path);
+                    const active = selectedFile === file.path;
+                    const fileImpact = fileAnalysisByPath.get(file.path);
+                    const baseName = file.path.split("/").at(-1) ?? file.path;
+                    const dirName = file.path.includes("/")
+                      ? file.path.slice(0, file.path.lastIndexOf("/"))
+                      : "";
+                    return (
+                      <div
+                        key={file.path}
+                        className={`review-file-row${active ? " is-active" : ""}`}
+                        role="listitem"
+                        title={fileImpact?.summary ?? file.path}
+                      >
+                        <input
+                          type="checkbox"
+                          aria-label={`Include ${file.path} in commit`}
+                          checked={checked}
+                          onChange={(event) =>
+                            setSelectedPaths((current) =>
+                              event.target.checked
+                                ? [...new Set([...current, file.path])]
+                                : current.filter((item) => item !== file.path),
+                            )
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="review-file-select"
+                          onClick={() => setSelectedFile(file.path)}
+                        >
+                          <span className="review-file-badge">
+                            {fileBadge(file.indexStatus, file.worktreeStatus)}
+                          </span>
+                          <span className="review-file-name">
+                            <strong>{baseName}</strong>
+                            {dirName && <small>{dirName}</small>}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-              <button
-                type="button"
-                className="button button-quiet"
-                disabled={actionPending || loading}
-                onClick={() => void handleSaveCheckpoint()}
-              >
-                Save checkpoint
-              </button>
-              <button
-                type="button"
-                className="button button-quiet"
-                disabled={!snapshot}
-                onClick={handleCopyBundle}
-              >
-                Copy summary
-              </button>
-              <button
-                type="button"
-                className="button button-quiet"
-                disabled={loading}
-                onClick={() => void loadReview()}
-              >
-                {loading ? "Refreshing…" : "Refresh"}
-              </button>
+              ))}
             </div>
-          </div>
+          </aside>
+        )}
 
-          {error && (
-            <p className="inline-error" role="alert">
-              {error}
-            </p>
-          )}
-          {statusMessage && (
-            <p className="review-status-note" role="status">
-              {statusMessage}
-            </p>
-          )}
-          {(dirtyCount > 0 || inlineDirty) && (
-            <div className="verify-dirty-banner" role="status">
-              <p>
-                <strong>Unsaved edits detected.</strong> Save so the diff and
-                commit match disk.
-              </p>
-              <div className="review-inline-actions">
-                {inlineDirty && (
-                  <button
-                    type="button"
-                    className="button button-primary"
-                    disabled={savingInline}
-                    onClick={() => void saveInlineEdit()}
-                  >
-                    {savingInline ? "Saving…" : "Save diff edit"}
-                  </button>
-                )}
-                {dirtyCount > 0 && (
-                  <button
-                    type="button"
-                    className="button button-primary"
-                    disabled={savingFiles}
-                    onClick={() =>
-                      void onSaveAllDirty().then((ok) => {
-                        if (ok) void loadReview();
-                      })
-                    }
-                  >
-                    {savingFiles
-                      ? "Saving…"
-                      : `Save ${dirtyCount} editor tab(s)`}
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
+        <div className="review-center">
           {snapshot && visibleFiles.length > 0 ? (
             <>
               <div className="review-files-bar">
-                <div
-                  className="review-file-tabs"
-                  role="list"
-                  aria-label="Changed files"
-                >
-                  {groupedVisibleFiles.map((group) => (
-                    <div className="review-role-group" key={group.role}>
-                      {groupedVisibleFiles.length > 1 && (
-                        <span className="review-role-heading">
-                          {group.label} ({group.files.length})
-                        </span>
-                      )}
-                      {group.files.map((file) => {
-                        const checked = selectedPaths.includes(file.path);
-                        const active = selectedFile === file.path;
-                        const fileImpact = fileAnalysisByPath.get(file.path);
-                        return (
-                          <div
-                            key={file.path}
-                            className={`review-file-chip${active ? " is-active" : ""}`}
-                            role="listitem"
-                            title={fileImpact?.summary}
-                          >
-                            <input
-                              type="checkbox"
-                              aria-label={`Include ${file.path} in commit`}
-                              checked={checked}
-                              onChange={(event) =>
-                                setSelectedPaths((current) =>
-                                  event.target.checked
-                                    ? [...new Set([...current, file.path])]
-                                    : current.filter(
-                                        (item) => item !== file.path,
-                                      ),
-                                )
-                              }
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setSelectedFile(file.path)}
-                            >
-                              <span className="review-file-badge">
-                                {fileBadge(
-                                  file.indexStatus,
-                                  file.worktreeStatus,
-                                )}
-                              </span>
-                              <span>{file.path}</span>
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
+                <span className="review-active-file-path" title={selectedFile}>
+                  {selectedFile ?? "Select a file"}
+                </span>
                 <div className="review-diff-controls">
                   <button
                     type="button"
@@ -966,17 +995,18 @@ export function WorkspaceReviewScreen({
               </p>
             )
           )}
+        </div>
 
-          {snapshot && (
-            <section className="review-comments" aria-label="Review notes">
+        {snapshot && (
+          <aside className="review-aside" aria-label="Verify and commit">
+            <section
+              className="review-aside-card review-comments"
+              aria-label="Review notes"
+            >
               <div className="review-section-head">
-                <h2>
-                  Review notes{" "}
-                  <small>
-                    ({fileComments.length}
-                    {selectedFile ? ` on ${selectedFile}` : ""})
-                  </small>
-                </h2>
+                <span className="eyebrow">
+                  Review notes ({fileComments.length})
+                </span>
                 {unresolvedCount > 0 && (
                   <button
                     type="button"
@@ -984,7 +1014,7 @@ export function WorkspaceReviewScreen({
                     disabled={actionPending}
                     onClick={handleSendNotesToRook}
                   >
-                    Send {unresolvedCount} note(s) to Rook Build ↗
+                    Send {unresolvedCount} to Rook ↗
                   </button>
                 )}
               </div>
@@ -999,14 +1029,14 @@ export function WorkspaceReviewScreen({
                   <input
                     className="review-line-input"
                     inputMode="numeric"
-                    placeholder="Line #"
+                    placeholder="Ln"
                     aria-label="Line number (optional)"
                     value={commentLine}
                     onChange={(event) => setCommentLine(event.target.value)}
                   />
                   <input
                     className="review-body-input"
-                    placeholder={`Leave a note for ${selectedFile} (send to Rook Build to fix)…`}
+                    placeholder={`Note for ${selectedFile.split("/").at(-1)}…`}
                     aria-label="Review note"
                     value={commentBody}
                     onChange={(event) => setCommentBody(event.target.value)}
@@ -1016,41 +1046,41 @@ export function WorkspaceReviewScreen({
                     className="button button-quiet"
                     disabled={actionPending || !commentBody.trim()}
                   >
-                    Add note
+                    Add
                   </button>
                 </form>
               )}
-              <ul className="review-comment-list">
-                {fileComments.map((comment) => (
-                  <li
-                    key={comment.id}
-                    className={comment.resolved ? "is-resolved" : ""}
-                  >
-                    <div>
-                      <strong>
-                        {comment.filePath}
-                        {comment.lineNumber ? `:${comment.lineNumber}` : ""}
-                      </strong>
-                      <p>{comment.body}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="button button-quiet"
-                      onClick={() =>
-                        void handleToggleComment(comment.id, !comment.resolved)
-                      }
+              {fileComments.length > 0 && (
+                <ul className="review-comment-list">
+                  {fileComments.map((comment) => (
+                    <li
+                      key={comment.id}
+                      className={comment.resolved ? "is-resolved" : ""}
                     >
-                      {comment.resolved ? "Reopen" : "Resolve"}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                      <div>
+                        <strong>
+                          {comment.filePath.split("/").at(-1)}
+                          {comment.lineNumber ? `:${comment.lineNumber}` : ""}
+                        </strong>
+                        <p>{comment.body}</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        onClick={() =>
+                          void handleToggleComment(
+                            comment.id,
+                            !comment.resolved,
+                          )
+                        }
+                      >
+                        {comment.resolved ? "Reopen" : "Resolve"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
-          )}
-        </div>
-
-        {snapshot && (
-          <aside className="review-aside" aria-label="Verify and commit">
             {impactReport && (
               <section
                 className="review-aside-card review-impact-card"

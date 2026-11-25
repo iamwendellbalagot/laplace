@@ -54,38 +54,22 @@ function verifyPillMeta(pulse: WorkspacePulse | null): {
   }
 }
 
-export function TopbarPulse({
+export function TopbarProjectSwitcher({
   activeProject,
   recentProjects,
   workspacePulse,
   browserPreview,
   projectPending,
-  rookConnected,
-  rookConnecting,
-  rookMode,
-  rookRunning,
-  rookPermissionPending,
   onOpenProject,
   onOpenHome,
-  onOpenReview,
-  onOpenVerify,
-  onFocusRook,
 }: {
   activeProject?: ProjectSummary;
   recentProjects: ProjectSummary[];
   workspacePulse: WorkspacePulse | null;
   browserPreview: boolean;
   projectPending: boolean;
-  rookConnected: boolean;
-  rookConnecting: boolean;
-  rookMode: RookMode;
-  rookRunning: boolean;
-  rookPermissionPending: boolean;
   onOpenProject: (path?: string) => void;
   onOpenHome: () => void;
-  onOpenReview: () => void;
-  onOpenVerify: () => void;
-  onFocusRook: () => void;
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
@@ -96,12 +80,109 @@ export function TopbarPulse({
         ? "Git repository"
         : "Folder"
     : "no project";
-  const dirtyTotal =
-    (workspacePulse?.dirtyCount ?? 0) + (workspacePulse?.untrackedCount ?? 0);
   const aheadBehind =
     workspacePulse && (workspacePulse.ahead > 0 || workspacePulse.behind > 0)
       ? `${workspacePulse.ahead > 0 ? `↑${workspacePulse.ahead}` : ""}${workspacePulse.behind > 0 ? `↓${workspacePulse.behind}` : ""}`
       : null;
+
+  return (
+    <div className="project-context-wrap">
+      <button
+        type="button"
+        className="project-context-button"
+        aria-expanded={switcherOpen}
+        aria-label="Project context and switcher"
+        onClick={() => setSwitcherOpen((open) => !open)}
+      >
+        <span className="project-avatar" aria-hidden="true">
+          {activeProject?.name.slice(0, 1) ?? "—"}
+        </span>
+        <span className="project-context-name">
+          {activeProject?.name ?? "No project open"}
+        </span>
+        <span className="toolbar-subtle">
+          / {branchLabel}
+          {aheadBehind ? ` ${aheadBehind}` : ""}
+        </span>
+        <span className="toolbar-caret" aria-hidden="true">
+          ⌄
+        </span>
+      </button>
+      {switcherOpen && (
+        <div
+          className="project-switcher-popover"
+          role="menu"
+          aria-label="Workspace switcher"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setSwitcherOpen(false);
+              onOpenHome();
+            }}
+          >
+            Project Pulse overview
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={projectPending || browserPreview}
+            onClick={() => {
+              setSwitcherOpen(false);
+              onOpenProject();
+            }}
+          >
+            Open folder…
+          </button>
+          {recentProjects.length > 0 && (
+            <div className="project-switcher-group">
+              <span className="eyebrow">Recent projects</span>
+              {recentProjects.slice(0, 6).map((proj) => (
+                <button
+                  key={proj.id}
+                  type="button"
+                  role="menuitem"
+                  className={proj.id === activeProject?.id ? "is-current" : ""}
+                  disabled={projectPending || browserPreview}
+                  onClick={() => {
+                    setSwitcherOpen(false);
+                    onOpenProject(proj.path);
+                  }}
+                >
+                  <strong>{proj.name}</strong>
+                  <small>{proj.path}</small>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TopbarPulse({
+  activeProject,
+  workspacePulse,
+  rookConnected,
+  rookConnecting,
+  rookMode,
+  rookRunning,
+  rookPermissionPending,
+  onOpenVerify,
+  onFocusRook,
+}: {
+  activeProject?: ProjectSummary;
+  workspacePulse: WorkspacePulse | null;
+  rookConnected: boolean;
+  rookConnecting: boolean;
+  rookMode: RookMode;
+  rookRunning: boolean;
+  rookPermissionPending: boolean;
+  onOpenVerify: () => void;
+  onFocusRook: () => void;
+}) {
   const verifyMeta = verifyPillMeta(workspacePulse);
 
   const rookLabel = rookPermissionPending
@@ -116,105 +197,15 @@ export function TopbarPulse({
 
   return (
     <>
-      <div className="project-context-wrap">
+      {activeProject?.isGitRepository && (
         <button
           type="button"
-          className="project-context-button"
-          aria-expanded={switcherOpen}
-          aria-label="Project context and switcher"
-          onClick={() => setSwitcherOpen((open) => !open)}
+          className={`pulse-pill pulse-verify-${verifyMeta.tone}`}
+          title={verifyMeta.title}
+          onClick={onOpenVerify}
         >
-          <span className="project-avatar" aria-hidden="true">
-            {activeProject?.name.slice(0, 1) ?? "—"}
-          </span>
-          <span className="project-context-name">
-            {activeProject?.name ?? "No project open"}
-          </span>
-          <span className="toolbar-subtle">
-            / {branchLabel}
-            {aheadBehind ? ` ${aheadBehind}` : ""}
-          </span>
-          <span className="toolbar-caret" aria-hidden="true">
-            ⌄
-          </span>
+          {verifyMeta.label}
         </button>
-        {switcherOpen && (
-          <div
-            className="project-switcher-popover"
-            role="menu"
-            aria-label="Workspace switcher"
-          >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setSwitcherOpen(false);
-                onOpenHome();
-              }}
-            >
-              Project Pulse overview
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              disabled={projectPending || browserPreview}
-              onClick={() => {
-                setSwitcherOpen(false);
-                onOpenProject();
-              }}
-            >
-              Open folder…
-            </button>
-            {recentProjects.length > 0 && (
-              <div className="project-switcher-group">
-                <span className="eyebrow">Recent projects</span>
-                {recentProjects.slice(0, 6).map((proj) => (
-                  <button
-                    key={proj.id}
-                    type="button"
-                    role="menuitem"
-                    className={
-                      proj.id === activeProject?.id ? "is-current" : ""
-                    }
-                    disabled={projectPending || browserPreview}
-                    onClick={() => {
-                      setSwitcherOpen(false);
-                      onOpenProject(proj.path);
-                    }}
-                  >
-                    <strong>{proj.name}</strong>
-                    <small>{proj.path}</small>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {activeProject && (
-        <div className="topbar-pulse-pills" aria-label="Workspace pulse">
-          {activeProject.isGitRepository && (
-            <button
-              type="button"
-              className={`pulse-pill${dirtyTotal > 0 ? " is-active-changes" : ""}`}
-              title="Open Review for working-tree changes"
-              onClick={onOpenReview}
-            >
-              {dirtyTotal > 0 ? `${dirtyTotal} modified` : "Clean tree"}
-            </button>
-          )}
-          {activeProject.isGitRepository && (
-            <button
-              type="button"
-              className={`pulse-pill pulse-verify-${verifyMeta.tone}`}
-              title={verifyMeta.title}
-              onClick={onOpenVerify}
-            >
-              {verifyMeta.label}
-            </button>
-          )}
-        </div>
       )}
 
       <button

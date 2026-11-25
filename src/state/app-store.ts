@@ -8,6 +8,10 @@ export const DEFAULT_PREFERENCES: UiPreferences = {
   navigationCollapsed: false,
   inspectorCollapsed: false,
   inspectorWidth: 360,
+  explorerCollapsed: false,
+  explorerWidth: 238,
+  bottomDrawerCollapsed: false,
+  bottomDrawerHeight: 240,
 };
 
 export type PageId =

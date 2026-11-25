@@ -49,7 +49,10 @@ import {
   CommandPalette,
   type PaletteCommand,
 } from "./features/shell/CommandPalette";
-import { TopbarPulse } from "./features/shell/TopbarPulse";
+import {
+  TopbarProjectSwitcher,
+  TopbarPulse,
+} from "./features/shell/TopbarPulse";
 import { ToolsScreen } from "./features/tools/ToolsScreen";
 
 interface AppProps {
@@ -225,6 +228,12 @@ export function App({ service, browserPreview = false }: AppProps) {
     if (nextPage === "verify") {
       setBottomDrawerTab("verify");
       setPage("editor");
+      if (preferences.bottomDrawerCollapsed) {
+        void savePreferences({
+          ...preferences,
+          bottomDrawerCollapsed: false,
+        });
+      }
       return;
     }
     setPage(nextPage);
@@ -1834,6 +1843,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         navigateHistoryStep(1);
       } else if (
         (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
         key === "b" &&
         !isTextEntry
       ) {
@@ -1841,6 +1851,37 @@ export function App({ service, browserPreview = false }: AppProps) {
         void savePreferences({
           ...preferences,
           navigationCollapsed: !preferences.navigationCollapsed,
+        });
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        key === "b" &&
+        !isTextEntry
+      ) {
+        event.preventDefault();
+        if (page === "editor" && activeProject) {
+          void savePreferences({
+            ...preferences,
+            explorerCollapsed: !preferences.explorerCollapsed,
+          });
+        } else {
+          void savePreferences({
+            ...preferences,
+            navigationCollapsed: !preferences.navigationCollapsed,
+          });
+        }
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        key === "j" &&
+        activeProject &&
+        !isTextEntry
+      ) {
+        event.preventDefault();
+        setPage("editor");
+        void savePreferences({
+          ...preferences,
+          bottomDrawerCollapsed: !preferences.bottomDrawerCollapsed,
         });
       }
     }
@@ -1960,6 +2001,12 @@ export function App({ service, browserPreview = false }: AppProps) {
         run: () => {
           setBottomDrawerTab("verify");
           navigateTracked("editor");
+          if (preferences.bottomDrawerCollapsed) {
+            void savePreferences({
+              ...preferences,
+              bottomDrawerCollapsed: false,
+            });
+          }
         },
       },
       {
@@ -1970,11 +2017,39 @@ export function App({ service, browserPreview = false }: AppProps) {
         run: () => navigateTracked("home"),
       },
       {
+        id: "toggle-explorer",
+        label: preferences.explorerCollapsed
+          ? "Show file explorer"
+          : "Hide file explorer",
+        description: "Toggle the Workspace left sidebar (⌘B)",
+        category: "action",
+        run: () =>
+          void savePreferences({
+            ...preferences,
+            explorerCollapsed: !preferences.explorerCollapsed,
+          }),
+      },
+      {
+        id: "toggle-bottom-drawer",
+        label: preferences.bottomDrawerCollapsed
+          ? "Show bottom tools drawer"
+          : "Hide bottom tools drawer",
+        description: "Toggle Terminal, Run, Git, and Verify (⌘J)",
+        category: "action",
+        run: () => {
+          setPage("editor");
+          void savePreferences({
+            ...preferences,
+            bottomDrawerCollapsed: !preferences.bottomDrawerCollapsed,
+          });
+        },
+      },
+      {
         id: "toggle-navigation",
         label: preferences.navigationCollapsed
           ? "Expand navigation rail"
           : "Collapse navigation rail",
-        description: "Toggle the left navigation rail",
+        description: "Toggle the left navigation rail (⌘⇧B)",
         category: "action",
         run: () =>
           void savePreferences({
@@ -2634,6 +2709,14 @@ export function App({ service, browserPreview = false }: AppProps) {
     />
   );
 
+  const dirtyTotal =
+    (workspacePulse?.dirtyCount ?? 0) + (workspacePulse?.untrackedCount ?? 0);
+  const activeStatusFile =
+    documents.find(
+      (doc) =>
+        doc.key === activeDocumentKey && doc.projectId === activeProject?.id,
+    )?.path ?? selectedFilePath;
+
   return (
     <div
       className="app-shell"
@@ -2643,43 +2726,56 @@ export function App({ service, browserPreview = false }: AppProps) {
         {
           "--editor-font-size": `${preferences.editorFontSize}px`,
           "--inspector-width": `${preferences.inspectorWidth}px`,
+          "--explorer-width": `${preferences.explorerWidth ?? 238}px`,
+          "--drawer-height": `${preferences.bottomDrawerHeight ?? 240}px`,
         } as CSSProperties
       }
     >
       <header className="topbar" aria-label="Application toolbar">
-        <button
-          className="brand"
-          type="button"
-          aria-label="Laplace home"
-          onClick={() => navigateTracked("home")}
-        >
-          <OrbitMark />
-          <span>
-            laplace<span className="brand-point">.</span>
-          </span>
-        </button>
-        <span className="toolbar-divider" />
-        <div className="nav-history-controls" aria-label="Navigation history">
+        <div className="toolbar-left">
           <button
+            className="brand"
             type="button"
-            className="toolbar-icon-button"
-            aria-label="Go back"
-            title="Back (Alt+Left)"
-            disabled={navHistoryIndex <= 0}
-            onClick={() => navigateHistoryStep(-1)}
+            aria-label="Laplace home"
+            onClick={() => navigateTracked("home")}
           >
-            ‹
+            <OrbitMark />
+            <span>
+              laplace<span className="brand-point">.</span>
+            </span>
           </button>
-          <button
-            type="button"
-            className="toolbar-icon-button"
-            aria-label="Go forward"
-            title="Forward (Alt+Right)"
-            disabled={navHistoryIndex >= navHistory.length - 1}
-            onClick={() => navigateHistoryStep(1)}
-          >
-            ›
-          </button>
+          <span className="toolbar-divider" />
+          <div className="nav-history-controls" aria-label="Navigation history">
+            <button
+              type="button"
+              className="toolbar-icon-button"
+              aria-label="Go back"
+              title="Back (Alt+Left)"
+              disabled={navHistoryIndex <= 0}
+              onClick={() => navigateHistoryStep(-1)}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              className="toolbar-icon-button"
+              aria-label="Go forward"
+              title="Forward (Alt+Right)"
+              disabled={navHistoryIndex >= navHistory.length - 1}
+              onClick={() => navigateHistoryStep(1)}
+            >
+              ›
+            </button>
+          </div>
+          <TopbarProjectSwitcher
+            activeProject={activeProject}
+            recentProjects={recentProjects}
+            workspacePulse={workspacePulse}
+            browserPreview={browserPreview}
+            projectPending={projectPending}
+            onOpenProject={(p) => void openProject(p)}
+            onOpenHome={() => navigateTracked("home")}
+          />
         </div>
 
         <Dialog.Root open={paletteOpen} onOpenChange={setPaletteOpen}>
@@ -2689,7 +2785,7 @@ export function App({ service, browserPreview = false }: AppProps) {
                 ⌕
               </span>
               <span className="command-placeholder">
-                Search screens and commands
+                Search files, symbols, commands
               </span>
               <kbd>{platformShortcut}</kbd>
             </button>
@@ -2712,33 +2808,24 @@ export function App({ service, browserPreview = false }: AppProps) {
           )}
           <TopbarPulse
             activeProject={activeProject}
-            recentProjects={recentProjects}
             workspacePulse={workspacePulse}
-            browserPreview={browserPreview}
-            projectPending={projectPending}
             rookConnected={Boolean(rookSession)}
             rookConnecting={rookStartupPending}
             rookMode={rookMode}
             rookRunning={Boolean(rookRunId)}
             rookPermissionPending={rookPermissionPending}
-            onOpenProject={(p) => void openProject(p)}
-            onOpenHome={() => navigateTracked("home")}
-            onOpenReview={() => openWorkspaceReview(undefined, "head")}
             onOpenVerify={() => {
               setBottomDrawerTab("verify");
               navigateTracked("editor");
+              if (preferences.bottomDrawerCollapsed) {
+                void savePreferences({
+                  ...preferences,
+                  bottomDrawerCollapsed: false,
+                });
+              }
             }}
             onFocusRook={focusDockedRook}
           />
-          <button
-            type="button"
-            className="toolbar-icon-button"
-            aria-label="Open settings"
-            title="Settings"
-            onClick={() => navigateTracked("settings")}
-          >
-            ⚙
-          </button>
         </div>
       </header>
 
@@ -2766,6 +2853,14 @@ export function App({ service, browserPreview = false }: AppProps) {
                   {item.symbol}
                 </span>
                 <span className="nav-label">{item.label}</span>
+                {item.id === "changes" && dirtyTotal > 0 && (
+                  <span
+                    className="nav-badge"
+                    aria-label={`${dirtyTotal} modified files`}
+                  >
+                    {dirtyTotal > 99 ? "99+" : dirtyTotal}
+                  </span>
+                )}
               </button>
             </div>
           ))}
@@ -2850,18 +2945,28 @@ export function App({ service, browserPreview = false }: AppProps) {
           <span className="status-mark" aria-hidden="true">
             ◈
           </span>
-          <span>{activeProject?.name ?? "No workspace"}</span>
-          {workspacePulse?.branch && (
+          {activeStatusFile ? (
             <>
-              <span className="status-separator" />
-              <span>{workspacePulse.branch}</span>
+              <span className="statusbar-file" title={activeStatusFile}>
+                {activeStatusFile}
+              </span>
+              {page === "editor" && editorCursor && (
+                <>
+                  <span className="status-separator" />
+                  <span>
+                    Ln {editorCursor.line}, Col {editorCursor.column}
+                  </span>
+                </>
+              )}
             </>
+          ) : (
+            <span>{activeProject ? "Ready" : "No workspace"}</span>
           )}
           <span className="status-separator" />
           <span>Local-first</span>
         </div>
         <div className="statusbar-group statusbar-secondary">
-          <span>⌘L Rook · ⌘⇧P Commands · ⌘P Files</span>
+          <span>⌘L Rook · ⌘B Files · ⌘J Drawer · ⌘⇧P Commands · ⌘P Open</span>
           <span className="status-separator" />
           <span>{screenTitles[page]}</span>
         </div>

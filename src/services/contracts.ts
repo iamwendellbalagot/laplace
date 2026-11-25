@@ -39,6 +39,10 @@ export interface UiPreferences {
   navigationCollapsed: boolean;
   inspectorCollapsed: boolean;
   inspectorWidth: number;
+  explorerCollapsed?: boolean;
+  explorerWidth?: number;
+  bottomDrawerCollapsed?: boolean;
+  bottomDrawerHeight?: number;
 }
 
 export interface PreferencesRequest {
