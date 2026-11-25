@@ -5237,7 +5237,16 @@ kbd,
   color: var(--text);
 }
 .rook-dock-floating.is-collapsed .rook-dock-toggle {
+  border-color: color-mix(in srgb, var(--green) 42%, var(--border));
+  background: color-mix(in srgb, var(--green) 10%, var(--surface-raised));
+  color: var(--green);
   box-shadow: -6px 4px 18px rgb(0 0 0 / 30%);
+}
+.rook-dock-floating.is-collapsed .rook-dock-toggle:hover,
+.rook-dock-floating.is-collapsed .rook-dock-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--green) 65%, var(--border));
+  background: color-mix(in srgb, var(--green) 16%, var(--surface-hover));
+  color: var(--brass-light);
 }
 .rook-dock-floating.is-collapsed .rook-dock-toggle-icon {
   transform: rotate(180deg);
