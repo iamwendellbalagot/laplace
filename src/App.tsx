@@ -72,16 +72,6 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function OrbitMark() {
-  return (
-    <svg className="orbit-mark" viewBox="0 0 36 36" aria-hidden="true">
-      <circle cx="18" cy="18" r="15.5" />
-      <path d="M12 9v17h15M12 26 25 10" />
-      <circle className="orbit-point" cx="25" cy="10" r="2" />
-    </svg>
-  );
-}
-
 export function App({ service, browserPreview = false }: AppProps) {
   const page = useAppStore((s) => s.page);
   const preferences = useAppStore((s) => s.preferences);
@@ -2756,6 +2746,11 @@ export function App({ service, browserPreview = false }: AppProps) {
         doc.key === activeDocumentKey && doc.projectId === activeProject?.id,
     )?.path ?? selectedFilePath;
 
+  const isTauriRuntime =
+    !browserPreview &&
+    typeof window !== "undefined" &&
+    "__TAURI_INTERNALS__" in window;
+
   return (
     <div
       className="app-shell"
@@ -2770,20 +2765,12 @@ export function App({ service, browserPreview = false }: AppProps) {
         } as CSSProperties
       }
     >
-      <header className="topbar" aria-label="Application toolbar">
-        <div className="toolbar-left">
-          <button
-            className="brand"
-            type="button"
-            aria-label="Laplace home"
-            onClick={() => navigateTracked("home")}
-          >
-            <OrbitMark />
-            <span>
-              laplace<span className="brand-point">.</span>
-            </span>
-          </button>
-          <span className="toolbar-divider" />
+      <header
+        className={`system-titlebar${isTauriRuntime ? " is-tauri" : ""}`}
+        aria-label="Window header"
+        data-tauri-drag-region
+      >
+        <div className="system-titlebar-left" data-tauri-drag-region>
           <div className="nav-history-controls" aria-label="Navigation history">
             <button
               type="button"
@@ -2809,7 +2796,6 @@ export function App({ service, browserPreview = false }: AppProps) {
           <TopbarProjectSwitcher
             activeProject={activeProject}
             recentProjects={recentProjects}
-            workspacePulse={workspacePulse}
             browserPreview={browserPreview}
             projectPending={projectPending}
             onOpenProject={(p) => void openProject(p)}
@@ -2817,29 +2803,33 @@ export function App({ service, browserPreview = false }: AppProps) {
           />
         </div>
 
-        <Dialog.Root open={paletteOpen} onOpenChange={setPaletteOpen}>
-          <Dialog.Trigger asChild>
-            <button className="command-trigger" type="button">
-              <span className="search-glyph" aria-hidden="true">
-                ⌕
-              </span>
-              <span className="command-placeholder">
-                Search files, symbols, commands
-              </span>
-              <kbd>{platformShortcut}</kbd>
-            </button>
-          </Dialog.Trigger>
-          <CommandPalette
-            commands={commands}
-            loadingExtras={paletteLoadingExtras}
-            onRun={(command, options) => {
-              command.run(options);
-              setPaletteOpen(false);
-            }}
-          />
-        </Dialog.Root>
+        <div className="system-titlebar-center" data-tauri-drag-region>
+          <Dialog.Root open={paletteOpen} onOpenChange={setPaletteOpen}>
+            <Dialog.Trigger asChild>
+              <button
+                className="system-search-trigger"
+                type="button"
+                title={`Search files, symbols, commands (${platformShortcut})`}
+              >
+                <span className="search-glyph" aria-hidden="true">
+                  ⌕
+                </span>
+                <span className="command-placeholder">Search</span>
+                <kbd>{platformShortcut}</kbd>
+              </button>
+            </Dialog.Trigger>
+            <CommandPalette
+              commands={commands}
+              loadingExtras={paletteLoadingExtras}
+              onRun={(command, options) => {
+                command.run(options);
+                setPaletteOpen(false);
+              }}
+            />
+          </Dialog.Root>
+        </div>
 
-        <div className="toolbar-right">
+        <div className="system-titlebar-right" data-tauri-drag-region>
           {browserPreview && (
             <span className="preview-badge" role="status">
               Browser preview · native actions off
@@ -2853,6 +2843,7 @@ export function App({ service, browserPreview = false }: AppProps) {
             rookMode={rookMode}
             rookRunning={Boolean(rookRunId)}
             rookPermissionPending={rookPermissionPending}
+            onOpenReview={() => navigateTracked("changes")}
             onOpenVerify={() => {
               setBottomDrawerTab("verify");
               navigateTracked("editor");
