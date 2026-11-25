@@ -1200,6 +1200,22 @@ export function RookPanel({
         )}
 
         <div className="rook-composer-dock-wrap">
+          {!providerControlsAvailable && session && (
+            <p className="rook-version-note" role="status">
+              This Rook version doesn’t provide a model picker. Ask will use its
+              current Rook model.
+            </p>
+          )}
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
+          {rookStartupError && session && (
+            <p className="inline-error" role="alert">
+              {rookStartupError}
+            </p>
+          )}
           <form
             className="rook-composer"
             onSubmit={(event) => {
@@ -1913,23 +1929,6 @@ export function RookPanel({
             </div>
           </div>
         </div>
-
-        {!providerControlsAvailable && session && (
-          <p className="rook-version-note" role="status">
-            This Rook version doesn’t provide a model picker. Ask will use its
-            current Rook model.
-          </p>
-        )}
-        {error && (
-          <p className="inline-error" role="alert">
-            {error}
-          </p>
-        )}
-        {rookStartupError && session && (
-          <p className="inline-error" role="alert">
-            {rookStartupError}
-          </p>
-        )}
       </div>
 
       {activeWorktree && (

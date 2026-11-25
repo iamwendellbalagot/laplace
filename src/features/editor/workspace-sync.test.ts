@@ -3,7 +3,10 @@ import {
   applyExternalReload,
   dismissExternalChangeKeepingEdits,
   isMutatingRookTool,
+  nextActiveDocumentAfterClose,
+  pruneDocumentsForDelete,
   reconcileDocumentWithDisk,
+  remapDocumentsForRename,
   type SyncableDocument,
 } from "./workspace-sync";
 
@@ -115,5 +118,59 @@ describe("workspace-sync", () => {
     expect(isMutatingRookTool("read")).toBe(false);
     expect(isMutatingRookTool("rook_search")).toBe(false);
     expect(isMutatingRookTool("ls")).toBe(false);
+  });
+
+  it("remaps active and split keys on directory rename and clears them on delete", () => {
+    const docs = [
+      makeDoc({ key: "/repo\0src/old/a.ts", path: "src/old/a.ts" }),
+      makeDoc({ key: "/repo\0src/old/b.ts", path: "src/old/b.ts" }),
+      makeDoc({
+        key: "/other\0src/old/a.ts",
+        projectId: "/other",
+        path: "src/old/a.ts",
+      }),
+    ];
+
+    const renamed = remapDocumentsForRename(
+      docs,
+      "/repo",
+      "src/old",
+      "src/new",
+      "/repo\0src/old/a.ts",
+      "/repo\0src/old/b.ts",
+      "src/old/a.ts",
+    );
+    expect(renamed.activeDocumentKey).toBe("/repo\0src/new/a.ts");
+    expect(renamed.splitDocumentKey).toBe("/repo\0src/new/b.ts");
+    expect(renamed.selectedFilePath).toBe("src/new/a.ts");
+    expect(renamed.documents[2].path).toBe("src/old/a.ts");
+
+    const pruned = pruneDocumentsForDelete(
+      renamed.documents,
+      "/repo",
+      "src/new/b.ts",
+      renamed.activeDocumentKey,
+      renamed.splitDocumentKey,
+      "src/new/b.ts",
+    );
+    expect(pruned.splitDocumentKey).toBeUndefined();
+    expect(pruned.activeDocumentKey).toBe("/repo\0src/new/a.ts");
+    expect(pruned.clearSelectedFile).toBe(true);
+  });
+
+  it("scopes next active tab fallback to the closed document project", () => {
+    const otherDoc = makeDoc({
+      key: "/other\0keep.ts",
+      projectId: "/other",
+      path: "keep.ts",
+    });
+    const closedDoc = makeDoc({
+      key: "/repo\0close.ts",
+      projectId: "/repo",
+      path: "close.ts",
+    });
+    expect(
+      nextActiveDocumentAfterClose([otherDoc], closedDoc, closedDoc.key),
+    ).toBeUndefined();
   });
 });

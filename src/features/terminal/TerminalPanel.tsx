@@ -9,7 +9,23 @@ interface Props {
   workspaceId: string;
   browserPreview: boolean;
   trusted: boolean;
+  theme?: "dark" | "light";
   onTrust: () => Promise<void>;
+  onUntrust?: () => Promise<void>;
+}
+
+function terminalColors(theme: "dark" | "light") {
+  return theme === "light"
+    ? {
+        background: "#efeee7",
+        foreground: "#252b27",
+        cursor: "#8b643a",
+      }
+    : {
+        background: "#11120f",
+        foreground: "#e7e2d4",
+        cursor: "#c6a86a",
+      };
 }
 
 export function TerminalPanel({
@@ -17,25 +33,33 @@ export function TerminalPanel({
   workspaceId,
   browserPreview,
   trusted,
+  theme = "dark",
   onTrust,
+  onUntrust,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   const [error, setError] = useState<string>();
-  const [workspaceTrusted, setWorkspaceTrusted] = useState(trusted);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = terminalColors(theme);
+    }
+  }, [theme]);
+
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || browserPreview || !workspaceTrusted) return;
+    if (!host || browserPreview || !trusted) return;
     const id = crypto.randomUUID().replaceAll("-", "");
     const terminal = new Terminal({
       convertEol: false,
       fontFamily: '"JetBrains Mono", monospace',
       fontSize: 12,
-      theme: {
-        background: "#11120f",
-        foreground: "#e7e2d4",
-        cursor: "#c6a86a",
-      },
+      theme: terminalColors(themeRef.current),
     });
+    terminalRef.current = terminal;
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
@@ -47,8 +71,10 @@ export function TerminalPanel({
         .writeTerminal(id, workspaceId, undefined, terminal.rows, terminal.cols)
         .catch(() => undefined);
     const resize = new ResizeObserver(() => {
-      fit.fit();
-      sendResize();
+      if (host.clientWidth > 0 && host.clientHeight > 0) {
+        fit.fit();
+        sendResize();
+      }
     });
     resize.observe(host);
     void service
@@ -89,25 +115,29 @@ export function TerminalPanel({
       stopped = true;
       resize.disconnect();
       unlisten?.();
+      terminalRef.current = null;
       void service.stopTerminal(id, workspaceId).catch(() => undefined);
       terminal.dispose();
     };
-  }, [browserPreview, service, workspaceId, workspaceTrusted]);
+  }, [browserPreview, service, trusted, workspaceId]);
 
   return (
-    <section className="terminal-panel" aria-label="Workspace terminal">
+    <section
+      className={`terminal-panel${!browserPreview && trusted ? " terminal-panel-active" : ""}`}
+      aria-label="Workspace terminal"
+    >
       {browserPreview ? (
         <p role="status">Terminal requires the native desktop app.</p>
-      ) : !workspaceTrusted ? (
+      ) : !trusted ? (
         <div>
           <p>Starting a shell can execute project-controlled commands.</p>
           <button
             type="button"
+            className="button button-primary"
             onClick={() =>
               void onTrust()
                 .then(() => {
                   setError(undefined);
-                  setWorkspaceTrusted(true);
                 })
                 .catch((failure) => setError(String(failure)))
             }
@@ -116,7 +146,22 @@ export function TerminalPanel({
           </button>
         </div>
       ) : (
-        <div ref={hostRef} className="terminal-host" />
+        <>
+          {onUntrust && (
+            <div className="terminal-toolbar">
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() =>
+                  void onUntrust().catch((failure) => setError(String(failure)))
+                }
+              >
+                Revoke project trust
+              </button>
+            </div>
+          )}
+          <div ref={hostRef} className="terminal-host" />
+        </>
       )}
       {error && (
         <p className="inline-error" role="alert">

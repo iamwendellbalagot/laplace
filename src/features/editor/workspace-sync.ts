@@ -138,3 +138,108 @@ export function dismissExternalChangeKeepingEdits<T extends SyncableDocument>(
     externalChange: undefined,
   };
 }
+
+function remapRelativePath(
+  path: string,
+  fromPath: string,
+  toPath: string,
+): string {
+  if (path === fromPath) return toPath;
+  if (path.startsWith(`${fromPath}/`)) {
+    return `${toPath}${path.slice(fromPath.length)}`;
+  }
+  return path;
+}
+
+function isSameOrDescendantPath(path: string, targetPath: string): boolean {
+  return path === targetPath || path.startsWith(`${targetPath}/`);
+}
+
+export function remapDocumentsForRename<T extends SyncableDocument>(
+  documents: T[],
+  projectId: string,
+  fromPath: string,
+  toPath: string,
+  activeDocumentKey?: string,
+  splitDocumentKey?: string,
+  selectedFilePath?: string,
+): {
+  documents: T[];
+  activeDocumentKey?: string;
+  splitDocumentKey?: string;
+  selectedFilePath?: string;
+} {
+  const prefix = `${projectId}\0`;
+  const nextDocs = documents.map((doc) => {
+    if (doc.projectId !== projectId) return doc;
+    const nextPath = remapRelativePath(doc.path, fromPath, toPath);
+    return nextPath === doc.path
+      ? doc
+      : { ...doc, path: nextPath, key: `${prefix}${nextPath}` };
+  });
+  const remapKey = (key?: string) =>
+    key?.startsWith(prefix)
+      ? `${prefix}${remapRelativePath(key.slice(prefix.length), fromPath, toPath)}`
+      : key;
+  return {
+    documents: nextDocs,
+    activeDocumentKey: remapKey(activeDocumentKey),
+    splitDocumentKey: remapKey(splitDocumentKey),
+    selectedFilePath: selectedFilePath
+      ? remapRelativePath(selectedFilePath, fromPath, toPath)
+      : undefined,
+  };
+}
+
+export function pruneDocumentsForDelete<T extends SyncableDocument>(
+  documents: T[],
+  projectId: string,
+  deletedPath: string,
+  activeDocumentKey?: string,
+  splitDocumentKey?: string,
+  selectedFilePath?: string,
+): {
+  documents: T[];
+  activeDocumentKey?: string;
+  splitDocumentKey?: string;
+  clearSelectedFile: boolean;
+} {
+  const prefix = `${projectId}\0`;
+  const nextDocs = documents.filter(
+    (doc) =>
+      doc.projectId !== projectId ||
+      !isSameOrDescendantPath(doc.path, deletedPath),
+  );
+  const nextActiveKey =
+    activeDocumentKey?.startsWith(prefix) &&
+    isSameOrDescendantPath(activeDocumentKey.slice(prefix.length), deletedPath)
+      ? nextDocs.filter((doc) => doc.projectId === projectId).at(-1)?.key
+      : activeDocumentKey;
+  const nextSplitKey =
+    splitDocumentKey?.startsWith(prefix) &&
+    isSameOrDescendantPath(splitDocumentKey.slice(prefix.length), deletedPath)
+      ? undefined
+      : splitDocumentKey;
+  return {
+    documents: nextDocs,
+    activeDocumentKey: nextActiveKey,
+    splitDocumentKey: nextSplitKey,
+    clearSelectedFile: Boolean(
+      selectedFilePath && isSameOrDescendantPath(selectedFilePath, deletedPath),
+    ),
+  };
+}
+
+export function nextActiveDocumentAfterClose<T extends SyncableDocument>(
+  remainingDocuments: T[],
+  closedDocument: T,
+  activeDocumentKey?: string,
+): T | undefined {
+  const projectDocs = remainingDocuments.filter(
+    (item) => item.projectId === closedDocument.projectId,
+  );
+  if (activeDocumentKey === closedDocument.key) {
+    return projectDocs.at(-1);
+  }
+  return projectDocs.find((item) => item.key === activeDocumentKey);
+}

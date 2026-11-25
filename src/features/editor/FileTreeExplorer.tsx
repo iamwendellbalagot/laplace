@@ -67,7 +67,7 @@ export function FileTreeExplorer({
   const [mutating, setMutating] = useState(false);
 
   const loadDirectory = useCallback(
-    async (relativePath: string) => {
+    async (relativePath: string, options?: { silentIfMissing?: boolean }) => {
       if (browserPreview) return;
       setLoadingDirs((prev) => ({ ...prev, [relativePath]: true }));
       try {
@@ -81,9 +81,25 @@ export function FileTreeExplorer({
         }));
         setError(undefined);
       } catch (failure) {
-        setError(
-          failure instanceof Error ? failure.message : "Could not load folder.",
-        );
+        if (options?.silentIfMissing && relativePath !== "") {
+          setExpandedDirs((prev) =>
+            prev.filter(
+              (item) =>
+                item !== relativePath && !item.startsWith(`${relativePath}/`),
+            ),
+          );
+          setEntriesByDir((prev) => {
+            const next = { ...prev };
+            delete next[relativePath];
+            return next;
+          });
+        } else {
+          setError(
+            failure instanceof Error
+              ? failure.message
+              : "Could not load folder.",
+          );
+        }
       } finally {
         setLoadingDirs((prev) => ({ ...prev, [relativePath]: false }));
       }
@@ -107,7 +123,7 @@ export function FileTreeExplorer({
     if (syncVersion === 0) return;
     void loadDirectory("");
     for (const dir of expandedDirs) {
-      void loadDirectory(dir);
+      void loadDirectory(dir, { silentIfMissing: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncVersion]);
@@ -206,6 +222,17 @@ export function FileTreeExplorer({
       );
       setRenamingPath(null);
       setError(undefined);
+      if (entry.kind === "directory") {
+        setExpandedDirs((prev) =>
+          prev.map((dir) =>
+            dir === entry.relativePath
+              ? updated.relativePath
+              : dir.startsWith(`${entry.relativePath}/`)
+                ? `${updated.relativePath}${dir.slice(entry.relativePath.length)}`
+                : dir,
+          ),
+        );
+      }
       onEntryRenamed(entry.relativePath, updated.relativePath);
       await loadDirectory(parent);
       onRefreshWorkspace();
@@ -231,6 +258,15 @@ export function FileTreeExplorer({
       );
       setConfirmDelete(null);
       setError(undefined);
+      if (entry.kind === "directory") {
+        setExpandedDirs((prev) =>
+          prev.filter(
+            (dir) =>
+              dir !== entry.relativePath &&
+              !dir.startsWith(`${entry.relativePath}/`),
+          ),
+        );
+      }
       onEntryDeleted(entry.relativePath);
       await loadDirectory(parent);
       onRefreshWorkspace();

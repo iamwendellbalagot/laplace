@@ -64,6 +64,7 @@ export function EditorContextInspector({
   onHide,
   embedded = false,
   forcedTab,
+  tabpanelLabelledBy,
 }: {
   service?: AppService;
   browserPreview?: boolean;
@@ -91,6 +92,7 @@ export function EditorContextInspector({
   onHide: () => void;
   embedded?: boolean;
   forcedTab?: "context" | "history";
+  tabpanelLabelledBy?: string;
 }) {
   const [internalTab, setInternalTab] = useState<"context" | "history">(
     "context",
@@ -352,9 +354,10 @@ export function EditorContextInspector({
             className="inspector-body"
             role="tabpanel"
             aria-labelledby={
-              tab === "context"
+              tabpanelLabelledBy ??
+              (tab === "context"
                 ? "inspector-tab-context"
-                : "inspector-tab-history"
+                : "inspector-tab-history")
             }
           >
             <section className="inspector-card">

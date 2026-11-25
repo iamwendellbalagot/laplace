@@ -152,7 +152,10 @@ export function WorkspaceRightPanel({
         </button>
       </div>
 
-      {activeTab === "rook" ? (
+      <div
+        className={activeTab === "rook" ? "explorer-pane-host" : "is-hidden"}
+        aria-hidden={activeTab !== "rook"}
+      >
         <RookPanel
           service={service}
           variant="docked"
@@ -177,10 +180,19 @@ export function WorkspaceRightPanel({
           onApplyWorktree={onApplyWorktree}
           onDiscardWorktree={onDiscardWorktree}
         />
-      ) : (
+      </div>
+      <div
+        className={activeTab !== "rook" ? "explorer-pane-host" : "is-hidden"}
+        aria-hidden={activeTab === "rook"}
+      >
         <EditorContextInspector
           embedded
-          forcedTab={activeTab}
+          forcedTab={activeTab === "history" ? "history" : "context"}
+          tabpanelLabelledBy={
+            activeTab === "history"
+              ? "workspace-tab-history"
+              : "workspace-tab-context"
+          }
           service={service}
           browserPreview={browserPreview}
           activeProject={activeProject}
@@ -201,7 +213,7 @@ export function WorkspaceRightPanel({
           onExpandToContextLens={onExpandToContextLens}
           onHide={onHide}
         />
-      )}
+      </div>
     </aside>
   );
 }

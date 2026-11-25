@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ProjectSummary,
   RookMode,
@@ -72,6 +72,31 @@ export function TopbarProjectSwitcher({
   onOpenHome: () => void;
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!switcherOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        wrapRef.current &&
+        event.target instanceof Node &&
+        !wrapRef.current.contains(event.target)
+      ) {
+        setSwitcherOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSwitcherOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [switcherOpen]);
 
   const branchLabel = activeProject
     ? workspacePulse?.isGitRepository
@@ -86,7 +111,7 @@ export function TopbarProjectSwitcher({
       : null;
 
   return (
-    <div className="project-context-wrap">
+    <div className="project-context-wrap" ref={wrapRef}>
       <button
         type="button"
         className="project-context-button"

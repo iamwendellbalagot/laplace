@@ -39,7 +39,10 @@ import {
   applyExternalReload,
   dismissExternalChangeKeepingEdits,
   isMutatingRookTool,
+  nextActiveDocumentAfterClose,
+  pruneDocumentsForDelete,
   reconcileDocumentWithDisk,
+  remapDocumentsForRename,
 } from "./features/editor/workspace-sync";
 import { ProjectPulseHome } from "./features/home/ProjectPulseHome";
 import { WorkspaceReviewScreen } from "./features/review/WorkspaceReviewScreen";
@@ -1745,8 +1748,12 @@ export function App({ service, browserPreview = false }: AppProps) {
       setActiveEditorPane("primary");
     }
     if (activeDocumentKey === document.key) {
-      setActiveDocumentKey(remaining.at(-1)?.key);
-      const next = remaining.at(-1);
+      const next = nextActiveDocumentAfterClose(
+        remaining,
+        document,
+        activeDocumentKey,
+      );
+      setActiveDocumentKey(next?.key);
       setSelectedFile(
         next?.path,
         next
@@ -1767,6 +1774,10 @@ export function App({ service, browserPreview = false }: AppProps) {
         target instanceof HTMLElement &&
         (target.isContentEditable ||
           target.matches("input, textarea, select, [role='textbox']"));
+      const isMonacoInput =
+        target instanceof HTMLElement &&
+        target.matches(".monaco-editor textarea.inputarea");
+      const isNonEditorTextEntry = isTextEntry && !isMonacoInput;
       const key = event.key.toLowerCase();
 
       if ((event.metaKey || event.ctrlKey) && key === "s") {
@@ -1806,6 +1817,9 @@ export function App({ service, browserPreview = false }: AppProps) {
         activeProject
       ) {
         event.preventDefault();
+        if (preferences.explorerCollapsed) {
+          void savePreferences({ ...preferences, explorerCollapsed: false });
+        }
         useAppStore.getState().focusWorkspaceSearch();
       } else if (
         (event.metaKey || event.ctrlKey) &&
@@ -1845,7 +1859,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         (event.metaKey || event.ctrlKey) &&
         event.shiftKey &&
         key === "b" &&
-        !isTextEntry
+        !isNonEditorTextEntry
       ) {
         event.preventDefault();
         void savePreferences({
@@ -1856,7 +1870,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         (event.metaKey || event.ctrlKey) &&
         !event.shiftKey &&
         key === "b" &&
-        !isTextEntry
+        !isNonEditorTextEntry
       ) {
         event.preventDefault();
         if (page === "editor" && activeProject) {
@@ -1875,7 +1889,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         !event.shiftKey &&
         key === "j" &&
         activeProject &&
-        !isTextEntry
+        !isNonEditorTextEntry
       ) {
         event.preventDefault();
         setPage("editor");
@@ -1984,7 +1998,12 @@ export function App({ service, browserPreview = false }: AppProps) {
         label: "Search Workspace Text",
         description: "Find code across repository files (⌘⇧F)",
         category: "action",
-        run: () => useAppStore.getState().focusWorkspaceSearch(),
+        run: () => {
+          if (preferences.explorerCollapsed) {
+            void savePreferences({ ...preferences, explorerCollapsed: false });
+          }
+          useAppStore.getState().focusWorkspaceSearch();
+        },
       },
       {
         id: "open-quick-open",
@@ -2482,6 +2501,12 @@ export function App({ service, browserPreview = false }: AppProps) {
           onOpenRookWorkspace={() => focusDockedRook()}
           onOpenRookTerminal={(command?: string) => {
             setBottomDrawerTab("terminal");
+            if (preferences.bottomDrawerCollapsed) {
+              void savePreferences({
+                ...preferences,
+                bottomDrawerCollapsed: false,
+              });
+            }
             navigateTracked("editor");
             if (command && navigator.clipboard?.writeText) {
               void navigator.clipboard
@@ -2562,6 +2587,11 @@ export function App({ service, browserPreview = false }: AppProps) {
         if (!activeProject) return;
         await service.trustWorkspace(activeProject.id);
         setWorkspaceTrusted(true);
+      }}
+      onUntrustWorkspace={async () => {
+        if (!activeProject) return;
+        await service.untrustWorkspace(activeProject.id);
+        setWorkspaceTrusted(false);
       }}
       onSelectDocument={(key) => {
         setActiveDocumentKey(key);
@@ -2655,24 +2685,23 @@ export function App({ service, browserPreview = false }: AppProps) {
       onEntryRenamed={(fromPath, toPath) => {
         if (!activeProject) return;
         const pid = activeProject.id;
-        setDocuments((current) =>
-          current.map((doc) => {
-            if (doc.projectId !== pid) return doc;
-            if (doc.path === fromPath) {
-              return { ...doc, path: toPath, key: `${pid}\0${toPath}` };
-            }
-            if (doc.path.startsWith(`${fromPath}/`)) {
-              const nextPath = `${toPath}${doc.path.slice(fromPath.length)}`;
-              return { ...doc, path: nextPath, key: `${pid}\0${nextPath}` };
-            }
-            return doc;
-          }),
+        const remapped = remapDocumentsForRename(
+          documents,
+          pid,
+          fromPath,
+          toPath,
+          activeDocumentKey,
+          splitDocumentKey,
+          selectedFilePath,
         );
-        if (activeDocumentKey === `${pid}\0${fromPath}`) {
-          setActiveDocumentKey(`${pid}\0${toPath}`);
-        }
-        if (selectedFilePath === fromPath) {
-          setSelectedFile(toPath, selectedFile);
+        setDocuments(remapped.documents);
+        setActiveDocumentKey(remapped.activeDocumentKey);
+        setSplitDocumentKey(remapped.splitDocumentKey);
+        if (
+          remapped.selectedFilePath &&
+          remapped.selectedFilePath !== selectedFilePath
+        ) {
+          setSelectedFile(remapped.selectedFilePath, selectedFile);
         }
         bumpSyncVersion();
         void refreshWorkspacePulse(pid);
@@ -2680,14 +2709,21 @@ export function App({ service, browserPreview = false }: AppProps) {
       onEntryDeleted={(deletedPath) => {
         if (!activeProject) return;
         const pid = activeProject.id;
-        const isRemoved = (path: string) =>
-          path === deletedPath || path.startsWith(`${deletedPath}/`);
-        setDocuments((current) =>
-          current.filter(
-            (doc) => doc.projectId !== pid || !isRemoved(doc.path),
-          ),
+        const pruned = pruneDocumentsForDelete(
+          documents,
+          pid,
+          deletedPath,
+          activeDocumentKey,
+          splitDocumentKey,
+          selectedFilePath,
         );
-        if (selectedFilePath && isRemoved(selectedFilePath)) {
+        setDocuments(pruned.documents);
+        setActiveDocumentKey(pruned.activeDocumentKey);
+        if (pruned.splitDocumentKey !== splitDocumentKey) {
+          setSplitDocumentKey(pruned.splitDocumentKey);
+          setActiveEditorPane("primary");
+        }
+        if (pruned.clearSelectedFile) {
           setSelectedFile(undefined, undefined);
         }
         bumpSyncVersion();
@@ -2918,14 +2954,34 @@ export function App({ service, browserPreview = false }: AppProps) {
         </main>
       </div>
 
-      {preferencesError && (
-        <div className="global-alert" role="alert">
-          {preferencesError}
-        </div>
-      )}
-      {projectError && (
-        <div className="global-alert" role="alert">
-          {projectError}
+      {(preferencesError || projectError) && (
+        <div className="global-alert-stack">
+          {preferencesError && (
+            <div className="global-alert" role="alert">
+              <span>{preferencesError}</span>
+              <button
+                type="button"
+                className="global-alert-close"
+                aria-label="Dismiss preferences error"
+                onClick={() => setPreferencesError(undefined)}
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {projectError && (
+            <div className="global-alert" role="alert">
+              <span>{projectError}</span>
+              <button
+                type="button"
+                className="global-alert-close"
+                aria-label="Dismiss project error"
+                onClick={() => setProjectError(undefined)}
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
       )}
 

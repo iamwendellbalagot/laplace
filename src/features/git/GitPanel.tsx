@@ -64,7 +64,11 @@ export function GitPanel({
               Review {selectedPaths.length} file(s) ↗
             </button>
           )}
-          <button type="button" onClick={refresh}>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={refresh}
+          >
             Refresh
           </button>
         </div>

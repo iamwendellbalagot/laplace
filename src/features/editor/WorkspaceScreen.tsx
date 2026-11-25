@@ -60,10 +60,12 @@ function WorkspaceTools({
   documents,
   tab,
   collapsed,
+  theme,
   onTabChange,
   onToggleCollapse,
   workspaceTrusted,
   onTrustWorkspace,
+  onUntrustWorkspace,
   gitStatus,
   onGitStatusChange,
   executions,
@@ -86,10 +88,12 @@ function WorkspaceTools({
   documents: EditorDocument[];
   tab: BottomDrawerTab;
   collapsed: boolean;
+  theme: "dark" | "light";
   onTabChange: (next: BottomDrawerTab) => void;
   onToggleCollapse: () => void;
   workspaceTrusted: boolean;
   onTrustWorkspace: () => Promise<void>;
+  onUntrustWorkspace: () => Promise<void>;
   gitStatus?: GitStatus;
   onGitStatusChange: (status: GitStatus) => void;
   executions: ExecutionRecord[];
@@ -214,6 +218,7 @@ function WorkspaceTools({
             <p>Starting a shell can execute project-controlled commands.</p>
             <button
               type="button"
+              className="button button-primary"
               disabled={browserPreview}
               onClick={() => {
                 setTerminalStarted(true);
@@ -224,33 +229,23 @@ function WorkspaceTools({
             </button>
           </div>
         ) : (
-          <>
-            <TerminalPanel
-              service={service}
-              workspaceId={activeProject.id}
-              browserPreview={browserPreview}
-              trusted={workspaceTrusted && terminalActive}
-              onTrust={async () => {
-                if (!workspaceTrusted) {
-                  await onTrustWorkspace();
-                }
-                setTerminalActive(true);
-              }}
-            />
-            {workspaceTrusted && (
-              <button
-                type="button"
-                className="button button-quiet"
-                onClick={() =>
-                  void service.untrustWorkspace(activeProject.id).then(() => {
-                    setTerminalActive(false);
-                  })
-                }
-              >
-                Revoke project trust
-              </button>
-            )}
-          </>
+          <TerminalPanel
+            service={service}
+            workspaceId={activeProject.id}
+            browserPreview={browserPreview}
+            trusted={workspaceTrusted && terminalActive}
+            theme={theme}
+            onTrust={async () => {
+              if (!workspaceTrusted) {
+                await onTrustWorkspace();
+              }
+              setTerminalActive(true);
+            }}
+            onUntrust={async () => {
+              await onUntrustWorkspace();
+              setTerminalActive(false);
+            }}
+          />
         )}
       </div>
 
@@ -367,6 +362,7 @@ export function WorkspaceScreen({
   onOpenWorkspaceReview,
   workspaceTrusted,
   onTrustWorkspace,
+  onUntrustWorkspace,
   onSelectDocument,
   onUpdateDocument,
   onSaveDocuments,
@@ -464,6 +460,7 @@ export function WorkspaceScreen({
   ) => void;
   workspaceTrusted: boolean;
   onTrustWorkspace: () => Promise<void>;
+  onUntrustWorkspace: () => Promise<void>;
   onSelectDocument: (key: string) => void;
   onUpdateDocument: (key: string, content: string) => void;
   onSaveDocuments: (documents: EditorDocument[]) => Promise<boolean>;
@@ -578,6 +575,10 @@ export function WorkspaceScreen({
   useEffect(() => {
     setDraftWidth(preferences.inspectorWidth);
     draftWidthRef.current = preferences.inspectorWidth;
+    document.documentElement.style.setProperty(
+      "--inspector-width-live",
+      `${preferences.inspectorWidth}px`,
+    );
   }, [preferences.inspectorWidth]);
 
   useEffect(() => {
@@ -701,6 +702,12 @@ export function WorkspaceScreen({
           onOpenVerify={() => {
             setRookExpanded(false);
             setBottomDrawerTab("verify");
+            if (bottomDrawerCollapsed) {
+              void onPreferencesChange({
+                ...preferences,
+                bottomDrawerCollapsed: false,
+              });
+            }
           }}
           onUndoTurn={onUndoRookTurn}
           onToggleExpand={() => setRookExpanded(false)}
@@ -759,7 +766,14 @@ export function WorkspaceScreen({
                 </button>
               </div>
 
-              {leftSidebarTab === "files" ? (
+              <div
+                className={
+                  leftSidebarTab === "files"
+                    ? "explorer-pane-host"
+                    : "is-hidden"
+                }
+                aria-hidden={leftSidebarTab !== "files"}
+              >
                 <FileTreeExplorer
                   service={service}
                   browserPreview={browserPreview}
@@ -780,7 +794,15 @@ export function WorkspaceScreen({
                       : void onOpenProjectDirectory(projectDirectory)
                   }
                 />
-              ) : (
+              </div>
+              <div
+                className={
+                  leftSidebarTab === "search"
+                    ? "explorer-pane-host"
+                    : "is-hidden"
+                }
+                aria-hidden={leftSidebarTab !== "search"}
+              >
                 <WorkspaceSearchPanel
                   service={service}
                   browserPreview={browserPreview}
@@ -793,7 +815,7 @@ export function WorkspaceScreen({
                     onAttachContextChipToRook(chip, "ask")
                   }
                 />
-              )}
+              </div>
             </aside>
             <div
               className="inspector-separator explorer-separator"
@@ -857,154 +879,201 @@ export function WorkspaceScreen({
               }}
             />
           </>
-        ) : (
-          <button
-            className="show-inspector-button show-explorer-button"
-            type="button"
-            title="Show file explorer (⌘B)"
-            onClick={() =>
-              void onPreferencesChange({
-                ...preferences,
-                explorerCollapsed: false,
-              })
-            }
-          >
-            Files
-          </button>
-        ))}
+        ) : null)}
 
       <div className="editor-placeholder">
-        <div className="editor-placeholder-top">
+        <div
+          className={`editor-placeholder-top${projectDocuments.length === 0 && !explorerCollapsed ? " editor-placeholder-top-empty" : ""}`}
+        >
+          {activeProject && explorerCollapsed && (
+            <button
+              className="editor-panel-toggle editor-panel-toggle-left"
+              type="button"
+              aria-label="Show file explorer"
+              title="Show file explorer (⌘B)"
+              onClick={() =>
+                void onPreferencesChange({
+                  ...preferences,
+                  explorerCollapsed: false,
+                })
+              }
+            >
+              Files ›
+            </button>
+          )}
           {projectDocuments.length > 0 ? (
-            <div className="editor-tabs" role="tablist" aria-label="Open files">
-              {projectDocuments.map((document) => (
-                <div
-                  className={`editor-tab${document.key === activeDocumentKey ? " editor-tab-active" : ""}`}
-                  key={document.key}
-                  role="presentation"
+            <>
+              <div
+                className="editor-tabs"
+                role="tablist"
+                aria-label="Open files"
+              >
+                {projectDocuments.map((document) => (
+                  <div
+                    className={`editor-tab${document.key === activeDocumentKey ? " editor-tab-active" : ""}`}
+                    key={document.key}
+                    role="presentation"
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={document.key === activeDocumentKey}
+                      title={document.path}
+                      onClick={() => {
+                        onSelectDocument(document.key);
+                      }}
+                    >
+                      {document.path.split(/[\\/]/).at(-1)}
+                      {document.externalChange && (
+                        <span
+                          className="editor-tab-conflict"
+                          aria-label="changed on disk"
+                          title="Changed on disk"
+                        >
+                          {" "}
+                          ↻
+                        </span>
+                      )}
+                      {document.content !== document.savedContent && (
+                        <span aria-label="unsaved changes"> ●</span>
+                      )}
+                    </button>
+                    <button
+                      className="editor-tab-close"
+                      type="button"
+                      aria-label={`Close ${document.path.split(/[\\/]/).at(-1)}`}
+                      onClick={() => onCloseDocument(document)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="editor-top-actions">
+                <button
+                  className="editor-save-button"
+                  type="button"
+                  disabled={
+                    savingFiles ||
+                    !activeDocument ||
+                    activeDocument.content === activeDocument.savedContent
+                  }
+                  onClick={() =>
+                    activeDocument && onSaveDocuments([activeDocument])
+                  }
                 >
+                  Save
+                </button>
+                <button
+                  className="editor-save-button"
+                  type="button"
+                  disabled={
+                    savingFiles ||
+                    !projectDocuments.some(
+                      (document) => document.content !== document.savedContent,
+                    )
+                  }
+                  onClick={() => onSaveDocuments(projectDocuments)}
+                >
+                  {savingFiles ? "Saving…" : "Save all"}
+                </button>
+                {!browserPreview && activeProject && (
                   <button
+                    className="editor-save-button"
                     type="button"
-                    role="tab"
-                    aria-selected={document.key === activeDocumentKey}
+                    title="Quick Open file (⌘P / Ctrl+P)"
+                    onClick={onOpenQuickOpen}
+                  >
+                    Quick open
+                  </button>
+                )}
+                <button
+                  className={`editor-save-button${splitDocument ? " is-active" : ""}`}
+                  type="button"
+                  title="Toggle split editor (⌘\ / Ctrl+\)"
+                  onClick={onToggleSplit}
+                >
+                  {splitDocument ? "Close split" : "Split"}
+                </button>
+                {!browserPreview && activeProject && focusedDocument && (
+                  <button
+                    className="editor-save-button"
+                    type="button"
+                    title="Inline Edit with Rook (⌘K / Ctrl+K)"
                     onClick={() => {
-                      onSelectDocument(document.key);
+                      const sel =
+                        editorSelection?.path === focusedDocument.path
+                          ? editorSelection
+                          : null;
+                      const cur =
+                        editorCursor?.path === focusedDocument.path
+                          ? editorCursor
+                          : null;
+                      setInlineCommandTarget({
+                        filePath: focusedDocument.path,
+                        startLine: sel?.startLine ?? cur?.line ?? 1,
+                        endLine: sel?.endLine ?? cur?.line ?? 1,
+                      });
                     }}
                   >
-                    {document.path.split(/[\\/]/).at(-1)}
-                    {document.externalChange && (
-                      <span
-                        className="editor-tab-conflict"
-                        aria-label="changed on disk"
-                        title="Changed on disk"
-                      >
-                        {" "}
-                        ↻
-                      </span>
-                    )}
-                    {document.content !== document.savedContent && (
-                      <span aria-label="unsaved changes"> ●</span>
-                    )}
+                    Edit ⌘K
                   </button>
+                )}
+                {preferences.inspectorCollapsed && (
                   <button
-                    className="editor-tab-close"
+                    className="editor-panel-toggle"
                     type="button"
-                    aria-label={`Close ${document.path.split(/[\\/]/).at(-1)}`}
-                    onClick={() => onCloseDocument(document)}
+                    aria-label="Show Rook & Context panel"
+                    title="Show Rook & Context panel (⌘L)"
+                    onClick={() =>
+                      void onPreferencesChange({
+                        ...preferences,
+                        inspectorCollapsed: false,
+                      })
+                    }
                   >
-                    ×
+                    ‹ Rook
                   </button>
-                </div>
-              ))}
-              <button
-                className="editor-save-button"
-                type="button"
-                disabled={
-                  savingFiles ||
-                  !activeDocument ||
-                  activeDocument.content === activeDocument.savedContent
-                }
-                onClick={() =>
-                  activeDocument && onSaveDocuments([activeDocument])
-                }
-              >
-                Save
-              </button>
-              <button
-                className="editor-save-button"
-                type="button"
-                disabled={
-                  savingFiles ||
-                  !projectDocuments.some(
-                    (document) => document.content !== document.savedContent,
-                  )
-                }
-                onClick={() => onSaveDocuments(projectDocuments)}
-              >
-                {savingFiles ? "Saving…" : "Save all"}
-              </button>
-              {!browserPreview && activeProject && (
-                <button
-                  className="editor-save-button"
-                  type="button"
-                  title="Quick Open file (⌘P / Ctrl+P)"
-                  onClick={onOpenQuickOpen}
-                >
-                  Quick open
-                </button>
-              )}
-              <button
-                className={`editor-save-button${splitDocument ? " is-active" : ""}`}
-                type="button"
-                title="Toggle split editor (⌘\ / Ctrl+\)"
-                onClick={onToggleSplit}
-              >
-                {splitDocument ? "Close split" : "Split"}
-              </button>
-              {!browserPreview && activeProject && focusedDocument && (
-                <button
-                  className="editor-save-button"
-                  type="button"
-                  title="Inline Edit with Rook (⌘K / Ctrl+K)"
-                  onClick={() => {
-                    const sel =
-                      editorSelection?.path === focusedDocument.path
-                        ? editorSelection
-                        : null;
-                    const cur =
-                      editorCursor?.path === focusedDocument.path
-                        ? editorCursor
-                        : null;
-                    setInlineCommandTarget({
-                      filePath: focusedDocument.path,
-                      startLine: sel?.startLine ?? cur?.line ?? 1,
-                      endLine: sel?.endLine ?? cur?.line ?? 1,
-                    });
-                  }}
-                >
-                  Edit ⌘K
-                </button>
-              )}
-            </div>
+                )}
+              </div>
+            </>
           ) : (
             <>
               <span className="eyebrow">Source workspace</span>
-              {!browserPreview && activeProject && (
-                <button
-                  className="editor-save-button"
-                  type="button"
-                  onClick={onOpenQuickOpen}
-                >
-                  Quick open (⌘P)
-                </button>
-              )}
-              <span className="status-pill">
-                {activeProject
-                  ? activeProject.isGitRepository
-                    ? "Git repository"
-                    : "Folder · no Git"
-                  : "No project"}
-              </span>
+              <div className="editor-top-actions">
+                {!browserPreview && activeProject && (
+                  <button
+                    className="editor-save-button"
+                    type="button"
+                    onClick={onOpenQuickOpen}
+                  >
+                    Quick open (⌘P)
+                  </button>
+                )}
+                <span className="status-pill">
+                  {activeProject
+                    ? activeProject.isGitRepository
+                      ? "Git repository"
+                      : "Folder · no Git"
+                    : "No project"}
+                </span>
+                {preferences.inspectorCollapsed && (
+                  <button
+                    className="editor-panel-toggle"
+                    type="button"
+                    aria-label="Show Rook & Context panel"
+                    title="Show Rook & Context panel (⌘L)"
+                    onClick={() =>
+                      void onPreferencesChange({
+                        ...preferences,
+                        inspectorCollapsed: false,
+                      })
+                    }
+                  >
+                    ‹ Rook
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -1077,6 +1146,19 @@ export function WorkspaceScreen({
               className={`code-editor${activeEditorPane === "primary" ? " is-focused-pane" : ""}`}
               onMouseDown={() => onActiveEditorPaneChange("primary")}
             >
+              {splitDocument && (
+                <div className="editor-pane-header">
+                  <span
+                    className="editor-pane-title"
+                    title={activeDocument.path}
+                  >
+                    {activeDocument.path}
+                    {activeDocument.content !== activeDocument.savedContent
+                      ? " ●"
+                      : ""}
+                  </span>
+                </div>
+              )}
               {activeDocument.externalChange && (
                 <div
                   className="editor-external-banner"
@@ -1149,18 +1231,26 @@ export function WorkspaceScreen({
                       endLine: sel?.endLine ?? cur?.line ?? 1,
                     });
                   }}
-                  onSelectionChange={(sel) =>
-                    onEditorSelectionChange(
-                      sel ? { path: activeDocument.path, ...sel } : null,
-                    )
-                  }
-                  onCursorChange={(cur) =>
-                    onEditorCursorChange({
-                      path: activeDocument.path,
-                      ...cur,
-                    })
-                  }
-                  onDiagnosticsChange={onEditorDiagnosticsChange}
+                  onSelectionChange={(sel) => {
+                    if (!splitDocument || activeEditorPane === "primary") {
+                      onEditorSelectionChange(
+                        sel ? { path: activeDocument.path, ...sel } : null,
+                      );
+                    }
+                  }}
+                  onCursorChange={(cur) => {
+                    if (!splitDocument || activeEditorPane === "primary") {
+                      onEditorCursorChange({
+                        path: activeDocument.path,
+                        ...cur,
+                      });
+                    }
+                  }}
+                  onDiagnosticsChange={(diags) => {
+                    if (!splitDocument || activeEditorPane === "primary") {
+                      onEditorDiagnosticsChange(diags);
+                    }
+                  }}
                   onChange={(content) =>
                     onUpdateDocument(activeDocument.key, content)
                   }
@@ -1244,18 +1334,26 @@ export function WorkspaceScreen({
                         endLine: sel?.endLine ?? cur?.line ?? 1,
                       });
                     }}
-                    onSelectionChange={(sel) =>
-                      onEditorSelectionChange(
-                        sel ? { path: splitDocument.path, ...sel } : null,
-                      )
-                    }
-                    onCursorChange={(cur) =>
-                      onEditorCursorChange({
-                        path: splitDocument.path,
-                        ...cur,
-                      })
-                    }
-                    onDiagnosticsChange={onEditorDiagnosticsChange}
+                    onSelectionChange={(sel) => {
+                      if (activeEditorPane === "secondary") {
+                        onEditorSelectionChange(
+                          sel ? { path: splitDocument.path, ...sel } : null,
+                        );
+                      }
+                    }}
+                    onCursorChange={(cur) => {
+                      if (activeEditorPane === "secondary") {
+                        onEditorCursorChange({
+                          path: splitDocument.path,
+                          ...cur,
+                        });
+                      }
+                    }}
+                    onDiagnosticsChange={(diags) => {
+                      if (activeEditorPane === "secondary") {
+                        onEditorDiagnosticsChange(diags);
+                      }
+                    }}
                     onChange={(content) =>
                       onUpdateDocument(splitDocument.key, content)
                     }
@@ -1333,27 +1431,23 @@ export function WorkspaceScreen({
           </div>
         )}
 
-        <div className="editor-placeholder-footer">
-          <span>
-            {selectedFilePath ||
-              projectDirectory ||
-              activeProject?.path ||
-              "No folder selected"}
-          </span>
-          <span>
-            {activeDocument
-              ? activeDocument.externalChange
-                ? "Changed on disk"
-                : activeDocument.content !== activeDocument.savedContent
-                  ? "Unsaved changes"
-                  : lastSyncedAt
-                    ? `Synced · ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
-                    : "Saved"
-              : selectedFilePath
+        {!activeDocument && (
+          <div className="editor-placeholder-footer">
+            <span>
+              {selectedFilePath ||
+                projectDirectory ||
+                activeProject?.path ||
+                "No folder selected"}
+            </span>
+            <span>
+              {selectedFilePath
                 ? "Not editable"
-                : "Ready to edit"}
-          </span>
-        </div>
+                : lastSyncedAt
+                  ? `Synced · ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                  : "Ready to edit"}
+            </span>
+          </div>
+        )}
 
         {activeProject && (
           <>
@@ -1426,6 +1520,7 @@ export function WorkspaceScreen({
               documents={documents}
               tab={bottomDrawerTab}
               collapsed={bottomDrawerCollapsed}
+              theme={preferences.theme}
               onTabChange={setBottomDrawerTab}
               onToggleCollapse={() =>
                 void onPreferencesChange({
@@ -1435,6 +1530,7 @@ export function WorkspaceScreen({
               }
               workspaceTrusted={workspaceTrusted}
               onTrustWorkspace={onTrustWorkspace}
+              onUntrustWorkspace={onUntrustWorkspace}
               gitStatus={editorGitStatus}
               onGitStatusChange={onEditorGitStatusChange}
               executions={executions.filter(
@@ -1553,7 +1649,15 @@ export function WorkspaceScreen({
             onOpenWorkspaceReview([relativePath], "head")
           }
           onOpenReview={onOpenWorkspaceReview}
-          onOpenVerify={() => setBottomDrawerTab("verify")}
+          onOpenVerify={() => {
+            setBottomDrawerTab("verify");
+            if (bottomDrawerCollapsed) {
+              void onPreferencesChange({
+                ...preferences,
+                bottomDrawerCollapsed: false,
+              });
+            }
+          }}
           onJumpToLocation={onJumpToLocation}
           onExpandToContextLens={onExpandToContextLens}
           onRookModeChange={onRookModeChange}
@@ -1570,21 +1674,7 @@ export function WorkspaceScreen({
           onApplyWorktree={onApplyWorktree}
           onDiscardWorktree={onDiscardWorktree}
         />
-      ) : (
-        <button
-          className="show-inspector-button"
-          type="button"
-          title="Show Rook & Context panel (⌘L)"
-          onClick={() =>
-            void onPreferencesChange({
-              ...preferences,
-              inspectorCollapsed: false,
-            })
-          }
-        >
-          Show Rook &amp; Context
-        </button>
-      )}
+      ) : null}
     </section>
   );
 }
