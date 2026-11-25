@@ -66,6 +66,9 @@ pub(crate) struct ChangeReviewSnapshot {
     pub(crate) comments: Vec<ReviewComment>,
     pub(crate) latest_decision: Option<ReviewDecision>,
     pub(crate) latest_attempt: Option<IntegrationAttempt>,
+    pub(crate) last_reviewed_digest: Option<String>,
+    pub(crate) last_reviewed_at: Option<i64>,
+    pub(crate) changed_since_last_review: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +87,10 @@ pub(crate) struct DiffPairRequest {
     operation_id: String,
     project_id: String,
     relative_path: String,
+    #[serde(default)]
+    change_id: Option<String>,
+    #[serde(default)]
+    baseline: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -669,6 +676,9 @@ pub(crate) async fn get_change_review_with_pool(
         _ => (false, None),
     };
 
+    let (last_reviewed_digest, last_reviewed_at, changed_since_last_review) =
+        load_last_review_delta(pool, root, change_id, &status.files, operation_id).await?;
+
     Ok(ChangeReviewSnapshot {
         change,
         branch: status.branch,
@@ -682,7 +692,204 @@ pub(crate) async fn get_change_review_with_pool(
         comments,
         latest_decision,
         latest_attempt,
+        last_reviewed_digest,
+        last_reviewed_at,
+        changed_since_last_review,
     })
+}
+
+pub(crate) async fn capture_review_snapshot_with_pool(
+    pool: &SqlitePool,
+    root: &Path,
+    change_id: &str,
+    source_digest: &str,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    let status = read_git_status_at(root, operation_id)?;
+    let now = now_ms();
+    let snapshot_id = format!(
+        "snap-{}-{}",
+        now,
+        EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let project_id = root.to_string_lossy().into_owned();
+    let mut tx = pool.begin().await.map_err(|_| {
+        terminal_error(
+            "review_snapshot_failed",
+            "Review checkpoint could not be started.",
+            operation_id,
+        )
+    })?;
+    sqlx::query(
+        "INSERT INTO review_snapshots (id, change_id, source_digest, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&snapshot_id)
+    .bind(change_id)
+    .bind(source_digest)
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "review_snapshot_failed",
+            "Review checkpoint could not be saved.",
+            operation_id,
+        )
+    })?;
+
+    for file in status.files.iter().take(250) {
+        if validate_safe_relative_path(&file.path, operation_id).is_err() {
+            continue;
+        }
+        let content = match read_project_file_contents(&project_id, &file.path) {
+            Ok(read) if read.kind == ProjectFileReadKind::Text => read.content,
+            _ => None,
+        };
+        sqlx::query(
+            "INSERT INTO review_snapshot_files (snapshot_id, file_path, content) VALUES (?, ?, ?)",
+        )
+        .bind(&snapshot_id)
+        .bind(&file.path)
+        .bind(content)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| {
+            terminal_error(
+                "review_snapshot_failed",
+                "Review checkpoint file could not be saved.",
+                operation_id,
+            )
+        })?;
+    }
+
+    // Keep latest 5 review snapshots per Change
+    sqlx::query(
+        "DELETE FROM review_snapshots WHERE change_id = ? AND id NOT IN (SELECT id FROM review_snapshots WHERE change_id = ? ORDER BY created_at DESC LIMIT 5)",
+    )
+    .bind(change_id)
+    .bind(change_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "review_snapshot_failed",
+            "Older review checkpoints could not be pruned.",
+            operation_id,
+        )
+    })?;
+
+    tx.commit().await.map_err(|_| {
+        terminal_error(
+            "review_snapshot_failed",
+            "Review checkpoint could not be committed.",
+            operation_id,
+        )
+    })?;
+    Ok(())
+}
+
+async fn load_last_review_delta(
+    pool: &SqlitePool,
+    root: &Path,
+    change_id: &str,
+    changed_files: &[GitFileStatus],
+    operation_id: &str,
+) -> Result<(Option<String>, Option<i64>, Vec<String>), IpcError> {
+    let snap_row = sqlx::query(
+        "SELECT id, source_digest, created_at FROM review_snapshots WHERE change_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(change_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "review_read_failed",
+            "Review checkpoint could not be loaded.",
+            operation_id,
+        )
+    })?;
+    let Some(row) = snap_row else {
+        return Ok((None, None, Vec::new()));
+    };
+    let snap_id: String = row.try_get("id").unwrap_or_default();
+    let snap_digest: String = row.try_get("source_digest").unwrap_or_default();
+    let snap_at: i64 = row.try_get("created_at").unwrap_or(0);
+    let file_rows =
+        sqlx::query("SELECT file_path, content FROM review_snapshot_files WHERE snapshot_id = ?")
+            .bind(&snap_id)
+            .fetch_all(pool)
+            .await
+            .map_err(|_| {
+                terminal_error(
+                    "review_read_failed",
+                    "Review checkpoint files could not be loaded.",
+                    operation_id,
+                )
+            })?;
+    let mut previous_map: HashMap<String, Option<String>> = HashMap::new();
+    for frow in file_rows {
+        let path: String = frow.try_get("file_path").unwrap_or_default();
+        let content: Option<String> = frow.try_get("content").ok().flatten();
+        previous_map.insert(path, content);
+    }
+    let project_id = root.to_string_lossy().into_owned();
+    let mut delta = Vec::new();
+    for file in changed_files {
+        let live_content = match read_project_file_contents(&project_id, &file.path) {
+            Ok(read) if read.kind == ProjectFileReadKind::Text => read.content,
+            _ => None,
+        };
+        match previous_map.get(&file.path) {
+            Some(prev) if prev == &live_content => {}
+            _ => delta.push(file.path.clone()),
+        }
+    }
+    Ok((Some(snap_digest), Some(snap_at), delta))
+}
+
+pub(crate) async fn read_git_file_diff_pair_since_review_with_pool(
+    pool: &SqlitePool,
+    root: &Path,
+    change_id: &str,
+    relative_path: &str,
+    operation_id: &str,
+) -> Result<GitDiffPair, IpcError> {
+    let mut pair = read_git_file_diff_pair_at(root, relative_path, operation_id)?;
+    let snap_row = sqlx::query(
+        "SELECT id FROM review_snapshots WHERE change_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(change_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "review_read_failed",
+            "Review checkpoint could not be loaded.",
+            operation_id,
+        )
+    })?;
+    if let Some(row) = snap_row {
+        let snap_id: String = row.try_get("id").unwrap_or_default();
+        let file_row = sqlx::query(
+            "SELECT content FROM review_snapshot_files WHERE snapshot_id = ? AND file_path = ?",
+        )
+        .bind(&snap_id)
+        .bind(relative_path)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| {
+            terminal_error(
+                "review_read_failed",
+                "Review checkpoint file could not be loaded.",
+                operation_id,
+            )
+        })?;
+        if let Some(frow) = file_row {
+            let prev: Option<String> = frow.try_get("content").ok().flatten();
+            pair.original = prev;
+        }
+    }
+    Ok(pair)
 }
 
 pub(crate) async fn approve_change_review_with_pool(
@@ -816,6 +1023,8 @@ pub(crate) async fn approve_change_review_with_pool(
             operation_id,
         )
     })?;
+    let _ =
+        capture_review_snapshot_with_pool(pool, root, change_id, &live_digest, operation_id).await;
     get_change_review_with_pool(pool, root, change_id, operation_id).await
 }
 
@@ -1189,6 +1398,8 @@ pub(crate) async fn get_change_review(
 
 #[tauri::command]
 pub(crate) async fn read_git_file_diff_pair(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
     request: DiffPairRequest,
 ) -> Result<GitDiffPair, IpcError> {
     if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
@@ -1200,7 +1411,60 @@ pub(crate) async fn read_git_file_diff_pair(
         ));
     }
     let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    if request.baseline.as_deref() == Some("last_review") {
+        if let Some(change_id) = request.change_id.as_deref() {
+            if validate_operation_id(change_id) {
+                let pool = open_domain_database(&app, &db).await?;
+                return read_git_file_diff_pair_since_review_with_pool(
+                    &pool,
+                    &root,
+                    change_id,
+                    &request.relative_path,
+                    &request.operation_id,
+                )
+                .await;
+            }
+        }
+    }
     read_git_file_diff_pair_at(&root, &request.relative_path, &request.operation_id)
+}
+
+#[tauri::command]
+pub(crate) async fn save_review_checkpoint(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    request: ChangeReviewRequest,
+) -> Result<ChangeReviewSnapshot, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION
+        || !validate_operation_id(&request.operation_id)
+        || !validate_operation_id(&request.change_id)
+    {
+        return Err(terminal_error(
+            "invalid_review_request",
+            "The review checkpoint request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    let project_id = root.to_string_lossy().into_owned();
+    let _ = load_change(
+        &pool,
+        &project_id,
+        &request.change_id,
+        &request.operation_id,
+    )
+    .await?;
+    let (live_digest, _) = source_manifest(&root)?;
+    capture_review_snapshot_with_pool(
+        &pool,
+        &root,
+        &request.change_id,
+        &live_digest,
+        &request.operation_id,
+    )
+    .await?;
+    get_change_review_with_pool(&pool, &root, &request.change_id, &request.operation_id).await
 }
 
 #[tauri::command]
@@ -1474,6 +1738,14 @@ pub(crate) async fn request_change_revision(
             &request.operation_id,
         )
     })?;
+    let _ = capture_review_snapshot_with_pool(
+        &pool,
+        &root,
+        &request.change_id,
+        &live_digest,
+        &request.operation_id,
+    )
+    .await;
     get_change_review_with_pool(&pool, &root, &request.change_id, &request.operation_id).await
 }
 
@@ -1821,6 +2093,42 @@ mod review_tests {
             recovered.latest_attempt.as_ref().map(|a| a.status.as_str()),
             Some("aborted")
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn review_checkpoint_and_incremental_diff_tracks_only_post_review_changes() {
+        let (base, root, pool, change_id) = setup_fixture().await;
+        fs::write(root.join("app.ts"), "export const a = 2;\n").unwrap();
+        let (digest_v1, _) = source_manifest(&root).unwrap();
+        capture_review_snapshot_with_pool(&pool, &root, &change_id, &digest_v1, "op-snap-1")
+            .await
+            .unwrap();
+
+        let snap_before = get_change_review_with_pool(&pool, &root, &change_id, "op-rev-1")
+            .await
+            .unwrap();
+        assert_eq!(
+            snap_before.last_reviewed_digest.as_deref(),
+            Some(digest_v1.as_str())
+        );
+        assert!(snap_before.changed_since_last_review.is_empty());
+
+        // Revise app.ts after the checkpoint
+        fs::write(root.join("app.ts"), "export const a = 3;\n").unwrap();
+        let snap_after = get_change_review_with_pool(&pool, &root, &change_id, "op-rev-2")
+            .await
+            .unwrap();
+        assert_eq!(snap_after.changed_since_last_review, vec!["app.ts"]);
+
+        let inc_pair = read_git_file_diff_pair_since_review_with_pool(
+            &pool, &root, &change_id, "app.ts", "op-inc",
+        )
+        .await
+        .unwrap();
+        assert_eq!(inc_pair.original.as_deref(), Some("export const a = 2;\n"));
+        assert_eq!(inc_pair.modified.as_deref(), Some("export const a = 3;\n"));
+
         let _ = fs::remove_dir_all(&base);
     }
 }

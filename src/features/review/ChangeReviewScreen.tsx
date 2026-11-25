@@ -13,6 +13,7 @@ import type {
   GitDiffPair,
   IntegrationAttempt,
   ProjectSummary,
+  ReviewDiffBaseline,
   UiPreferences,
 } from "../../services/contracts";
 
@@ -46,6 +47,7 @@ export function ChangeReviewScreen({
   service,
   project,
   changeId,
+  initialSelectedPaths,
   preferences,
   executions,
   dirtyCount,
@@ -60,6 +62,7 @@ export function ChangeReviewScreen({
   service: AppService;
   project: ProjectSummary;
   changeId: string;
+  initialSelectedPaths?: string[];
   preferences: UiPreferences;
   executions: ExecutionRecord[];
   dirtyCount: number;
@@ -75,7 +78,10 @@ export function ChangeReviewScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [selectedFile, setSelectedFile] = useState<string>();
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>(
+    initialSelectedPaths ?? [],
+  );
+  const [diffBaseline, setDiffBaseline] = useState<ReviewDiffBaseline>("head");
   const [diffPair, setDiffPair] = useState<GitDiffPair>();
   const [diffLoading, setDiffLoading] = useState(false);
   const [editedContent, setEditedContent] = useState<string>();
@@ -132,7 +138,10 @@ export function ChangeReviewScreen({
     let cancelled = false;
     setDiffLoading(true);
     void service
-      .readGitFileDiffPair(project.id, selectedFile)
+      .readGitFileDiffPair(project.id, selectedFile, {
+        changeId,
+        baseline: diffBaseline,
+      })
       .then((pair) => {
         if (cancelled) return;
         setDiffPair(pair);
@@ -149,7 +158,14 @@ export function ChangeReviewScreen({
     return () => {
       cancelled = true;
     };
-  }, [project.id, selectedFile, service, snapshot?.sourceDigest]);
+  }, [
+    changeId,
+    diffBaseline,
+    project.id,
+    selectedFile,
+    service,
+    snapshot?.sourceDigest,
+  ]);
 
   const inlineDirty =
     diffPair?.kind === "text" &&
@@ -372,6 +388,73 @@ export function ChangeReviewScreen({
     (comment) => !comment.resolved,
   ).length;
 
+  async function handleMarkCheckpoint() {
+    setActionPending(true);
+    setError(undefined);
+    try {
+      const next = await service.saveReviewCheckpoint(project.id, changeId);
+      setSnapshot(next);
+      setStatusMessage(
+        `Marked reviewed checkpoint at ${next.sourceDigest.slice(0, 12)}.`,
+      );
+    } catch (failure) {
+      setError(errorText(failure, "Review checkpoint could not be saved."));
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  function handleExportBundle() {
+    if (!snapshot) return;
+    const lines = [
+      `# Change Review: ${snapshot.change.objective}`,
+      "",
+      `- **ID:** ${snapshot.change.id}`,
+      `- **Status:** ${snapshot.change.status}`,
+      `- **Branch / HEAD:** ${snapshot.branch ?? "detached"} · ${snapshot.headRevision}`,
+      `- **Source digest:** ${snapshot.sourceDigest}`,
+      `- **Approval valid:** ${snapshot.approvalValid ? "yes" : "no"}`,
+      "",
+      "## Changed files",
+      ...snapshot.changedFiles.map(
+        (file) =>
+          `- \`${file.indexStatus}${file.worktreeStatus}\` ${file.path}`,
+      ),
+      "",
+      "## Verification records",
+      ...(linkedChecks.length > 0
+        ? linkedChecks.map(
+            (check) =>
+              `- **${check.status}** \`${check.program} ${check.args.join(" ")}\` (digest ${check.sourceDigest.slice(0, 12)}, exit ${check.exitCode ?? "—"})`,
+          )
+        : ["- None"]),
+      "",
+      "## Review comments",
+      ...(snapshot.comments.length > 0
+        ? snapshot.comments.map(
+            (comment) =>
+              `- [${comment.resolved ? "x" : " "}] \`${comment.filePath}${comment.lineNumber ? `:${comment.lineNumber}` : ""}\`: ${comment.body}`,
+          )
+        : ["- None"]),
+    ];
+    const markdown = `${lines.join("\n")}\n`;
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(markdown).then(
+        () => setStatusMessage("Review evidence bundle copied to clipboard."),
+        () => setStatusMessage("Clipboard unavailable in this environment."),
+      );
+    }
+  }
+
+  const visibleFiles = useMemo(() => {
+    const all = snapshot?.changedFiles ?? [];
+    if (diffBaseline === "last_review" && snapshot?.lastReviewedDigest) {
+      const delta = new Set(snapshot.changedSinceLastReview);
+      return all.filter((file) => delta.has(file.path));
+    }
+    return all;
+  }, [diffBaseline, snapshot]);
+
   return (
     <section
       className="content-page review-page"
@@ -387,14 +470,54 @@ export function ChangeReviewScreen({
             >
               ← All Changes
             </button>
-            <button
-              type="button"
-              className="button button-quiet"
-              disabled={loading}
-              onClick={() => void loadReview()}
-            >
-              {loading ? "Refreshing…" : "Refresh diff"}
-            </button>
+            <div className="review-inline-actions">
+              {snapshot?.lastReviewedDigest && (
+                <div
+                  className="review-baseline-toggle"
+                  role="group"
+                  aria-label="Diff baseline"
+                >
+                  <button
+                    type="button"
+                    className={`button button-quiet${diffBaseline === "head" ? " is-active" : ""}`}
+                    onClick={() => setDiffBaseline("head")}
+                  >
+                    vs HEAD ({snapshot.changedFiles.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`button button-quiet${diffBaseline === "last_review" ? " is-active" : ""}`}
+                    onClick={() => setDiffBaseline("last_review")}
+                  >
+                    Since last review ({snapshot.changedSinceLastReview.length})
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={actionPending || loading}
+                onClick={() => void handleMarkCheckpoint()}
+              >
+                Mark reviewed checkpoint
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={!snapshot}
+                onClick={handleExportBundle}
+              >
+                Copy bundle
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={loading}
+                onClick={() => void loadReview()}
+              >
+                {loading ? "Refreshing…" : "Refresh diff"}
+              </button>
+            </div>
           </div>
           {snapshot && (
             <header className="review-header">
@@ -457,7 +580,7 @@ export function ChangeReviewScreen({
               </div>
             </div>
           )}
-          {snapshot && snapshot.changedFiles.length > 0 ? (
+          {snapshot && visibleFiles.length > 0 ? (
             <>
               <div className="review-files-bar">
                 <div
@@ -465,7 +588,7 @@ export function ChangeReviewScreen({
                   role="list"
                   aria-label="Changed files"
                 >
-                  {snapshot.changedFiles.map((file) => {
+                  {visibleFiles.map((file) => {
                     const checked = selectedPaths.includes(file.path);
                     const active = selectedFile === file.path;
                     return (

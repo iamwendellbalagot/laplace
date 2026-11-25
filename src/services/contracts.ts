@@ -269,6 +269,101 @@ export interface ChangeReviewSnapshot {
   comments: ReviewComment[];
   latestDecision: ReviewDecision | null;
   latestAttempt: IntegrationAttempt | null;
+  lastReviewedDigest: string | null;
+  lastReviewedAt: number | null;
+  changedSinceLastReview: string[];
+}
+
+export type ReviewDiffBaseline = "head" | "last_review";
+
+export interface WorkspaceLayoutInfo {
+  packageManager: "pnpm" | "npm" | "yarn" | null;
+  layout:
+    | "single_package"
+    | "pnpm_workspace"
+    | "npm_yarn_workspaces"
+    | "unsupported_yarn_pnp"
+    | "non_js"
+    | string;
+  workspacePackages: string[];
+  warnings: string[];
+}
+
+export interface RunConfigSummary {
+  name: string;
+  source: string;
+  program: string;
+  args: string[];
+  cwd: string | null;
+  port: number | null;
+  url: string | null;
+  sharedServices: string[];
+}
+
+export interface RunConfigsResponse {
+  layout: WorkspaceLayoutInfo;
+  configs: RunConfigSummary[];
+}
+
+export interface RunInstance {
+  id: string;
+  workspaceId: string;
+  name: string;
+  program: string;
+  args: string[];
+  cwd: string | null;
+  status: "running" | "stopped" | "failed" | string;
+  port: number | null;
+  detectedUrl: string | null;
+  sharedServices: string[];
+  exitCode: number | null;
+  output: string;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
+export interface RunEvent {
+  schemaVersion: number;
+  instanceId: string;
+  workspaceId: string;
+  kind: "output" | "exited";
+  chunk: string | null;
+  status: string | null;
+  detectedUrl: string | null;
+  exitCode: number | null;
+}
+
+export interface WorkspaceLayoutState {
+  openTabs: string[];
+  activeTab: string | null;
+  splitTab: string | null;
+  bottomTab: "terminal" | "run" | "git" | string;
+  activePage: string;
+  updatedAt: number;
+}
+
+export interface EditorDraftRecord {
+  relativePath: string;
+  savedDigest: string;
+  draftContent: string;
+  matchesDisk: boolean;
+  updatedAt: number;
+}
+
+export interface WorkspaceContinuity {
+  layout: WorkspaceLayoutState | null;
+  drafts: EditorDraftRecord[];
+}
+
+export interface RookContextChip {
+  id: string;
+  kind: "file" | "selection" | "verify_failure" | "run_failure";
+  label: string;
+  filePath?: string;
+  startLine?: number;
+  endLine?: number;
+  content: string;
+  sourceSnapshot?: string;
 }
 export interface ExecutionRecord {
   id: string;

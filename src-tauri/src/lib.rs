@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
@@ -23,6 +23,8 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 mod review;
+mod runs;
+mod workspace_state;
 
 const IPC_SCHEMA_VERSION: u16 = 1;
 const EVENT_NAME: &str = "app-event";
@@ -231,6 +233,21 @@ struct ExecutionRecord {
 
 #[derive(Default)]
 struct TerminalSessions(Mutex<HashMap<String, Arc<TerminalSession>>>);
+
+impl TerminalSessions {
+    fn stop_all(&self) {
+        let sessions: Vec<Arc<TerminalSession>> = self
+            .0
+            .lock()
+            .map(|mut guard| guard.drain().map(|(_, session)| session).collect())
+            .unwrap_or_default();
+        for session in sessions {
+            if let Ok(mut killer) = session.killer.lock() {
+                let _ = killer.kill();
+            }
+        }
+    }
+}
 
 #[derive(Default)]
 struct TrustedWorkspaces(Mutex<HashSet<String>>);
@@ -1565,6 +1582,37 @@ fn read_project_file_contents(
     }
 }
 
+fn map_file_write_error(error: &std::io::Error, operation_id: &str) -> IpcError {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return IpcError::new(
+            "file_not_found",
+            "The target file or directory no longer exists. Original file was not modified.",
+            operation_id.to_owned(),
+            false,
+        );
+    }
+    #[cfg(unix)]
+    let is_disk_full = error.raw_os_error() == Some(28);
+    #[cfg(windows)]
+    let is_disk_full = error.raw_os_error() == Some(112);
+    #[cfg(not(any(unix, windows)))]
+    let is_disk_full = false;
+    if is_disk_full {
+        return IpcError::new(
+            "disk_full",
+            "Disk is full. Save was aborted safely without truncating the existing file.",
+            operation_id.to_owned(),
+            false,
+        );
+    }
+    IpcError::new(
+        "project_file_write_failed",
+        "This project file could not be saved.",
+        operation_id.to_owned(),
+        true,
+    )
+}
+
 fn save_project_file_contents(
     project_id: &str,
     relative_path: &str,
@@ -1688,25 +1736,15 @@ fn save_project_file_contents(
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .map_err(|_| {
-            IpcError::new(
-                "project_file_write_failed",
-                "This project file could not be saved.",
-                operation_id.to_owned(),
-                true,
-            )
-        })?;
+        .map_err(|error| map_file_write_error(&error, operation_id))?;
     use std::io::Write;
-    if file.write_all(content.as_bytes()).is_err()
-        || fs::set_permissions(&temporary, permissions).is_err()
-    {
+    if let Err(error) = file.write_all(content.as_bytes()) {
         let _ = fs::remove_file(&temporary);
-        return Err(IpcError::new(
-            "project_file_write_failed",
-            "This project file could not be saved.",
-            operation_id.to_owned(),
-            true,
-        ));
+        return Err(map_file_write_error(&error, operation_id));
+    }
+    if let Err(error) = fs::set_permissions(&temporary, permissions) {
+        let _ = fs::remove_file(&temporary);
+        return Err(map_file_write_error(&error, operation_id));
     }
     drop(file);
     let current = match read_project_file_contents(project_id, relative_path) {
@@ -3608,6 +3646,7 @@ async fn prompt_rook_ask(
         || !validate_operation_id(&request.session_id)
         || request.text.trim().is_empty()
         || request.text.len() > 64_000
+        || request.context.as_deref().map(str::len).unwrap_or(0) > 32_000
     {
         return Err(terminal_error(
             "invalid_rook_prompt",
@@ -3650,7 +3689,7 @@ async fn prompt_rook_ask(
             &request.operation_id,
         )
     })?;
-    let prompt = rook_prompt_message(&request.text);
+    let prompt = rook_prompt_message(&request.text, request.context.as_deref().unwrap_or(""));
     process.next_request.fetch_max(10, Ordering::Relaxed);
     let mut prompt = prompt;
     let request_id = process.next_request.fetch_add(1, Ordering::Relaxed);
@@ -3681,8 +3720,8 @@ async fn prompt_rook_ask(
     Ok(())
 }
 
-fn rook_prompt_message(text: &str) -> serde_json::Value {
-    serde_json::json!({"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"text":text,"context":""}})
+fn rook_prompt_message(text: &str, context: &str) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"text":text,"context":context}})
 }
 
 #[tauri::command]
@@ -4178,6 +4217,8 @@ struct RookPromptRequest {
     operation_id: String,
     session_id: String,
     text: String,
+    #[serde(default)]
+    context: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4550,6 +4591,14 @@ async fn persist_execution(pool: &SqlitePool, record: &ExecutionRecord) -> Resul
                 )
             })?;
     }
+    // Auto-prune oldest executions beyond 200 per project to keep SQLite bounded
+    let _ = sqlx::query(
+        "DELETE FROM executions WHERE project_id = ? AND id NOT IN (SELECT id FROM executions WHERE project_id = ? ORDER BY started_at DESC LIMIT 200)",
+    )
+    .bind(&record.project_id)
+    .bind(&record.project_id)
+    .execute(&mut *tx)
+    .await;
     tx.commit().await.map_err(|_| {
         terminal_error(
             "check_record_failed",
@@ -5569,7 +5618,7 @@ mod rook_start_tests {
 
     #[test]
     fn prompt_message_uses_empty_string_context() {
-        let message = rook_prompt_message("Explain this project");
+        let message = rook_prompt_message("Explain this project", "");
         assert_eq!(message["params"]["text"], "Explain this project");
         assert_eq!(message["params"]["context"], "");
     }
@@ -5814,11 +5863,12 @@ cwd = "../outside"
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(TerminalSessions::default())
         .manage(TrustedWorkspaces::default())
         .manage(DomainDatabase::default())
         .manage(RookProcesses::default())
+        .manage(runs::RunProcesses::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -5830,11 +5880,21 @@ pub fn run() {
             open_project,
             get_recent_projects,
             list_project_entries,
+            workspace_state::list_project_files,
+            workspace_state::load_workspace_continuity,
+            workspace_state::save_workspace_layout,
+            workspace_state::save_editor_draft,
+            workspace_state::delete_editor_draft,
+            workspace_state::prune_project_executions,
             read_project_file,
             save_project_file,
             start_terminal,
             write_terminal,
             stop_terminal,
+            runs::list_run_configs,
+            runs::list_run_instances,
+            runs::start_run_config,
+            runs::stop_run_config,
             get_workspace_trust,
             trust_workspace,
             untrust_workspace,
@@ -5844,6 +5904,7 @@ pub fn run() {
             reopen_change_review,
             review::get_change_review,
             review::read_git_file_diff_pair,
+            review::save_review_checkpoint,
             review::add_review_comment,
             review::toggle_review_comment_resolved,
             review::approve_change_review,
@@ -5868,8 +5929,18 @@ pub fn run() {
             respond_rook_auth_prompt,
             open_rook_auth_url
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Laplace desktop application");
+        .build(tauri::generate_context!())
+        .expect("failed to build Laplace desktop application");
+
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
+            app_handle.state::<runs::RunProcesses>().stop_all();
+            app_handle.state::<TerminalSessions>().stop_all();
+        }
+    });
 }
 
 #[cfg(test)]

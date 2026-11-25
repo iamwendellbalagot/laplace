@@ -589,4 +589,103 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("invokes Plan 12 continuity, run configs, incremental review, and bounded Rook context commands", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({
+        layout: {
+          packageManager: "pnpm",
+          layout: "single_package",
+          workspacePackages: [],
+          warnings: [],
+        },
+        configs: [],
+      })
+      .mockResolvedValueOnce({
+        id: "run-1",
+        workspaceId: "/work/project",
+        name: "dev",
+        program: "pnpm",
+        args: ["run", "dev"],
+        cwd: null,
+        status: "running",
+        port: 5173,
+        detectedUrl: null,
+        sharedServices: [],
+        exitCode: null,
+        output: "",
+        startedAt: 1,
+        finishedAt: null,
+      })
+      .mockResolvedValueOnce({ layout: null, drafts: [] })
+      .mockResolvedValueOnce({
+        path: "src/app.ts",
+        status: "modified",
+        kind: "text",
+        original: "old",
+        modified: "new",
+      })
+      .mockResolvedValueOnce(undefined);
+    const service = new TauriAppService();
+
+    await service.listRunConfigs("/work/project");
+    await service.startRunConfig("/work/project", "dev", 5173);
+    await service.loadWorkspaceContinuity("/work/project");
+    await service.readGitFileDiffPair("/work/project", "src/app.ts", {
+      changeId: "ch-1",
+      baseline: "last_review",
+    });
+    await service.promptRookAsk(
+      "session1",
+      "Check this failure",
+      "--- src/app.ts:1-5 ---\nconst x = 1;",
+    );
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "list_run_configs", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "start_run_config", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        name: "dev",
+        portOverride: 5173,
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "load_workspace_continuity",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(4, "read_git_file_diff_pair", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        relativePath: "src/app.ts",
+        changeId: "ch-1",
+        baseline: "last_review",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(5, "prompt_rook_ask", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        sessionId: "session1",
+        text: "Check this failure",
+        context: "--- src/app.ts:1-5 ---\nconst x = 1;",
+      },
+    });
+  });
 });

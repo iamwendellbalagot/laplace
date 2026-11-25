@@ -1,5 +1,6 @@
+import { useEffect, useRef } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
-import { Uri } from "monaco-editor";
+import { Uri, type editor as MonacoEditor } from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/language/typescript/ts.worker?worker";
 
@@ -11,21 +12,57 @@ self.MonacoEnvironment = {
   },
 };
 
+export interface RevealTarget {
+  line: number;
+  column?: number;
+  nonce: number;
+}
+
+export interface CodeSelectionChange {
+  startLine: number;
+  endLine: number;
+  text: string;
+}
+
 export function CodeEditor({
   path,
   value,
   theme,
   fontSize,
+  revealTarget,
   onChange,
+  onSelectionChange,
+  onFocus,
   onMount,
 }: {
   path: string;
   value: string;
   theme: "dark" | "light";
   fontSize: number;
+  revealTarget?: RevealTarget | null;
   onChange: (value: string) => void;
+  onSelectionChange?: (selection: CodeSelectionChange | null) => void;
+  onFocus?: () => void;
   onMount?: OnMount;
 }) {
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const selectionCbRef = useRef(onSelectionChange);
+  const focusCbRef = useRef(onFocus);
+  selectionCbRef.current = onSelectionChange;
+  focusCbRef.current = onFocus;
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !revealTarget) return;
+    const position = {
+      lineNumber: Math.max(1, revealTarget.line),
+      column: Math.max(1, revealTarget.column ?? 1),
+    };
+    editor.setPosition(position);
+    editor.revealLineInCenter(position.lineNumber);
+    editor.focus();
+  }, [revealTarget?.nonce, revealTarget?.line, revealTarget?.column]);
+
   return (
     <Editor
       path={Uri.file(path.replaceAll("\\", "/")).toString()}
@@ -34,6 +71,32 @@ export function CodeEditor({
       theme={theme === "dark" ? "vs-dark" : "vs"}
       onChange={(next) => onChange(next ?? "")}
       onMount={(editor, monaco) => {
+        editorRef.current = editor;
+        editor.onDidFocusEditorText(() => {
+          focusCbRef.current?.();
+        });
+        editor.onDidChangeCursorSelection((event) => {
+          const sel = event.selection;
+          if (sel.isEmpty()) {
+            selectionCbRef.current?.(null);
+            return;
+          }
+          const model = editor.getModel();
+          const text = model ? model.getValueInRange(sel) : "";
+          selectionCbRef.current?.({
+            startLine: sel.startLineNumber,
+            endLine: sel.endLineNumber,
+            text,
+          });
+        });
+        if (revealTarget) {
+          const position = {
+            lineNumber: Math.max(1, revealTarget.line),
+            column: Math.max(1, revealTarget.column ?? 1),
+          };
+          editor.setPosition(position);
+          editor.revealLineInCenter(position.lineNumber);
+        }
         onMount?.(editor, monaco);
       }}
       options={{

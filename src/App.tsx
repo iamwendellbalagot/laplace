@@ -11,6 +11,8 @@ import { navigationItems, screenTitles } from "./app/navigation";
 import { AppServiceError, type AppService } from "./services/app-service";
 import type {
   AppEvent,
+  GitStatus,
+  RookContextChip,
   RookMode,
   RookModel,
   RookProvider,
@@ -33,6 +35,21 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
 import { RookPermissionCard } from "./features/rook/RookPermissionCard";
 import { ChangeReviewScreen } from "./features/review/ChangeReviewScreen";
+import { LinkedStackOutput, RunPanel } from "./features/runs/RunPanel";
+import {
+  formatFailureContextExcerpt,
+  serializeRookContextChips,
+} from "./features/runs/stack-trace";
+import { QuickOpenDialog } from "./features/editor/QuickOpenDialog";
+import {
+  InlinePatchOverlay,
+  type PendingInlinePatch,
+} from "./features/editor/InlinePatchOverlay";
+import {
+  EditorContextInspector,
+  type EditorSelection,
+} from "./features/editor/EditorContextInspector";
+import type { RevealTarget } from "./features/editor/CodeEditor";
 import {
   applyExternalReload,
   dismissExternalChangeKeepingEdits,
@@ -55,7 +72,14 @@ type RookChatMessage = {
   activeTextStart?: number;
   stopReason?: string;
   incomplete?: boolean;
+  cancelled?: boolean;
+  steered?: boolean;
 };
+
+function extractFirstFencedCodeBlock(text: string): string | null {
+  const match = text.match(/```[^\n]*\n([\s\S]*?)```/);
+  return match ? match[1] : null;
+}
 
 function updateRookAssistant(
   messages: RookChatMessage[],
@@ -207,6 +231,92 @@ export function App({ service, browserPreview = false }: AppProps) {
   );
   const [verifyChangeId, setVerifyChangeId] = useState<string>("");
   const [reviewChangeId, setReviewChangeId] = useState<string | null>(null);
+  const [reviewInitialSelectedPaths, setReviewInitialSelectedPaths] = useState<
+    string[] | undefined
+  >(undefined);
+  const [splitDocumentKey, setSplitDocumentKey] = useState<string>();
+  const [activeEditorPane, setActiveEditorPane] = useState<
+    "primary" | "secondary"
+  >("primary");
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [quickOpenFiles, setQuickOpenFiles] = useState<string[]>([]);
+  const [quickOpenLoading, setQuickOpenLoading] = useState(false);
+  const [revealTarget, setRevealTarget] = useState<{
+    key: string;
+    line: number;
+    column?: number;
+    nonce: number;
+  } | null>(null);
+  const [editorSelection, setEditorSelection] =
+    useState<EditorSelection | null>(null);
+  const [inlinePatch, setInlinePatch] = useState<PendingInlinePatch | null>(
+    null,
+  );
+  const [inlinePatchSaving, setInlinePatchSaving] = useState(false);
+  const [inlinePatchError, setInlinePatchError] = useState<string>();
+  const [recoveredDraftNotice, setRecoveredDraftNotice] = useState<string>();
+  const [bottomDrawerTab, setBottomDrawerTab] = useState<
+    "terminal" | "run" | "git"
+  >("terminal");
+  const [editorGitStatus, setEditorGitStatus] = useState<GitStatus>();
+  const [rookContextChips, setRookContextChips] = useState<RookContextChip[]>(
+    [],
+  );
+  const [rookCancelling, setRookCancelling] = useState(false);
+  const [rookQueuedSteering, setRookQueuedSteering] = useState<{
+    text: string;
+    mode: "steer" | "queue";
+    context: string;
+  } | null>(null);
+  const rookCancellingRef = useRef(rookCancelling);
+  const rookQueuedSteeringRef = useRef(rookQueuedSteering);
+  rookCancellingRef.current = rookCancelling;
+  rookQueuedSteeringRef.current = rookQueuedSteering;
+  const draftTimersRef = useRef<Map<string, number>>(new Map());
+  const [navHistory, setNavHistory] = useState<
+    { page: PageId; filePath?: string; line?: number }[]
+  >([{ page: "home" }]);
+  const [navHistoryIndex, setNavHistoryIndex] = useState(0);
+  const navSkipRecordRef = useRef(false);
+
+  function recordNav(nextPage: PageId, filePath?: string, line?: number) {
+    if (navSkipRecordRef.current) return;
+    setNavHistory((current) => {
+      const sliced = current.slice(0, navHistoryIndex + 1);
+      const last = sliced.at(-1);
+      if (
+        last &&
+        last.page === nextPage &&
+        last.filePath === filePath &&
+        last.line === line
+      ) {
+        return sliced;
+      }
+      const next = [...sliced, { page: nextPage, filePath, line }].slice(-40);
+      setNavHistoryIndex(next.length - 1);
+      return next;
+    });
+  }
+
+  function navigateTracked(nextPage: PageId) {
+    navigate(nextPage);
+    recordNav(nextPage);
+  }
+
+  function navigateHistoryStep(delta: -1 | 1) {
+    const nextIdx = navHistoryIndex + delta;
+    const entry = navHistory[nextIdx];
+    if (!entry) return;
+    navSkipRecordRef.current = true;
+    setNavHistoryIndex(nextIdx);
+    navigate(entry.page);
+    if (entry.page === "editor" && entry.filePath) {
+      void openProjectFile(entry.filePath, { line: entry.line });
+    }
+    queueMicrotask(() => {
+      navSkipRecordRef.current = false;
+    });
+  }
 
   useEffect(() => {
     if (browserPreview) return;
@@ -363,6 +473,13 @@ export function App({ service, browserPreview = false }: AppProps) {
       );
       setVerifyChangeId("");
       setReviewChangeId(null);
+      setReviewInitialSelectedPaths(undefined);
+      setSplitDocumentKey(undefined);
+      setInlinePatch(null);
+      setRecoveredDraftNotice(undefined);
+      setRookContextChips([]);
+      setRookCancelling(false);
+      setRookQueuedSteering(null);
       setProjectEntries(listing.entries);
       setProjectEntriesTruncated(listing.truncated);
       setProjectDirectory("");
@@ -375,7 +492,97 @@ export function App({ service, browserPreview = false }: AppProps) {
           ...projects.filter((recent) => recent.id !== project.id),
         ].slice(0, 12),
       );
-      navigate("editor");
+      let restoredPage: PageId = "editor";
+      const continuity = await service
+        .loadWorkspaceContinuity(project.id)
+        .catch(() => null);
+      if (continuity) {
+        const draftByPath = new Map(
+          continuity.drafts.map((draft) => [draft.relativePath, draft]),
+        );
+        const tabPaths = Array.from(
+          new Set([
+            ...(continuity.layout?.openTabs ?? []),
+            ...continuity.drafts.map((draft) => draft.relativePath),
+          ]),
+        ).slice(0, 16);
+        const restoredDocs: EditorDocument[] = [];
+        for (const relPath of tabPaths) {
+          const read = await service
+            .readProjectFile(project.id, relPath)
+            .catch(() => null);
+          if (!read || read.kind !== "text" || read.content === null) continue;
+          const draft = draftByPath.get(relPath);
+          const key = `${project.id}\0${relPath}`;
+          if (draft) {
+            restoredDocs.push({
+              key,
+              projectId: project.id,
+              path: relPath,
+              content: draft.draftContent,
+              savedContent: read.content,
+              externalChange: draft.matchesDisk
+                ? undefined
+                : {
+                    kind: "modified",
+                    diskContent: read.content,
+                    detectedAt: Date.now(),
+                  },
+            });
+          } else {
+            restoredDocs.push({
+              key,
+              projectId: project.id,
+              path: relPath,
+              content: read.content,
+              savedContent: read.content,
+            });
+          }
+        }
+        if (restoredDocs.length > 0) {
+          setDocuments((current) => {
+            const others = current.filter(
+              (doc) => doc.projectId !== project.id,
+            );
+            return [...others, ...restoredDocs];
+          });
+          const activeKey = continuity.layout?.activeTab
+            ? `${project.id}\0${continuity.layout.activeTab}`
+            : restoredDocs[0].key;
+          const resolvedActive =
+            restoredDocs.find((doc) => doc.key === activeKey) ??
+            restoredDocs[0];
+          setActiveDocumentKey(resolvedActive.key);
+          setSelectedFilePath(resolvedActive.path);
+          if (continuity.layout?.splitTab) {
+            const splitKey = `${project.id}\0${continuity.layout.splitTab}`;
+            if (restoredDocs.some((doc) => doc.key === splitKey)) {
+              setSplitDocumentKey(splitKey);
+            }
+          }
+        }
+        if (continuity.drafts.length > 0) {
+          setRecoveredDraftNotice(
+            `Recovered ${continuity.drafts.length} unsaved draft(s) from your previous session.`,
+          );
+        }
+        if (
+          continuity.layout?.bottomTab === "terminal" ||
+          continuity.layout?.bottomTab === "run" ||
+          continuity.layout?.bottomTab === "git"
+        ) {
+          setBottomDrawerTab(continuity.layout.bottomTab);
+        }
+        if (
+          continuity.layout?.activePage === "editor" ||
+          continuity.layout?.activePage === "changes" ||
+          continuity.layout?.activePage === "verify" ||
+          continuity.layout?.activePage === "rook"
+        ) {
+          restoredPage = continuity.layout.activePage;
+        }
+      }
+      navigateTracked(restoredPage);
     } catch (error) {
       setProjectError(
         error instanceof Error
@@ -770,17 +977,45 @@ export function App({ service, browserPreview = false }: AppProps) {
         ) {
           setRookError(agentEvent.message);
         } else if (agentEvent?.type === "run_settled") {
-          if (agentEvent.aborted !== true) {
-            setRookMessages((items) =>
-              updateRookAssistant(items, runId, (message) => ({
-                ...message,
-                incomplete: message.stopReason === "toolUse",
-              })),
-            );
-          }
+          const wasCancelled =
+            agentEvent.aborted === true || rookCancellingRef.current;
+          setRookCancelling(false);
+          setRookMessages((items) =>
+            updateRookAssistant(items, runId, (message) => ({
+              ...message,
+              cancelled: wasCancelled ? true : message.cancelled,
+              incomplete: !wasCancelled && message.stopReason === "toolUse",
+            })),
+          );
           setRookRunId(undefined);
           if (rookModeRef.current === "build" && rookProjectId.current) {
             void syncWorkspaceFromDisk(rookProjectId.current);
+          }
+          const queued = rookQueuedSteeringRef.current;
+          if (queued && rookSession) {
+            setRookQueuedSteering(null);
+            setRookMessages((items) => [
+              ...items,
+              {
+                role: "user",
+                text: queued.text,
+                steered: queued.mode === "steer",
+              },
+            ]);
+            void service
+              .promptRookAsk(
+                rookSession,
+                queued.text,
+                queued.context || undefined,
+              )
+              .catch((failure) =>
+                setRookError(
+                  errorMessage(
+                    failure,
+                    "Queued steering prompt could not be sent.",
+                  ),
+                ),
+              );
           }
           if (rookSessionStorage)
             void service
@@ -823,14 +1058,54 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
-  async function openProjectFile(relativePath: string) {
+  async function openQuickOpen() {
+    if (browserPreview || !activeProject) return;
+    setQuickOpenOpen(true);
+    setQuickOpenLoading(true);
+    try {
+      const files = await service.listProjectFiles(activeProject.id);
+      setQuickOpenFiles(files);
+    } catch {
+      setQuickOpenFiles([]);
+    } finally {
+      setQuickOpenLoading(false);
+    }
+  }
+
+  async function openProjectFile(
+    relativePath: string,
+    options?: { split?: boolean; line?: number; column?: number },
+  ) {
     if (browserPreview) return;
     if (!activeProject) return;
     const fullRelativePath = relativePath;
     const key = `${activeProject.id}\0${fullRelativePath}`;
-    const existing = documents.find((document) => document.key === key);
+    const assignPane = (docKey: string) => {
+      if (
+        options?.split ||
+        (activeEditorPane === "secondary" && splitDocumentKey)
+      ) {
+        setSplitDocumentKey(docKey);
+        setActiveEditorPane("secondary");
+      } else {
+        setActiveDocumentKey(docKey);
+        setActiveEditorPane("primary");
+      }
+      if (options?.line) {
+        setRevealTarget({
+          key: docKey,
+          line: options.line,
+          column: options.column,
+          nonce: Date.now(),
+        });
+      }
+      recordNav("editor", fullRelativePath, options?.line);
+    };
+    const existing = documentsRef.current.find(
+      (document) => document.key === key,
+    );
     if (existing) {
-      setActiveDocumentKey(key);
+      assignPane(key);
       setSelectedFilePath(fullRelativePath);
       setSelectedFile(undefined);
       return;
@@ -846,17 +1121,21 @@ export function App({ service, browserPreview = false }: AppProps) {
       setSelectedFile(file);
       if (file.kind === "text" && file.content !== null) {
         const content = file.content;
-        setDocuments((current) => [
-          ...current,
-          {
-            key,
-            projectId: activeProject.id,
-            path: fullRelativePath,
-            content,
-            savedContent: content,
-          },
-        ]);
-        setActiveDocumentKey(key);
+        setDocuments((current) =>
+          current.some((item) => item.key === key)
+            ? current
+            : [
+                ...current,
+                {
+                  key,
+                  projectId: activeProject.id,
+                  path: fullRelativePath,
+                  content,
+                  savedContent: content,
+                },
+              ],
+        );
+        assignPane(key);
       } else {
         setActiveDocumentKey(undefined);
       }
@@ -870,13 +1149,195 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
+  function jumpToLocation(relativePath: string, line: number, column?: number) {
+    navigate("editor");
+    void openProjectFile(relativePath, { line, column });
+  }
+
+  function attachContextChipToRook(chip: RookContextChip, mode?: RookMode) {
+    setRookContextChips((current) => [
+      ...current.filter((item) => item.id !== chip.id),
+      chip,
+    ]);
+    navigateTracked("rook");
+    if (mode && mode !== rookMode) {
+      void switchRookMode(mode);
+    }
+  }
+
+  async function promoteEditsToChange(
+    objective: string,
+    selectedPaths: string[],
+  ) {
+    if (!activeProject) return;
+    const created = await service.createChange(activeProject.id, objective);
+    setChanges((items) => [created, ...items]);
+    setReviewInitialSelectedPaths(selectedPaths);
+    setReviewChangeId(created.id);
+    navigateTracked("changes");
+  }
+
+  function openInlinePatchForDocument(
+    doc: EditorDocument,
+    proposedContent?: string,
+    sourceLabel = "Localized edit",
+  ) {
+    setInlinePatchError(undefined);
+    setInlinePatch({
+      path: doc.path,
+      sourceLabel,
+      baseContent: doc.savedContent,
+      proposedContent: proposedContent ?? doc.content,
+      suggestedObjective: `Update ${doc.path}`,
+    });
+    navigateTracked("editor");
+  }
+
+  async function acceptInlinePatch(nextContent: string) {
+    if (!activeProject || !inlinePatch) return;
+    setInlinePatchSaving(true);
+    setInlinePatchError(undefined);
+    try {
+      await service.saveProjectFile(
+        activeProject.id,
+        inlinePatch.path,
+        inlinePatch.baseContent,
+        nextContent,
+      );
+      const key = `${activeProject.id}\0${inlinePatch.path}`;
+      setDocuments((current) =>
+        current.map((doc) =>
+          doc.key === key
+            ? {
+                ...doc,
+                content: nextContent,
+                savedContent: nextContent,
+                externalChange: undefined,
+              }
+            : doc,
+        ),
+      );
+      void service
+        .deleteEditorDraft(activeProject.id, inlinePatch.path)
+        .catch(() => undefined);
+      setInlinePatch(null);
+      setWorkspaceSyncVersion((v) => v + 1);
+      void service
+        .listExecutions(activeProject.id)
+        .then(setExecutions)
+        .catch(() => undefined);
+    } catch (failure) {
+      setInlinePatchError(
+        errorMessage(
+          failure,
+          "Inline patch could not be saved. Source file may have changed.",
+        ),
+      );
+    } finally {
+      setInlinePatchSaving(false);
+    }
+  }
+
+  async function promoteInlinePatchToChange(nextContent: string) {
+    if (!activeProject || !inlinePatch) return;
+    const targetPath = inlinePatch.path;
+    const objective = inlinePatch.suggestedObjective ?? `Update ${targetPath}`;
+    if (nextContent !== inlinePatch.baseContent) {
+      setInlinePatchSaving(true);
+      setInlinePatchError(undefined);
+      try {
+        await service.saveProjectFile(
+          activeProject.id,
+          targetPath,
+          inlinePatch.baseContent,
+          nextContent,
+        );
+        const key = `${activeProject.id}\0${targetPath}`;
+        setDocuments((current) =>
+          current.map((doc) =>
+            doc.key === key
+              ? {
+                  ...doc,
+                  content: nextContent,
+                  savedContent: nextContent,
+                  externalChange: undefined,
+                }
+              : doc,
+          ),
+        );
+        void service
+          .deleteEditorDraft(activeProject.id, targetPath)
+          .catch(() => undefined);
+      } catch (failure) {
+        setInlinePatchError(
+          errorMessage(failure, "Patch could not be saved before promoting."),
+        );
+        setInlinePatchSaving(false);
+        return;
+      } finally {
+        setInlinePatchSaving(false);
+      }
+    }
+    setInlinePatch(null);
+    setWorkspaceSyncVersion((v) => v + 1);
+    await promoteEditsToChange(objective, [targetPath]);
+  }
+
   function updateDocument(key: string, content: string) {
     setDocuments((current) =>
       current.map((document) =>
         document.key === key ? { ...document, content } : document,
       ),
     );
+    if (browserPreview) return;
+    const doc = documentsRef.current.find((item) => item.key === key);
+    if (!doc) return;
+    const prevTimer = draftTimersRef.current.get(key);
+    if (prevTimer) window.clearTimeout(prevTimer);
+    const timer = window.setTimeout(() => {
+      draftTimersRef.current.delete(key);
+      if (content === doc.savedContent) {
+        void service
+          .deleteEditorDraft(doc.projectId, doc.path)
+          .catch(() => undefined);
+      } else {
+        void service
+          .saveEditorDraft(doc.projectId, doc.path, doc.savedContent, content)
+          .catch(() => undefined);
+      }
+    }, 600);
+    draftTimersRef.current.set(key, timer);
   }
+
+  useEffect(() => {
+    if (browserPreview || !activeProject) return;
+    const projectDocs = documents.filter(
+      (doc) => doc.projectId === activeProject.id,
+    );
+    const activeDoc = projectDocs.find((doc) => doc.key === activeDocumentKey);
+    const splitDoc = projectDocs.find((doc) => doc.key === splitDocumentKey);
+    const timer = window.setTimeout(() => {
+      void service
+        .saveWorkspaceLayout(activeProject.id, {
+          openTabs: projectDocs.map((doc) => doc.path),
+          activeTab: activeDoc?.path ?? null,
+          splitTab: splitDoc?.path ?? null,
+          bottomTab: bottomDrawerTab,
+          activePage: page,
+        })
+        .catch(() => undefined);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeDocumentKey,
+    activeProject,
+    bottomDrawerTab,
+    browserPreview,
+    documents,
+    page,
+    service,
+    splitDocumentKey,
+  ]);
 
   async function saveDocument(document: EditorDocument) {
     const newline = document.savedContent.match(/\r\n|\r|\n/)?.[0] ?? "\n";
@@ -894,6 +1355,11 @@ export function App({ service, browserPreview = false }: AppProps) {
         item.key === document.key ? { ...item, savedContent: content } : item,
       ),
     );
+    if (!browserPreview) {
+      void service
+        .deleteEditorDraft(document.projectId, document.path)
+        .catch(() => undefined);
+    }
   }
 
   async function saveDocuments(items: EditorDocument[]): Promise<boolean> {
@@ -936,6 +1402,15 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
     const remaining = documents.filter((item) => item.key !== document.key);
     setDocuments(remaining);
+    if (!browserPreview) {
+      void service
+        .deleteEditorDraft(document.projectId, document.path)
+        .catch(() => undefined);
+    }
+    if (splitDocumentKey === document.key) {
+      setSplitDocumentKey(undefined);
+      setActiveEditorPane("primary");
+    }
     if (activeDocumentKey === document.key) {
       setActiveDocumentKey(remaining.at(-1)?.key);
       setSelectedFilePath(remaining.at(-1)?.path);
@@ -961,13 +1436,49 @@ export function App({ service, browserPreview = false }: AppProps) {
           target.matches("input, textarea, select, [role='textbox']"));
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
+        const focusedKey =
+          activeEditorPane === "secondary" && splitDocumentKey
+            ? splitDocumentKey
+            : activeDocumentKey;
         void saveDocuments(
           event.shiftKey
             ? documents
-            : documents.filter(
-                (document) => document.key === activeDocumentKey,
-              ),
+            : documents.filter((document) => document.key === focusedKey),
         );
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "p" &&
+        activeProject &&
+        !browserPreview
+      ) {
+        event.preventDefault();
+        void openQuickOpen();
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key === "\\" &&
+        page === "editor" &&
+        activeDocumentKey
+      ) {
+        event.preventDefault();
+        setSplitDocumentKey((current) => {
+          if (current) {
+            setActiveEditorPane("primary");
+            return undefined;
+          }
+          const other = documents.find(
+            (doc) =>
+              doc.projectId === activeProject?.id &&
+              doc.key !== activeDocumentKey,
+          );
+          setActiveEditorPane("secondary");
+          return other?.key ?? activeDocumentKey;
+        });
+      } else if (event.altKey && event.key === "ArrowLeft" && !isTextEntry) {
+        event.preventDefault();
+        navigateHistoryStep(-1);
+      } else if (event.altKey && event.key === "ArrowRight" && !isTextEntry) {
+        event.preventDefault();
+        navigateHistoryStep(1);
       } else if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "k"
@@ -989,7 +1500,19 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [preferences, service, documents, activeDocumentKey]);
+  }, [
+    preferences,
+    service,
+    documents,
+    activeDocumentKey,
+    splitDocumentKey,
+    activeEditorPane,
+    activeProject,
+    browserPreview,
+    page,
+    navHistory,
+    navHistoryIndex,
+  ]);
 
   async function savePreferences(next: UiPreferences) {
     if (browserPreview) {
@@ -1111,6 +1634,28 @@ export function App({ service, browserPreview = false }: AppProps) {
           </span>
         </button>
         <span className="toolbar-divider" />
+        <div className="nav-history-controls" aria-label="Navigation history">
+          <button
+            type="button"
+            className="toolbar-icon-button"
+            aria-label="Go back"
+            title="Back (Alt+Left)"
+            disabled={navHistoryIndex <= 0}
+            onClick={() => navigateHistoryStep(-1)}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="toolbar-icon-button"
+            aria-label="Go forward"
+            title="Forward (Alt+Right)"
+            disabled={navHistoryIndex >= navHistory.length - 1}
+            onClick={() => navigateHistoryStep(1)}
+          >
+            ›
+          </button>
+        </div>
         <div className="project-context" aria-label="Project context">
           <span className="project-avatar" aria-hidden="true">
             {activeProject?.name.slice(0, 1) ?? "—"}
@@ -1279,7 +1824,7 @@ export function App({ service, browserPreview = false }: AppProps) {
             nativeEvent={nativeEvent}
             nativePending={nativePending}
             onTestNative={testNativeConnection}
-            onNavigate={navigate}
+            onNavigate={navigateTracked}
             activeProject={activeProject}
             rookSession={rookSession}
             rookMode={rookMode}
@@ -1303,6 +1848,38 @@ export function App({ service, browserPreview = false }: AppProps) {
             onRookNewSession={() => void startNewRookChat()}
             onRookOpenSession={(id) => void openRookChat(id)}
             rookRunId={rookRunId}
+            rookCancelling={rookCancelling}
+            onRookCancellingChange={setRookCancelling}
+            rookQueuedSteering={rookQueuedSteering}
+            onRookQueuedSteeringChange={setRookQueuedSteering}
+            rookContextChips={rookContextChips}
+            onRemoveRookContextChip={(id) =>
+              setRookContextChips((chips) =>
+                chips.filter((chip) => chip.id !== id),
+              )
+            }
+            onClearRookContextChips={() => setRookContextChips([])}
+            onPreviewRookPatch={(code) => {
+              const targetDoc =
+                documents.find((doc) => doc.key === activeDocumentKey) ??
+                documents.find((doc) => doc.projectId === activeProject?.id);
+              if (targetDoc) {
+                openInlinePatchForDocument(
+                  targetDoc,
+                  code,
+                  "Rook response preview",
+                );
+              } else {
+                setProjectError(
+                  "Open a file in Editor first to preview a Rook patch inline.",
+                );
+              }
+            }}
+            onPromoteRookToChange={(objective) => {
+              const dirtyOrChanged =
+                editorGitStatus?.files.map((file) => file.path) ?? [];
+              void promoteEditsToChange(objective, dirtyOrChanged);
+            }}
             rookDraft={rookDraft}
             onRookDraftChange={setRookDraft}
             onRookDraftSave={(draft) => {
@@ -1329,11 +1906,62 @@ export function App({ service, browserPreview = false }: AppProps) {
             projectError={projectError}
             onOpenProject={openProject}
             onOpenProjectDirectory={openProjectDirectory}
-            onOpenProjectFile={openProjectFile}
+            onOpenProjectFile={(path) => void openProjectFile(path)}
             documents={documents}
             activeDocumentKey={activeDocumentKey}
+            splitDocumentKey={splitDocumentKey}
+            activeEditorPane={activeEditorPane}
+            onActiveEditorPaneChange={setActiveEditorPane}
+            onToggleSplit={() => {
+              if (splitDocumentKey) {
+                setSplitDocumentKey(undefined);
+                setActiveEditorPane("primary");
+              } else if (activeDocumentKey) {
+                const other = documents.find(
+                  (doc) =>
+                    doc.projectId === activeProject?.id &&
+                    doc.key !== activeDocumentKey,
+                );
+                setSplitDocumentKey(other?.key ?? activeDocumentKey);
+                setActiveEditorPane("secondary");
+              }
+            }}
+            onSelectSplitDocument={(key) => {
+              setSplitDocumentKey(key);
+              setActiveEditorPane("secondary");
+            }}
+            onOpenQuickOpen={() => void openQuickOpen()}
+            revealTarget={revealTarget}
+            editorSelection={editorSelection}
+            onEditorSelectionChange={setEditorSelection}
+            inlinePatch={inlinePatch}
+            inlinePatchSaving={inlinePatchSaving}
+            inlinePatchError={inlinePatchError}
+            onOpenInlinePatch={(doc) => openInlinePatchForDocument(doc)}
+            onAcceptInlinePatch={acceptInlinePatch}
+            onRejectInlinePatch={() => setInlinePatch(null)}
+            onPromoteInlinePatch={promoteInlinePatchToChange}
+            recoveredDraftNotice={recoveredDraftNotice}
+            onDismissRecoveredDraftNotice={() =>
+              setRecoveredDraftNotice(undefined)
+            }
+            bottomDrawerTab={bottomDrawerTab}
+            onBottomDrawerTabChange={setBottomDrawerTab}
+            editorGitStatus={editorGitStatus}
+            onEditorGitStatusChange={setEditorGitStatus}
+            onJumpToLocation={jumpToLocation}
+            onAttachContextChipToRook={attachContextChipToRook}
+            onPromoteEditsToChange={promoteEditsToChange}
+            onPruneExecutions={async () => {
+              if (!activeProject) return;
+              await service.pruneProjectExecutions(activeProject.id, 50);
+              setExecutions(
+                await service.listExecutions(activeProject.id).catch(() => []),
+              );
+            }}
             onSelectDocument={(key) => {
               setActiveDocumentKey(key);
+              setActiveEditorPane("primary");
               const document = documents.find((item) => item.key === key);
               if (document) {
                 setSelectedFilePath(document.path);
@@ -1363,7 +1991,11 @@ export function App({ service, browserPreview = false }: AppProps) {
             verifyChangeId={verifyChangeId}
             onVerifyChangeIdChange={setVerifyChangeId}
             reviewChangeId={reviewChangeId}
-            onOpenReviewChange={setReviewChangeId}
+            reviewInitialSelectedPaths={reviewInitialSelectedPaths}
+            onOpenReviewChange={(id) => {
+              setReviewInitialSelectedPaths(undefined);
+              setReviewChangeId(id);
+            }}
             onOpenReviewFileInEditor={(relativePath) => {
               navigate("editor");
               void openProjectFile(relativePath);
@@ -1466,6 +2098,17 @@ export function App({ service, browserPreview = false }: AppProps) {
           {projectError}
         </div>
       )}
+
+      <QuickOpenDialog
+        open={quickOpenOpen}
+        files={quickOpenFiles}
+        loading={quickOpenLoading}
+        onOpenChange={setQuickOpenOpen}
+        onSelectFile={(relativePath, openInSplit) => {
+          navigate("editor");
+          void openProjectFile(relativePath, { split: openInSplit });
+        }}
+      />
 
       <footer className="statusbar" aria-label="Application status">
         <div className="statusbar-group">
@@ -1628,6 +2271,7 @@ interface ScreenContentProps {
   verifyChangeId?: string;
   onVerifyChangeIdChange?: (changeId: string) => void;
   reviewChangeId?: string | null;
+  reviewInitialSelectedPaths?: string[];
   onOpenReviewChange?: (changeId: string | null) => void;
   onOpenReviewFileInEditor?: (relativePath: string) => void;
   onSendRevisionToRook?: (prompt: string) => void;
@@ -1686,6 +2330,21 @@ interface ScreenContentProps {
   onRookNewSession: () => void;
   onRookOpenSession: (id: string) => void;
   rookRunId?: string;
+  rookCancelling?: boolean;
+  onRookCancellingChange?: (value: boolean) => void;
+  rookQueuedSteering?: {
+    text: string;
+    mode: "steer" | "queue";
+    context: string;
+  } | null;
+  onRookQueuedSteeringChange?: (
+    value: { text: string; mode: "steer" | "queue"; context: string } | null,
+  ) => void;
+  rookContextChips?: RookContextChip[];
+  onRemoveRookContextChip?: (id: string) => void;
+  onClearRookContextChips?: () => void;
+  onPreviewRookPatch?: (code: string) => void;
+  onPromoteRookToChange?: (objective: string) => void;
   rookDraft: string;
   onRookDraftChange: Dispatch<SetStateAction<string>>;
   onRookDraftSave: (draft: string) => void;
@@ -1707,6 +2366,44 @@ interface ScreenContentProps {
   onOpenProjectFile: (relativePath: string) => void;
   documents: EditorDocument[];
   activeDocumentKey?: string;
+  splitDocumentKey?: string;
+  activeEditorPane?: "primary" | "secondary";
+  onActiveEditorPaneChange?: (pane: "primary" | "secondary") => void;
+  onToggleSplit?: () => void;
+  onSelectSplitDocument?: (key: string) => void;
+  onOpenQuickOpen?: () => void;
+  revealTarget?: {
+    key: string;
+    line: number;
+    column?: number;
+    nonce: number;
+  } | null;
+  editorSelection?: EditorSelection | null;
+  onEditorSelectionChange?: (selection: EditorSelection | null) => void;
+  inlinePatch?: PendingInlinePatch | null;
+  inlinePatchSaving?: boolean;
+  inlinePatchError?: string;
+  onOpenInlinePatch?: (doc: EditorDocument) => void;
+  onAcceptInlinePatch?: (nextContent: string) => Promise<void>;
+  onRejectInlinePatch?: () => void;
+  onPromoteInlinePatch?: (nextContent: string) => Promise<void>;
+  recoveredDraftNotice?: string;
+  onDismissRecoveredDraftNotice?: () => void;
+  bottomDrawerTab?: "terminal" | "run" | "git";
+  onBottomDrawerTabChange?: (tab: "terminal" | "run" | "git") => void;
+  editorGitStatus?: GitStatus;
+  onEditorGitStatusChange?: (status: GitStatus) => void;
+  onJumpToLocation?: (
+    relativePath: string,
+    line: number,
+    column?: number,
+  ) => void;
+  onAttachContextChipToRook?: (chip: RookContextChip, mode?: RookMode) => void;
+  onPromoteEditsToChange?: (
+    objective: string,
+    selectedPaths: string[],
+  ) => Promise<void>;
+  onPruneExecutions?: () => Promise<void>;
   onSelectDocument: (key: string) => void;
   onUpdateDocument: (key: string, content: string) => void;
   onSaveDocuments: (documents: EditorDocument[]) => Promise<boolean>;
@@ -1721,21 +2418,28 @@ interface ScreenContentProps {
 
 function ScreenContent(props: ScreenContentProps) {
   const { page } = props;
-  if (page === "settings") return <SettingsScreen {...props} />;
-  if (page === "editor") return <EditorScreen {...props} />;
-  if (page === "home") return <HomeScreen {...props} />;
-  if (page === "changes") {
+  const keepEditorMounted = Boolean(
+    props.activeProject && !props.browserPreview,
+  );
+
+  let nonEditorView: ReactNode = null;
+  if (page === "settings") {
+    nonEditorView = <SettingsScreen {...props} />;
+  } else if (page === "home") {
+    nonEditorView = <HomeScreen {...props} />;
+  } else if (page === "changes") {
     if (props.reviewChangeId && props.activeProject && !props.browserPreview) {
       const dirtyProjectDocs = props.documents.filter(
         (doc) =>
           doc.projectId === props.activeProject?.id &&
           doc.content !== doc.savedContent,
       );
-      return (
+      nonEditorView = (
         <ChangeReviewScreen
           service={props.service}
           project={props.activeProject}
           changeId={props.reviewChangeId}
+          initialSelectedPaths={props.reviewInitialSelectedPaths}
           preferences={props.preferences}
           executions={props.executions ?? []}
           dirtyCount={dirtyProjectDocs.length}
@@ -1754,38 +2458,60 @@ function ScreenContent(props: ScreenContentProps) {
           }
         />
       );
+    } else {
+      nonEditorView = <ChangesScreen {...props} />;
     }
-    return <ChangesScreen {...props} />;
-  }
-  if (page === "verify") return <VerifyScreen {...props} />;
-  if (page === "rook")
-    return (
+  } else if (page === "verify") {
+    nonEditorView = <VerifyScreen {...props} />;
+  } else if (page === "rook") {
+    nonEditorView = (
       <RookScreen key={props.activeProject?.id ?? "no-project"} {...props} />
     );
+  } else if (page !== "editor") {
+    const item = navigationItems.find((entry) => entry.id === page);
+    const details: Record<
+      Exclude<PageId, "home" | "editor" | "settings">,
+      string
+    > = {
+      changes: "Create and track durable Changes for this project.",
+      context:
+        "Context relationships will be grounded in opened source and recorded provenance.",
+      verify:
+        "Verification records will appear only after a real check is run against a known source state.",
+      rook: "Rook is a separate process and is not connected to this shell yet. No sessions or agent tools are running.",
+      tools:
+        "Skills and MCP configuration are not available until the Rook integration is implemented.",
+    };
+    nonEditorView = (
+      <section className="content-page" aria-labelledby="screen-title">
+        <PageHeading eyebrow="Laplace workspace" title={screenTitles[page]} />
+        <EmptyState
+          title="Not available yet"
+          description={details[page]}
+          label={item?.label ?? "Feature"}
+        />
+      </section>
+    );
+  }
 
-  const item = navigationItems.find((entry) => entry.id === page);
-  const details: Record<
-    Exclude<PageId, "home" | "editor" | "settings">,
-    string
-  > = {
-    changes: "Create and track durable Changes for this project.",
-    context:
-      "Context relationships will be grounded in opened source and recorded provenance.",
-    verify:
-      "Verification records will appear only after a real check is run against a known source state.",
-    rook: "Rook is a separate process and is not connected to this shell yet. No sessions or agent tools are running.",
-    tools:
-      "Skills and MCP configuration are not available until the Rook integration is implemented.",
-  };
+  if (!keepEditorMounted) {
+    return page === "editor" ? (
+      <EditorScreen {...props} />
+    ) : (
+      <>{nonEditorView}</>
+    );
+  }
+
   return (
-    <section className="content-page" aria-labelledby="screen-title">
-      <PageHeading eyebrow="Laplace workspace" title={screenTitles[page]} />
-      <EmptyState
-        title="Not available yet"
-        description={details[page]}
-        label={item?.label ?? "Feature"}
-      />
-    </section>
+    <>
+      <div
+        className={`editor-persistent-host${page === "editor" ? "" : " is-hidden"}`}
+        aria-hidden={page !== "editor"}
+      >
+        <EditorScreen {...props} />
+      </div>
+      {page !== "editor" ? nonEditorView : null}
+    </>
   );
 }
 
@@ -2058,6 +2784,9 @@ function VerifyScreen({
   onSaveDocuments,
   onRunCheck,
   onRunProjectRecipe,
+  onPruneExecutions,
+  onJumpToLocation,
+  onAttachContextChipToRook,
   savingFiles,
   browserPreview,
 }: ScreenContentProps) {
@@ -2331,6 +3060,36 @@ function VerifyScreen({
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              className="button button-quiet"
+              disabled={filteredChecks.length === 0}
+              onClick={() => {
+                const report = filteredChecks
+                  .slice(0, 20)
+                  .map(
+                    (c) =>
+                      `## ${c.program} ${c.args.join(" ")} (${c.status})\nDigest: ${c.sourceDigest} · Exit: ${c.exitCode ?? "—"}\n\`\`\`\n${c.output.slice(0, 4000)}\n\`\`\``,
+                  )
+                  .join("\n\n");
+                if (navigator.clipboard?.writeText) {
+                  void navigator.clipboard
+                    .writeText(report)
+                    .catch(() => undefined);
+                }
+              }}
+            >
+              Copy report
+            </button>
+            {checks.length > 50 && onPruneExecutions && (
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() => void onPruneExecutions()}
+              >
+                Prune old ({checks.length} → 50)
+              </button>
+            )}
           </div>
           {error && (
             <p className="inline-error" role="alert">
@@ -2375,6 +3134,34 @@ function VerifyScreen({
                       >
                         {dirtyDocuments.length > 0 ? "Save & rerun" : "Rerun"}
                       </button>
+                      {check.status === "failed" &&
+                        onAttachContextChipToRook && (
+                          <button
+                            type="button"
+                            className="button button-quiet"
+                            onClick={() =>
+                              onAttachContextChipToRook(
+                                {
+                                  id: `verify-${check.id}`,
+                                  kind: "verify_failure",
+                                  label:
+                                    `Verify failure · ${check.program} ${check.args.join(" ")}`.slice(
+                                      0,
+                                      64,
+                                    ),
+                                  content: formatFailureContextExcerpt(
+                                    `${check.program} ${check.args.join(" ")}`,
+                                    check.output,
+                                    activeProject.path,
+                                  ),
+                                },
+                                "ask",
+                              )
+                            }
+                          >
+                            Investigate in Rook ↗
+                          </button>
+                        )}
                     </div>
                     <strong>
                       {check.program} {check.args.join(" ")}
@@ -2413,7 +3200,13 @@ function VerifyScreen({
                       </details>
                     )}
                   </div>
-                  <pre>{check.output || "(no output)"}</pre>
+                  <LinkedStackOutput
+                    output={check.output}
+                    projectPath={activeProject.path}
+                    onJump={(relativePath, line, column) =>
+                      onJumpToLocation?.(relativePath, line, column)
+                    }
+                  />
                 </article>
               );
             })}
@@ -2464,6 +3257,16 @@ function RookScreen({
   onRookNewSession,
   onRookOpenSession,
   rookRunId: runId,
+  rookCancelling = false,
+  onRookCancellingChange,
+  rookQueuedSteering = null,
+  onRookQueuedSteeringChange,
+  rookContextChips = [],
+  onRemoveRookContextChip,
+  onClearRookContextChips,
+  onPreviewRookPatch,
+  onPromoteRookToChange,
+  documents,
   rookDraft: prompt,
   onRookDraftChange: setPrompt,
   onRookDraftSave,
@@ -2545,7 +3348,7 @@ function RookScreen({
     setShowJumpToLatest(!nearBottom);
   }
 
-  function submitPrompt() {
+  function submitPrompt(steeringMode?: "steer" | "queue") {
     const text = prompt.trim();
     if (!text) return;
     if (
@@ -2566,18 +3369,42 @@ function RookScreen({
       setError("Choose an available model before sending.");
       return;
     }
+    const serializedContext = serializeRookContextChips(rookContextChips);
+    if (runId && steeringMode) {
+      onRookQueuedSteeringChange?.({
+        text,
+        mode: steeringMode,
+        context: serializedContext,
+      });
+      setPrompt("");
+      onClearRookContextChips?.();
+      setError(undefined);
+      if (steeringMode === "steer") {
+        onRookCancellingChange?.(true);
+        void service.cancelRookAsk(session, runId).catch((failure) => {
+          onRookCancellingChange?.(false);
+          setError(
+            errorMessage(failure, "Could not stop current run to steer."),
+          );
+        });
+      }
+      return;
+    }
     shouldAutoScrollRef.current = true;
     setShowJumpToLatest(false);
     setMessages((items) => [...items, { role: "user", text }]);
     setPrompt("");
+    onClearRookContextChips?.();
     setError(undefined);
-    void service.promptRookAsk(session, text).catch((failure) => {
-      setMessages((items) =>
-        items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
-      );
-      setPrompt(text);
-      setError(errorMessage(failure, "Your message could not be sent."));
-    });
+    void service
+      .promptRookAsk(session, text, serializedContext || undefined)
+      .catch((failure) => {
+        setMessages((items) =>
+          items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
+        );
+        setPrompt(text);
+        setError(errorMessage(failure, "Your message could not be sent."));
+      });
   }
   useEffect(() => {
     if (!modelPickerOpen) return;
@@ -3294,7 +4121,17 @@ function RookScreen({
                   className={`rook-message rook-message-${message.role}`}
                   key={`${index}-${message.role}`}
                 >
-                  <strong>{message.role === "user" ? "You" : "Rook"}</strong>
+                  <div className="rook-message-head">
+                    <strong>{message.role === "user" ? "You" : "Rook"}</strong>
+                    {message.steered && (
+                      <span className="status-pill">Steered · applied</span>
+                    )}
+                    {message.cancelled && (
+                      <span className="verify-status-pill verify-status-cancelled">
+                        Cancelled
+                      </span>
+                    )}
+                  </div>
                   {message.tools?.map((tool) => (
                     <div
                       className={`rook-tool-activity rook-tool-${tool.status}`}
@@ -3322,13 +4159,53 @@ function RookScreen({
                     <p>{message.text}</p>
                   ) : message.role === "assistant" &&
                     message.runId === runId ? (
-                    <p className="rook-thinking">Thinking…</p>
+                    <p className="rook-thinking">
+                      {rookCancelling ? "Stopping…" : "Thinking…"}
+                    </p>
                   ) : null}
                   {message.role === "assistant" && message.incomplete && (
                     <p className="rook-incomplete" role="status">
                       Rook stopped before providing a final answer.
                     </p>
                   )}
+                  {message.role === "assistant" &&
+                    message.text &&
+                    message.runId !== runId && (
+                      <div className="rook-message-actions">
+                        {(() => {
+                          const code = extractFirstFencedCodeBlock(
+                            message.text,
+                          );
+                          return code && onPreviewRookPatch ? (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              onClick={() => onPreviewRookPatch(code)}
+                            >
+                              Preview patch in Editor
+                            </button>
+                          ) : null;
+                        })()}
+                        {onPromoteRookToChange &&
+                          activeProject?.isGitRepository && (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              onClick={() => {
+                                const prevUser = messages
+                                  .slice(0, index)
+                                  .reverse()
+                                  .find((m) => m.role === "user")?.text;
+                                onPromoteRookToChange(
+                                  (prevUser ?? message.text).slice(0, 140),
+                                );
+                              }}
+                            >
+                              Promote to Change
+                            </button>
+                          )}
+                      </div>
+                    )}
                 </article>
               );
             })}
@@ -3357,9 +4234,67 @@ function RookScreen({
           className="rook-composer"
           onSubmit={(event) => {
             event.preventDefault();
-            submitPrompt();
+            submitPrompt(runId ? "steer" : undefined);
           }}
         >
+          {rookContextChips.length > 0 && (
+            <div className="rook-context-chips" aria-label="Attached context">
+              {rookContextChips.map((chip) => {
+                const liveDoc = chip.filePath
+                  ? documents.find(
+                      (doc) =>
+                        doc.projectId === activeProject?.id &&
+                        doc.path === chip.filePath,
+                    )
+                  : undefined;
+                const isStale = Boolean(
+                  liveDoc &&
+                    chip.sourceSnapshot !== undefined &&
+                    liveDoc.content !== chip.sourceSnapshot,
+                );
+                return (
+                  <span
+                    key={chip.id}
+                    className={`rook-context-chip${isStale ? " is-stale" : ""}`}
+                  >
+                    <span>{chip.label}</span>
+                    {isStale && (
+                      <small title="Attached file was edited after attaching">
+                        stale
+                      </small>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${chip.label}`}
+                      onClick={() => onRemoveRookContextChip?.(chip.id)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {(rookCancelling || rookQueuedSteering) && (
+            <div className="rook-steering-status" role="status">
+              <span>
+                {rookQueuedSteering
+                  ? rookQueuedSteering.mode === "steer"
+                    ? "Steering received — stopping current run before applying…"
+                    : "Follow-up queued — will send when current run settles…"
+                  : "Cancelling current run…"}
+              </span>
+              {rookQueuedSteering && (
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => onRookQueuedSteeringChange?.(null)}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
           {prompt.trim() && !session && !rookPending && !rookError && (
             <button
               className="rook-draft-action"
@@ -3390,35 +4325,64 @@ function RookScreen({
                   !event.nativeEvent.isComposing
                 ) {
                   event.preventDefault();
-                  if (!runId) submitPrompt();
+                  submitPrompt(runId ? "steer" : undefined);
                 }
               }}
               maxLength={64000}
               placeholder={
-                rookMode === "build"
-                  ? "Describe changes to make in this repository… (Enter to send)"
-                  : "Message Rook… (Enter to send)"
+                runId
+                  ? "Type a steering note to Stop & steer, or Queue next…"
+                  : rookMode === "build"
+                    ? "Describe changes to make in this repository… (Enter to send)"
+                    : "Message Rook… (Enter to send)"
               }
-              disabled={Boolean(runId)}
             />
             {session && runId ? (
-              <button
-                className="rook-send-button rook-stop-button"
-                type="button"
-                aria-label="Stop Rook"
-                title="Stop"
-                onClick={() => void service.cancelRookAsk(session, runId)}
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 16 16"
-                  fill="currentColor"
-                  aria-hidden="true"
+              <div className="rook-composer-run-actions">
+                {prompt.trim() && (
+                  <>
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      title="Wait for current run to finish, then send"
+                      onClick={() => submitPrompt("queue")}
+                    >
+                      Queue
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      title="Cancel current run and apply steering note"
+                      onClick={() => submitPrompt("steer")}
+                    >
+                      Stop &amp; steer
+                    </button>
+                  </>
+                )}
+                <button
+                  className="rook-send-button rook-stop-button"
+                  type="button"
+                  aria-label="Stop Rook"
+                  title={rookCancelling ? "Cancelling…" : "Stop"}
+                  disabled={rookCancelling}
+                  onClick={() => {
+                    onRookCancellingChange?.(true);
+                    void service.cancelRookAsk(session, runId).catch(() => {
+                      onRookCancellingChange?.(false);
+                    });
+                  }}
                 >
-                  <rect x="3" y="3" width="10" height="10" rx="2" />
-                </svg>
-              </button>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <rect x="3" y="3" width="10" height="10" rx="2" />
+                  </svg>
+                </button>
+              </div>
             ) : (
               <button
                 className="rook-send-button"
@@ -3597,6 +4561,33 @@ function EditorScreen(props: ScreenContentProps) {
     onOpenProjectFile,
     documents,
     activeDocumentKey,
+    splitDocumentKey,
+    activeEditorPane = "primary",
+    onActiveEditorPaneChange,
+    onToggleSplit,
+    onSelectSplitDocument,
+    onOpenQuickOpen,
+    revealTarget,
+    editorSelection,
+    onEditorSelectionChange,
+    inlinePatch,
+    inlinePatchSaving = false,
+    inlinePatchError,
+    onOpenInlinePatch,
+    onAcceptInlinePatch,
+    onRejectInlinePatch,
+    onPromoteInlinePatch,
+    recoveredDraftNotice,
+    onDismissRecoveredDraftNotice,
+    bottomDrawerTab = "terminal",
+    onBottomDrawerTabChange,
+    editorGitStatus,
+    onEditorGitStatusChange,
+    onJumpToLocation,
+    onAttachContextChipToRook,
+    onPromoteEditsToChange,
+    workspaceTrusted,
+    onTrustWorkspace,
     onSelectDocument,
     onUpdateDocument,
     onSaveDocuments,
@@ -3616,6 +4607,17 @@ function EditorScreen(props: ScreenContentProps) {
       document.key === activeDocumentKey &&
       document.projectId === activeProject?.id,
   );
+  const splitDocument = splitDocumentKey
+    ? documents.find(
+        (document) =>
+          document.key === splitDocumentKey &&
+          document.projectId === activeProject?.id,
+      )
+    : undefined;
+  const focusedDocument =
+    activeEditorPane === "secondary" && splitDocument
+      ? splitDocument
+      : activeDocument;
   const projectDocuments = documents.filter(
     (document) => document.projectId === activeProject?.id,
   );
@@ -3800,10 +4802,39 @@ function EditorScreen(props: ScreenContentProps) {
               >
                 {savingFiles ? "Saving…" : "Save all"}
               </button>
+              {!browserPreview && activeProject && onOpenQuickOpen && (
+                <button
+                  className="editor-save-button"
+                  type="button"
+                  title="Quick Open file (⌘P / Ctrl+P)"
+                  onClick={onOpenQuickOpen}
+                >
+                  Quick open
+                </button>
+              )}
+              {onToggleSplit && (
+                <button
+                  className={`editor-save-button${splitDocument ? " is-active" : ""}`}
+                  type="button"
+                  title="Toggle split editor (⌘\ / Ctrl+\)"
+                  onClick={onToggleSplit}
+                >
+                  {splitDocument ? "Close split" : "Split"}
+                </button>
+              )}
             </div>
           ) : (
             <>
               <span className="eyebrow">Source workspace</span>
+              {!browserPreview && activeProject && onOpenQuickOpen && (
+                <button
+                  className="editor-save-button"
+                  type="button"
+                  onClick={onOpenQuickOpen}
+                >
+                  Quick open (⌘P)
+                </button>
+              )}
               <span className="status-pill">
                 {activeProject
                   ? activeProject.isGitRepository
@@ -3814,67 +4845,182 @@ function EditorScreen(props: ScreenContentProps) {
             </>
           )}
         </div>
-        {activeDocument ? (
+        {recoveredDraftNotice && (
+          <div className="editor-external-banner" role="status">
+            <p>{recoveredDraftNotice}</p>
+            <button
+              type="button"
+              className="button button-quiet"
+              onClick={() => onDismissRecoveredDraftNotice?.()}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        {inlinePatch &&
+        onAcceptInlinePatch &&
+        onRejectInlinePatch &&
+        onPromoteInlinePatch ? (
+          <InlinePatchOverlay
+            patch={inlinePatch}
+            theme={preferences.theme}
+            fontSize={preferences.editorFontSize}
+            saving={inlinePatchSaving}
+            error={inlinePatchError}
+            onAcceptAndSave={onAcceptInlinePatch}
+            onReject={onRejectInlinePatch}
+            onPromoteToChange={onPromoteInlinePatch}
+          />
+        ) : activeDocument ? (
           <div
-            className="code-editor"
+            className={`editor-panes${splitDocument ? " is-split" : ""}`}
             aria-label={`Editing ${activeDocument.path}`}
           >
-            {activeDocument.externalChange && (
-              <div
-                className="editor-external-banner"
-                role="status"
-                aria-label="External file change"
-              >
-                <p>
-                  {activeDocument.externalChange.kind === "deleted"
-                    ? "This file was removed on disk."
-                    : activeDocument.externalChange.kind === "unreadable"
-                      ? "This file changed on disk and is no longer a supported UTF-8 text file."
-                      : "This file changed on disk while you have unsaved edits."}
-                </p>
-                <div className="editor-external-banner-actions">
-                  {activeDocument.externalChange.kind === "modified" && (
+            <div
+              className={`code-editor${activeEditorPane === "primary" ? " is-focused-pane" : ""}`}
+              onMouseDown={() => onActiveEditorPaneChange?.("primary")}
+            >
+              {activeDocument.externalChange && (
+                <div
+                  className="editor-external-banner"
+                  role="status"
+                  aria-label="External file change"
+                >
+                  <p>
+                    {activeDocument.externalChange.kind === "deleted"
+                      ? "This file was removed on disk."
+                      : activeDocument.externalChange.kind === "unreadable"
+                        ? "This file changed on disk and is no longer a supported UTF-8 text file."
+                        : "This file changed on disk while you have unsaved edits."}
+                  </p>
+                  <div className="editor-external-banner-actions">
+                    {activeDocument.externalChange.kind === "modified" && (
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        onClick={() => onReloadDocument(activeDocument.key)}
+                      >
+                        Reload from disk
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="button button-primary"
-                      onClick={() => onReloadDocument(activeDocument.key)}
+                      className="button button-quiet"
+                      onClick={() => onKeepDocumentEdits(activeDocument.key)}
                     >
-                      Reload from disk
+                      {activeDocument.externalChange.kind === "deleted"
+                        ? "Keep open"
+                        : "Keep mine"}
                     </button>
-                  )}
+                  </div>
+                </div>
+              )}
+              <Suspense
+                fallback={<p className="editor-loading">Loading editor…</p>}
+              >
+                <CodeEditor
+                  path={`${activeDocument.projectId}/${activeDocument.path}`}
+                  value={activeDocument.content}
+                  theme={preferences.theme}
+                  fontSize={preferences.editorFontSize}
+                  revealTarget={
+                    revealTarget && revealTarget.key === activeDocument.key
+                      ? ({
+                          line: revealTarget.line,
+                          column: revealTarget.column,
+                          nonce: revealTarget.nonce,
+                        } satisfies RevealTarget)
+                      : null
+                  }
+                  onFocus={() => onActiveEditorPaneChange?.("primary")}
+                  onSelectionChange={(sel) =>
+                    onEditorSelectionChange?.(
+                      sel ? { path: activeDocument.path, ...sel } : null,
+                    )
+                  }
+                  onChange={(content) =>
+                    onUpdateDocument(activeDocument.key, content)
+                  }
+                />
+              </Suspense>
+              <div className="editor-breadcrumb">
+                <span>{activeDocument.path.split("/").join(" › ")}</span>
+                <span>
+                  {activeDocument.content !== activeDocument.savedContent
+                    ? "Modified"
+                    : "Saved"}
+                </span>
+              </div>
+            </div>
+            {splitDocument && (
+              <div
+                className={`code-editor editor-split-pane${activeEditorPane === "secondary" ? " is-focused-pane" : ""}`}
+                onMouseDown={() => onActiveEditorPaneChange?.("secondary")}
+              >
+                <div className="editor-split-header">
+                  <select
+                    aria-label="Split pane file"
+                    value={splitDocument.key}
+                    onChange={(event) =>
+                      onSelectSplitDocument?.(event.target.value)
+                    }
+                  >
+                    {projectDocuments.map((doc) => (
+                      <option key={doc.key} value={doc.key}>
+                        {doc.path}
+                        {doc.content !== doc.savedContent ? " ●" : ""}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     type="button"
-                    className="button button-quiet"
-                    onClick={() => onKeepDocumentEdits(activeDocument.key)}
+                    className="icon-button"
+                    aria-label="Close split pane"
+                    onClick={onToggleSplit}
                   >
-                    {activeDocument.externalChange.kind === "deleted"
-                      ? "Keep open"
-                      : "Keep mine"}
+                    ×
                   </button>
+                </div>
+                <Suspense
+                  fallback={
+                    <p className="editor-loading">Loading split editor…</p>
+                  }
+                >
+                  <CodeEditor
+                    path={`${splitDocument.projectId}/split/${splitDocument.path}`}
+                    value={splitDocument.content}
+                    theme={preferences.theme}
+                    fontSize={preferences.editorFontSize}
+                    revealTarget={
+                      revealTarget && revealTarget.key === splitDocument.key
+                        ? ({
+                            line: revealTarget.line,
+                            column: revealTarget.column,
+                            nonce: revealTarget.nonce,
+                          } satisfies RevealTarget)
+                        : null
+                    }
+                    onFocus={() => onActiveEditorPaneChange?.("secondary")}
+                    onSelectionChange={(sel) =>
+                      onEditorSelectionChange?.(
+                        sel ? { path: splitDocument.path, ...sel } : null,
+                      )
+                    }
+                    onChange={(content) =>
+                      onUpdateDocument(splitDocument.key, content)
+                    }
+                  />
+                </Suspense>
+                <div className="editor-breadcrumb">
+                  <span>{splitDocument.path.split("/").join(" › ")}</span>
+                  <span>
+                    {splitDocument.content !== splitDocument.savedContent
+                      ? "Modified"
+                      : "Saved"}
+                  </span>
                 </div>
               </div>
             )}
-            <Suspense
-              fallback={<p className="editor-loading">Loading editor…</p>}
-            >
-              <CodeEditor
-                path={`${activeDocument.projectId}/${activeDocument.path}`}
-                value={activeDocument.content}
-                theme={preferences.theme}
-                fontSize={preferences.editorFontSize}
-                onChange={(content) =>
-                  onUpdateDocument(activeDocument.key, content)
-                }
-              />
-            </Suspense>
-            <div className="editor-breadcrumb">
-              <span>{activeDocument.path.split("/").join(" › ")}</span>
-              <span>
-                {activeDocument.content !== activeDocument.savedContent
-                  ? "Modified"
-                  : "Saved"}
-              </span>
-            </div>
           </div>
         ) : (
           <div className="editor-placeholder-center">
@@ -3961,11 +5107,26 @@ function EditorScreen(props: ScreenContentProps) {
           <WorkspaceTools
             service={service}
             projectId={activeProject.id}
+            projectPath={activeProject.path}
+            tab={bottomDrawerTab}
+            onTabChange={(next) => onBottomDrawerTabChange?.(next)}
+            workspaceTrusted={workspaceTrusted}
+            onTrustWorkspace={onTrustWorkspace}
+            gitStatus={editorGitStatus}
+            onGitStatusChange={(next) => onEditorGitStatusChange?.(next)}
             executions={executions.filter(
               (item) => item.projectId === activeProject.id,
             )}
             syncVersion={workspaceSyncVersion}
             onOpenVerify={() => onNavigate("verify")}
+            onOpenFile={(path) => onOpenProjectFile(path)}
+            onJumpToLocation={(relativePath, line, column) =>
+              onJumpToLocation?.(relativePath, line, column)
+            }
+            onInvestigateInRook={(chip) =>
+              onAttachContextChipToRook?.(chip, "ask")
+            }
+            onContinueAsChange={onPromoteEditsToChange}
             browserPreview={browserPreview}
           />
         )}
@@ -4022,35 +5183,30 @@ function EditorScreen(props: ScreenContentProps) {
         />
       )}
       {!preferences.inspectorCollapsed ? (
-        <aside
-          className="editor-inspector"
-          aria-label="Editor context inspector"
-        >
-          <div className="inspector-heading">
-            <span className="eyebrow">Context</span>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Hide editor inspector"
-              onClick={() =>
-                void onPreferencesChange({
-                  ...preferences,
-                  inspectorCollapsed: true,
-                })
-              }
-            >
-              ×
-            </button>
-          </div>
-          <div className="inspector-empty">
-            <span aria-hidden="true">◇</span>
-            <h2>No source context</h2>
-            <p>
-              Open a project and select a file to see source-linked details
-              here.
-            </p>
-          </div>
-        </aside>
+        <EditorContextInspector
+          activeProject={activeProject}
+          activeDocument={focusedDocument}
+          selection={editorSelection}
+          gitStatus={editorGitStatus}
+          executions={executions.filter(
+            (item) => item.projectId === activeProject?.id,
+          )}
+          onAttachToRook={(chip, mode) =>
+            onAttachContextChipToRook?.(chip, mode)
+          }
+          onOpenInlinePatch={(doc) => onOpenInlinePatch?.(doc)}
+          onPromoteFileToChange={(relativePath) =>
+            void onPromoteEditsToChange?.(`Update ${relativePath}`, [
+              relativePath,
+            ])
+          }
+          onHide={() =>
+            void onPreferencesChange({
+              ...preferences,
+              inspectorCollapsed: true,
+            })
+          }
+        />
       ) : (
         <button
           className="show-inspector-button"
@@ -4072,37 +5228,64 @@ function EditorScreen(props: ScreenContentProps) {
 function WorkspaceTools({
   service,
   projectId,
+  projectPath,
+  tab,
+  onTabChange,
+  workspaceTrusted,
+  onTrustWorkspace,
+  gitStatus,
+  onGitStatusChange,
   executions,
   syncVersion,
   onOpenVerify,
+  onOpenFile,
+  onJumpToLocation,
+  onInvestigateInRook,
+  onContinueAsChange,
   browserPreview,
 }: {
   service: AppService;
   projectId: string;
+  projectPath: string;
+  tab: "terminal" | "run" | "git";
+  onTabChange: (next: "terminal" | "run" | "git") => void;
+  workspaceTrusted: boolean;
+  onTrustWorkspace?: () => Promise<void>;
+  gitStatus?: GitStatus;
+  onGitStatusChange: (status: GitStatus) => void;
   executions: ExecutionRecord[];
   syncVersion: number;
   onOpenVerify: () => void;
+  onOpenFile: (relativePath: string) => void;
+  onJumpToLocation: (
+    relativePath: string,
+    line: number,
+    column?: number,
+  ) => void;
+  onInvestigateInRook: (chip: RookContextChip) => void;
+  onContinueAsChange?: (
+    objective: string,
+    selectedPaths: string[],
+  ) => Promise<void>;
   browserPreview: boolean;
 }) {
   const verifySummary = summarizeVerification(executions);
-  const [tab, setTab] = useState<"terminal" | "git">("terminal");
-  const [terminalTrusted, setTerminalTrusted] = useState(false);
   const [terminalStarted, setTerminalStarted] = useState(false);
   const [terminalActive, setTerminalActive] = useState(false);
-  const [gitStatus, setGitStatus] =
-    useState<import("./services/contracts").GitStatus>();
+
   useEffect(() => {
-    setTerminalTrusted(false);
     setTerminalStarted(false);
     setTerminalActive(false);
   }, [projectId]);
+
   useEffect(() => {
     if (browserPreview || tab !== "git") return;
     void service
       .gitStatus(projectId)
-      .then(setGitStatus)
-      .catch(() => setGitStatus(undefined));
-  }, [browserPreview, projectId, service, tab]);
+      .then(onGitStatusChange)
+      .catch(() => undefined);
+  }, [browserPreview, onGitStatusChange, projectId, service, tab]);
+
   return (
     <section className="workspace-tools" aria-label="Workspace tools">
       <div
@@ -4113,16 +5296,24 @@ function WorkspaceTools({
         <button
           role="tab"
           aria-selected={tab === "terminal"}
-          onClick={() => setTab("terminal")}
+          onClick={() => onTabChange("terminal")}
         >
           Terminal
         </button>
         <button
           role="tab"
+          aria-selected={tab === "run"}
+          onClick={() => onTabChange("run")}
+        >
+          Run
+        </button>
+        <button
+          role="tab"
           aria-selected={tab === "git"}
-          onClick={() => setTab("git")}
+          onClick={() => onTabChange("git")}
         >
           Git changes
+          {gitStatus?.files.length ? ` (${gitStatus.files.length})` : ""}
         </button>
         <div className="workspace-tools-verify">
           <span
@@ -4144,14 +5335,17 @@ function WorkspaceTools({
           </button>
         </div>
       </div>
-      {tab === "terminal" ? (
-        !terminalStarted ? (
+      <div className={tab === "terminal" ? "" : "is-hidden"}>
+        {!terminalStarted ? (
           <div className="terminal-panel">
             <p>Starting a shell can execute project-controlled commands.</p>
             <button
               type="button"
               disabled={browserPreview}
-              onClick={() => setTerminalStarted(true)}
+              onClick={() => {
+                setTerminalStarted(true);
+                if (workspaceTrusted) setTerminalActive(true);
+              }}
             >
               Start terminal
             </button>
@@ -4162,22 +5356,22 @@ function WorkspaceTools({
               service={service}
               workspaceId={projectId}
               browserPreview={browserPreview}
-              trusted={terminalTrusted && terminalActive}
+              trusted={workspaceTrusted && terminalActive}
               onTrust={async () => {
-                if (!terminalTrusted) {
-                  await service.trustWorkspace(projectId);
-                  setTerminalTrusted(true);
+                if (!workspaceTrusted) {
+                  await (onTrustWorkspace
+                    ? onTrustWorkspace()
+                    : service.trustWorkspace(projectId));
                 }
                 setTerminalActive(true);
               }}
             />
-            {terminalTrusted && (
+            {workspaceTrusted && (
               <button
                 type="button"
                 className="button button-quiet"
                 onClick={() =>
                   void service.untrustWorkspace(projectId).then(() => {
-                    setTerminalTrusted(false);
                     setTerminalActive(false);
                   })
                 }
@@ -4186,18 +5380,38 @@ function WorkspaceTools({
               </button>
             )}
           </>
-        )
-      ) : browserPreview ? (
-        <p role="status">Git access requires the native desktop app.</p>
-      ) : (
-        <GitPanel
+        )}
+      </div>
+      <div className={tab === "run" ? "" : "is-hidden"}>
+        <RunPanel
           service={service}
           projectId={projectId}
-          status={gitStatus}
-          syncVersion={syncVersion}
-          onStatus={setGitStatus}
+          projectPath={projectPath}
+          workspaceTrusted={workspaceTrusted}
+          browserPreview={browserPreview}
+          onTrustWorkspace={async () => {
+            await (onTrustWorkspace
+              ? onTrustWorkspace()
+              : service.trustWorkspace(projectId));
+          }}
+          onJumpToLocation={onJumpToLocation}
+          onInvestigateInRook={onInvestigateInRook}
         />
-      )}
+      </div>
+      {tab === "git" &&
+        (browserPreview ? (
+          <p role="status">Git access requires the native desktop app.</p>
+        ) : (
+          <GitPanel
+            service={service}
+            projectId={projectId}
+            status={gitStatus}
+            syncVersion={syncVersion}
+            onStatus={onGitStatusChange}
+            onOpenFile={onOpenFile}
+            onContinueAsChange={onContinueAsChange}
+          />
+        ))}
     </section>
   );
 }

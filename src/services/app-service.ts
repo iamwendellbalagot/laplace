@@ -36,7 +36,12 @@ import {
   type ChangeReviewSnapshot,
   type GitDiffPair,
   type ReviewComment,
+  type ReviewDiffBaseline,
   type IntegrationAttempt,
+  type RunConfigsResponse,
+  type RunEvent,
+  type RunInstance,
+  type WorkspaceContinuity,
   type RookInitResponse,
   type RookMode,
   type RookEvent,
@@ -62,6 +67,38 @@ export interface AppService {
     projectId: string,
     relativePath?: string,
   ): Promise<ProjectDirectoryListing>;
+  listProjectFiles(projectId: string): Promise<string[]>;
+  loadWorkspaceContinuity(projectId: string): Promise<WorkspaceContinuity>;
+  saveWorkspaceLayout(
+    projectId: string,
+    layout: {
+      openTabs: string[];
+      activeTab: string | null;
+      splitTab: string | null;
+      bottomTab: string;
+      activePage: string;
+    },
+  ): Promise<void>;
+  saveEditorDraft(
+    projectId: string,
+    relativePath: string,
+    savedContent: string,
+    draftContent: string,
+  ): Promise<void>;
+  deleteEditorDraft(projectId: string, relativePath: string): Promise<void>;
+  pruneProjectExecutions(
+    projectId: string,
+    keepLatest?: number,
+  ): Promise<number>;
+  listRunConfigs(projectId: string): Promise<RunConfigsResponse>;
+  listRunInstances(projectId: string): Promise<RunInstance[]>;
+  startRunConfig(
+    projectId: string,
+    name: string,
+    portOverride?: number,
+  ): Promise<RunInstance>;
+  stopRunConfig(projectId: string, instanceId: string): Promise<RunInstance>;
+  listenRunEvents(listener: (event: RunEvent) => void): Promise<UnlistenFn>;
   readProjectFile(
     projectId: string,
     relativePath: string,
@@ -106,7 +143,12 @@ export interface AppService {
   readGitFileDiffPair(
     projectId: string,
     relativePath: string,
+    options?: { changeId?: string; baseline?: ReviewDiffBaseline },
   ): Promise<GitDiffPair>;
+  saveReviewCheckpoint(
+    projectId: string,
+    changeId: string,
+  ): Promise<ChangeReviewSnapshot>;
   addReviewComment(
     projectId: string,
     changeId: string,
@@ -192,7 +234,11 @@ export interface AppService {
   ): Promise<void>;
   cancelRookLogin(sessionId: string, loginId: string): Promise<void>;
   openRookAuthUrl(url: string): Promise<void>;
-  promptRookAsk(sessionId: string, text: string): Promise<void>;
+  promptRookAsk(
+    sessionId: string,
+    text: string,
+    context?: string,
+  ): Promise<void>;
   listenRook(listener: (event: RookEvent) => void): Promise<UnlistenFn>;
   stopRookAsk(sessionId: string): Promise<void>;
   cancelRookAsk(sessionId: string, runId: string): Promise<void>;
@@ -378,13 +424,33 @@ export class TauriAppService implements AppService {
   async readGitFileDiffPair(
     projectId: string,
     relativePath: string,
+    options?: { changeId?: string; baseline?: ReviewDiffBaseline },
   ): Promise<GitDiffPair> {
     const request = {
       ...this.workspaceRequest(projectId),
       relativePath,
+      changeId: options?.changeId ?? null,
+      baseline: options?.baseline ?? null,
     };
     try {
       return await invoke<GitDiffPair>("read_git_file_diff_pair", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveReviewCheckpoint(
+    projectId: string,
+    changeId: string,
+  ): Promise<ChangeReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+    };
+    try {
+      return await invoke<ChangeReviewSnapshot>("save_review_checkpoint", {
+        request,
+      });
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }
@@ -680,13 +746,18 @@ export class TauriAppService implements AppService {
     });
   }
 
-  async promptRookAsk(sessionId: string, text: string): Promise<void> {
+  async promptRookAsk(
+    sessionId: string,
+    text: string,
+    context?: string,
+  ): Promise<void> {
     await invoke("prompt_rook_ask", {
       request: {
         schemaVersion: IPC_SCHEMA_VERSION,
         operationId: crypto.randomUUID(),
         sessionId,
         text,
+        ...(context ? { context } : {}),
       },
     });
   }
@@ -998,6 +1069,156 @@ export class TauriAppService implements AppService {
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }
+  }
+
+  async listProjectFiles(projectId: string): Promise<string[]> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<string[]>("list_project_files", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async loadWorkspaceContinuity(
+    projectId: string,
+  ): Promise<WorkspaceContinuity> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<WorkspaceContinuity>("load_workspace_continuity", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveWorkspaceLayout(
+    projectId: string,
+    layout: {
+      openTabs: string[];
+      activeTab: string | null;
+      splitTab: string | null;
+      bottomTab: string;
+      activePage: string;
+    },
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      ...layout,
+    };
+    try {
+      await invoke("save_workspace_layout", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveEditorDraft(
+    projectId: string,
+    relativePath: string,
+    savedContent: string,
+    draftContent: string,
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+      savedContent,
+      draftContent,
+    };
+    try {
+      await invoke("save_editor_draft", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async deleteEditorDraft(
+    projectId: string,
+    relativePath: string,
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+    };
+    try {
+      await invoke("delete_editor_draft", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async pruneProjectExecutions(
+    projectId: string,
+    keepLatest = 100,
+  ): Promise<number> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      keepLatest,
+    };
+    try {
+      return await invoke<number>("prune_project_executions", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async listRunConfigs(projectId: string): Promise<RunConfigsResponse> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<RunConfigsResponse>("list_run_configs", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async listRunInstances(projectId: string): Promise<RunInstance[]> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<RunInstance[]>("list_run_instances", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async startRunConfig(
+    projectId: string,
+    name: string,
+    portOverride?: number,
+  ): Promise<RunInstance> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      name,
+      portOverride: portOverride ?? null,
+    };
+    try {
+      return await invoke<RunInstance>("start_run_config", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async stopRunConfig(
+    projectId: string,
+    instanceId: string,
+  ): Promise<RunInstance> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      instanceId,
+    };
+    try {
+      return await invoke<RunInstance>("stop_run_config", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async listenRunEvents(
+    listener: (event: RunEvent) => void,
+  ): Promise<UnlistenFn> {
+    return listen<RunEvent>("laplace://run-event", (event) => {
+      listener(event.payload);
+    });
   }
 
   async readProjectFile(
