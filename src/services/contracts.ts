@@ -707,3 +707,103 @@ export interface SystemContextSnapshot {
   truncated: boolean;
   cancelled: boolean;
 }
+
+export interface CapabilitySkillSummary {
+  name: string;
+  description: string;
+  scope: "project" | "global" | string;
+  precedence: "active" | "shadowed" | string;
+  baseDir: string;
+  skillFilePath: string;
+  digest: string;
+}
+
+export interface CapabilityMcpServerSummary {
+  name: string;
+  scope: "global" | "project" | string;
+  sourcePath: string;
+  overridePath: string | null;
+  transport: "stdio" | "http" | "invalid" | string;
+  target: string;
+  configured: "valid" | "invalid" | string;
+  configEnabled: boolean;
+  enabled: boolean;
+  connected: boolean;
+  connectionStatus:
+    | "blocked_by_stdio_policy"
+    | "disabled"
+    | "untrusted_project"
+    | "invalid_config"
+    | string;
+  connectionNote: string;
+  authorizationPolicy: "approval_required" | string;
+  authorizationNote: string;
+  exposure: string;
+  redactedHeaders: string[];
+  errors: string[];
+}
+
+export interface CapabilityWorkspaceProviderSummary {
+  id: string;
+  endpoint: string | null;
+  endpointFingerprint: string;
+  missingEnvironmentVariables: string[];
+  source: string;
+}
+
+export interface RookParityItem {
+  id: string;
+  feature: string;
+  status: "native" | "terminal_handoff" | "blocked_protocol" | string;
+  detail: string;
+  terminalCommand?: string | null;
+}
+
+export interface CapabilityActivityRecord {
+  id: string;
+  projectId: string;
+  sessionId: string | null;
+  capabilityKind: string;
+  capabilityName: string;
+  sourceScope: string;
+  decision: string;
+  detail: string;
+  createdAt: number;
+}
+
+export interface CapabilitiesSnapshot {
+  runtimeSource: "rook_stdio" | "disk_fallback" | string;
+  arbitraryMcpEnabled: boolean;
+  projectTrusted: boolean;
+  unreviewedProjectChanges: boolean;
+  changedProjectAreas: string[];
+  acknowledgedAt: number | null;
+  skillDirectories: { project: string; global: string };
+  mcpConfigPaths: { project: string; global: string };
+  skills: CapabilitySkillSummary[];
+  mcpServers: CapabilityMcpServerSummary[];
+  mcpErrors: string[];
+  workspaceProviders: CapabilityWorkspaceProviderSummary[];
+  parityInventory: RookParityItem[];
+  recentActivity: CapabilityActivityRecord[];
+}
+
+export interface SkillInspectResult {
+  name: string;
+  scope: string;
+  skillFilePath: string;
+  digest: string;
+  content: string;
+  truncated: boolean;
+}
+
+export interface McpServerUpdateInput {
+  action: "toggle" | "add" | "remove";
+  scope: "global" | "project";
+  name: string;
+  enabled?: boolean;
+  transport?: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+}

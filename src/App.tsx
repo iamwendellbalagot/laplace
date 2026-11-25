@@ -42,6 +42,7 @@ import {
   type ReturnSourceAnchor,
 } from "./features/context/ContextLensScreen";
 import { BehaviorComparisonPanel } from "./features/compare/BehaviorComparisonPanel";
+import { ToolsScreen } from "./features/tools/ToolsScreen";
 import { LinkedStackOutput, RunPanel } from "./features/runs/RunPanel";
 import {
   formatFailureContextExcerpt,
@@ -597,7 +598,8 @@ export function App({ service, browserPreview = false }: AppProps) {
           continuity.layout?.activePage === "changes" ||
           continuity.layout?.activePage === "context" ||
           continuity.layout?.activePage === "verify" ||
-          continuity.layout?.activePage === "rook"
+          continuity.layout?.activePage === "rook" ||
+          continuity.layout?.activePage === "tools"
         ) {
           restoredPage = continuity.layout.activePage;
         }
@@ -1868,6 +1870,16 @@ export function App({ service, browserPreview = false }: AppProps) {
             preferences={preferences}
             onPreferencesChange={savePreferences}
             savingPreferences={savingPreferences}
+            onOpenRookWorkspace={() => navigateTracked("rook")}
+            onOpenRookTerminal={(command?: string) => {
+              setBottomDrawerTab("terminal");
+              navigateTracked("editor");
+              if (command && navigator.clipboard?.writeText) {
+                void navigator.clipboard
+                  .writeText(command)
+                  .catch(() => undefined);
+              }
+            }}
             rookDevSettings={rookDevSettings}
             rookDevError={rookDevError}
             onChooseRookCheckout={async () => {
@@ -2393,6 +2405,8 @@ interface ScreenContentProps {
   onPreferencesChange: (preferences: UiPreferences) => Promise<void>;
   savingPreferences: boolean;
   rookDevSettings?: import("./services/contracts").RookDevSettings;
+  onOpenRookWorkspace?: () => void;
+  onOpenRookTerminal?: (command?: string) => void;
   rookDevError?: string;
   onChooseRookCheckout: () => void;
   onClearRookCheckout: () => void;
@@ -2645,6 +2659,40 @@ function ScreenContent(props: ScreenContentProps) {
     nonEditorView = (
       <RookScreen key={props.activeProject?.id ?? "no-project"} {...props} />
     );
+  } else if (page === "tools") {
+    if (props.browserPreview || !props.activeProject) {
+      nonEditorView = (
+        <section className="content-page" aria-labelledby="screen-title">
+          <PageHeading
+            eyebrow="06 / Agent capabilities"
+            title="Tools & capabilities."
+          />
+          <EmptyState
+            title={
+              props.browserPreview ? "Not available yet" : "Open a project"
+            }
+            description="Skills and MCP capability provenance requires the native app and an open project."
+            label="Capabilities"
+          />
+        </section>
+      );
+    } else {
+      nonEditorView = (
+        <ToolsScreen
+          key={props.activeProject.id}
+          service={props.service}
+          project={props.activeProject}
+          workspaceTrusted={props.workspaceTrusted}
+          onTrustWorkspace={() =>
+            props.onTrustWorkspace
+              ? props.onTrustWorkspace()
+              : Promise.resolve()
+          }
+          onOpenRookWorkspace={() => props.onOpenRookWorkspace?.()}
+          onOpenRookTerminal={(command) => props.onOpenRookTerminal?.(command)}
+        />
+      );
+    }
   } else if (page !== "editor") {
     const item = navigationItems.find((entry) => entry.id === page);
     const details: Record<

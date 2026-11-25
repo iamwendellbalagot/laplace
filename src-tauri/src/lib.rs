@@ -22,6 +22,7 @@ use sqlx::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
+mod capabilities;
 mod compare;
 mod context;
 mod review;
@@ -5963,7 +5964,12 @@ pub fn run() {
             respond_rook_permission,
             rook_provider_request,
             respond_rook_auth_prompt,
-            open_rook_auth_url
+            open_rook_auth_url,
+            capabilities::get_capabilities_snapshot,
+            capabilities::inspect_skill_source,
+            capabilities::update_mcp_server_config,
+            capabilities::acknowledge_workspace_capabilities,
+            capabilities::record_capability_activity
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Laplace desktop application");

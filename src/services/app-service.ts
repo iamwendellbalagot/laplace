@@ -59,6 +59,9 @@ import {
   type SystemContextSnapshot,
   type ContextAnnotationRecord,
   type ContextPinnedLinkRecord,
+  type CapabilitiesSnapshot,
+  type SkillInspectResult,
+  type McpServerUpdateInput,
 } from "./contracts";
 
 export interface AppService {
@@ -326,6 +329,30 @@ export interface AppService {
     sessionId: string,
     permissionId: string,
     choice: RookPermissionChoice,
+  ): Promise<void>;
+  getCapabilitiesSnapshot(projectId: string): Promise<CapabilitiesSnapshot>;
+  inspectSkillSource(
+    projectId: string,
+    name: string,
+    scope: "project" | "global",
+  ): Promise<SkillInspectResult>;
+  updateMcpServerConfig(
+    projectId: string,
+    input: McpServerUpdateInput,
+  ): Promise<CapabilitiesSnapshot>;
+  acknowledgeWorkspaceCapabilities(
+    projectId: string,
+  ): Promise<CapabilitiesSnapshot>;
+  recordCapabilityActivity(
+    projectId: string,
+    activity: {
+      sessionId?: string | null;
+      capabilityKind: string;
+      capabilityName: string;
+      sourceScope: string;
+      decision: string;
+      detail?: string;
+    },
   ): Promise<void>;
   listenTerminal(listener: (event: TerminalEvent) => void): Promise<UnlistenFn>;
 }
@@ -1587,6 +1614,109 @@ export class TauriAppService implements AppService {
     };
     try {
       await invoke<void>("delete_context_pinned_link", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getCapabilitiesSnapshot(
+    projectId: string,
+  ): Promise<CapabilitiesSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      untrackedPath: null,
+    };
+    try {
+      return await invoke<CapabilitiesSnapshot>("get_capabilities_snapshot", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async inspectSkillSource(
+    projectId: string,
+    name: string,
+    scope: "project" | "global",
+  ): Promise<SkillInspectResult> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      name,
+      scope,
+    };
+    try {
+      return await invoke<SkillInspectResult>("inspect_skill_source", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async updateMcpServerConfig(
+    projectId: string,
+    input: McpServerUpdateInput,
+  ): Promise<CapabilitiesSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      action: input.action,
+      scope: input.scope,
+      name: input.name,
+      enabled: input.enabled ?? null,
+      transport: input.transport ?? null,
+      command: input.command ?? null,
+      args: input.args ?? null,
+      url: input.url ?? null,
+    };
+    try {
+      return await invoke<CapabilitiesSnapshot>("update_mcp_server_config", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async acknowledgeWorkspaceCapabilities(
+    projectId: string,
+  ): Promise<CapabilitiesSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      untrackedPath: null,
+    };
+    try {
+      return await invoke<CapabilitiesSnapshot>(
+        "acknowledge_workspace_capabilities",
+        { request },
+      );
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async recordCapabilityActivity(
+    projectId: string,
+    activity: {
+      sessionId?: string | null;
+      capabilityKind: string;
+      capabilityName: string;
+      sourceScope: string;
+      decision: string;
+      detail?: string;
+    },
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      sessionId: activity.sessionId ?? null,
+      capabilityKind: activity.capabilityKind,
+      capabilityName: activity.capabilityName,
+      sourceScope: activity.sourceScope,
+      decision: activity.decision,
+      detail: activity.detail ?? "",
+    };
+    try {
+      await invoke<void>("record_capability_activity", { request });
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

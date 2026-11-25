@@ -918,4 +918,78 @@ describe("TauriAppService", () => {
       },
     );
   });
+
+  it("reads capabilities, inspects skills, and updates MCP config via Rook", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({
+        runtimeSource: "rook_stdio",
+        skills: [],
+        mcpServers: [],
+      })
+      .mockResolvedValueOnce({
+        name: "auditor",
+        scope: "project",
+        content: "# Auditor",
+      })
+      .mockResolvedValueOnce({
+        runtimeSource: "rook_stdio",
+        skills: [],
+        mcpServers: [],
+      })
+      .mockResolvedValueOnce({
+        runtimeSource: "rook_stdio",
+        skills: [],
+        mcpServers: [],
+      });
+    const service = new TauriAppService();
+
+    await service.getCapabilitiesSnapshot("/work/project");
+    await service.inspectSkillSource("/work/project", "auditor", "project");
+    await service.updateMcpServerConfig("/work/project", {
+      action: "toggle",
+      scope: "global",
+      name: "docs",
+      enabled: false,
+    });
+    await service.acknowledgeWorkspaceCapabilities("/work/project");
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      1,
+      "get_capabilities_snapshot",
+      expect.any(Object),
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "inspect_skill_source", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        name: "auditor",
+        scope: "project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "update_mcp_server_config",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          action: "toggle",
+          scope: "global",
+          name: "docs",
+          enabled: false,
+          transport: null,
+          command: null,
+          args: null,
+          url: null,
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      4,
+      "acknowledge_workspace_capabilities",
+      expect.any(Object),
+    );
+  });
 });

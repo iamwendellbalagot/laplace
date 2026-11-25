@@ -56,7 +56,7 @@ export const navigationItems: NavigationItem[] = [
     label: "Tools",
     description: "Skills and MCP capabilities",
     symbol: "⊕",
-    available: false,
+    available: true,
   },
   {
     id: "settings",
