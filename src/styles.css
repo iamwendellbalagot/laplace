@@ -396,7 +396,8 @@ kbd,
   overflow: auto;
   background: var(--canvas);
 }
-.screen:has(> .rook-page) {
+.screen:has(> .rook-page),
+.screen:has(> .editor-shell) {
   overflow: hidden;
 }
 .statusbar {
@@ -1436,11 +1437,12 @@ kbd,
 }
 .rook-conversation {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent;
   padding: 20px 8px 24px;
@@ -1464,7 +1466,7 @@ kbd,
 }
 .rook-welcome {
   display: grid;
-  flex: 1;
+  flex: 1 0 auto;
   align-content: center;
   justify-items: center;
   text-align: center;
@@ -1481,6 +1483,7 @@ kbd,
   font-size: 12px;
 }
 .rook-message {
+  flex: 0 0 auto;
   width: min(720px, 100%);
   margin: 0 auto;
 }
@@ -2330,6 +2333,8 @@ kbd,
 }
 .editor-inspector {
   display: flex;
+  height: 100%;
+  max-height: 100%;
   width: clamp(
     220px,
     var(--inspector-width-live, var(--inspector-width)),
@@ -2341,11 +2346,13 @@ kbd,
     clamp(220px, var(--inspector-width-live, var(--inspector-width)), 48vw);
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
   border-left: 1px solid var(--border);
   background: var(--surface);
 }
 .inspector-heading {
   display: flex;
+  flex: 0 0 auto;
   min-height: 44px;
   align-items: center;
   justify-content: space-between;
@@ -4709,17 +4716,22 @@ kbd,
 }
 .rook-panel {
   display: flex;
-  flex: 1;
+  flex: 1 1 0%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
 }
 .rook-panel-docked {
   flex-direction: column;
+  height: 100%;
   padding: 0;
   background: var(--shell);
 }
 .rook-panel-docked .rook-chat {
+  height: auto;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
   padding: 0;
 }
 .rook-panel-expanded {
