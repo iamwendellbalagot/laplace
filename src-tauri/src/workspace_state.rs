@@ -307,7 +307,7 @@ pub(crate) async fn save_workspace_layout_with_pool(
         )
     })?;
     let safe_bottom = match bottom_tab {
-        "terminal" | "run" | "git" => bottom_tab,
+        "terminal" | "run" | "git" | "verify" => bottom_tab,
         _ => "terminal",
     };
     let safe_page = match active_page {

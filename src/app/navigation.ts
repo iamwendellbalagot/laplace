@@ -10,16 +10,9 @@ export interface NavigationItem {
 
 export const navigationItems: NavigationItem[] = [
   {
-    id: "home",
-    label: "Home",
-    description: "Workspace overview",
-    symbol: "⌂",
-    available: true,
-  },
-  {
     id: "editor",
-    label: "Editor",
-    description: "Source workspace",
+    label: "Workspace",
+    description: "Code, docked Rook, and live tools",
     symbol: "⌘",
     available: true,
   },
@@ -32,23 +25,9 @@ export const navigationItems: NavigationItem[] = [
   },
   {
     id: "context",
-    label: "Context",
+    label: "System",
     description: "Source relationships and history",
     symbol: "◇",
-    available: true,
-  },
-  {
-    id: "verify",
-    label: "Verify",
-    description: "Recorded checks and evidence",
-    symbol: "◇",
-    available: true,
-  },
-  {
-    id: "rook",
-    label: "Rook",
-    description: "Agent sessions and activity",
-    symbol: "◉",
     available: true,
   },
   {
@@ -61,17 +40,17 @@ export const navigationItems: NavigationItem[] = [
   {
     id: "settings",
     label: "Settings",
-    description: "Appearance and layout preferences",
+    description: "Appearance, runtime, and layout preferences",
     symbol: "⚙",
     available: true,
   },
 ];
 
 export const screenTitles: Record<PageId, string> = {
-  home: "Home",
-  editor: "Editor",
+  home: "Project Pulse",
+  editor: "Workspace",
   changes: "Review",
-  context: "Context Lens",
+  context: "System Map",
   verify: "Verification",
   rook: "Rook",
   tools: "Skills & MCP",

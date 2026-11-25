@@ -822,3 +822,27 @@ export interface RuntimeDiagnostics {
   rookError: string | null;
   networkPolicy: string;
 }
+
+export interface WorkspacePulse {
+  projectId: string;
+  isGitRepository: boolean;
+  branch: string | null;
+  headSha: string | null;
+  ahead: number;
+  behind: number;
+  dirtyCount: number;
+  untrackedCount: number;
+  latestExecutionStatus: string | null;
+  latestExecutionCommand: string | null;
+  latestExecutionDigest: string | null;
+  latestExecutionAt: number | null;
+  activeBuildRunning: boolean;
+}
+
+export interface WorkspaceFsChangedEvent {
+  schemaVersion: number;
+  projectId: string;
+  paths: string[];
+  rescanRequired: boolean;
+  timestampMs: number;
+}

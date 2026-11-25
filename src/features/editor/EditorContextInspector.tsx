@@ -62,6 +62,8 @@ export function EditorContextInspector({
   onJumpToLocation,
   onExpandToContextLens,
   onHide,
+  embedded = false,
+  forcedTab,
 }: {
   service?: AppService;
   browserPreview?: boolean;
@@ -87,8 +89,14 @@ export function EditorContextInspector({
   ) => void;
   onExpandToContextLens?: (focusPath?: string) => void;
   onHide: () => void;
+  embedded?: boolean;
+  forcedTab?: "context" | "history";
 }) {
-  const [tab, setTab] = useState<"context" | "history">("context");
+  const [internalTab, setInternalTab] = useState<"context" | "history">(
+    "context",
+  );
+  const tab = forcedTab ?? internalTab;
+  const setTab = setInternalTab;
   const [fileContext, setFileContext] = useState<FileContextSnapshot | null>(
     null,
   );
@@ -286,19 +294,21 @@ export function EditorContextInspector({
     }
   }
 
-  return (
-    <aside className="editor-inspector" aria-label="Editor context inspector">
-      <div className="inspector-heading">
-        <span className="eyebrow">Context Lens</span>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Hide editor inspector"
-          onClick={onHide}
-        >
-          ×
-        </button>
-      </div>
+  const content = (
+    <>
+      {!embedded && (
+        <div className="inspector-heading">
+          <span className="eyebrow">Context Lens</span>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Hide editor inspector"
+            onClick={onHide}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {!activeProject || !activeDocument ? (
         <div className="inspector-empty">
@@ -311,30 +321,32 @@ export function EditorContextInspector({
         </div>
       ) : (
         <>
-          <div
-            className="inspector-tabs"
-            role="tablist"
-            aria-label="Editor inspector views"
-          >
-            <button
-              type="button"
-              role="tab"
-              id="inspector-tab-context"
-              aria-selected={tab === "context"}
-              onClick={() => setTab("context")}
+          {!embedded && (
+            <div
+              className="inspector-tabs"
+              role="tablist"
+              aria-label="Editor inspector views"
             >
-              Context
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="inspector-tab-history"
-              aria-selected={tab === "history"}
-              onClick={() => setTab("history")}
-            >
-              History
-            </button>
-          </div>
+              <button
+                type="button"
+                role="tab"
+                id="inspector-tab-context"
+                aria-selected={tab === "context"}
+                onClick={() => setTab("context")}
+              >
+                Context
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="inspector-tab-history"
+                aria-selected={tab === "history"}
+                onClick={() => setTab("history")}
+              >
+                History
+              </button>
+            </div>
+          )}
 
           <div
             className="inspector-body"
@@ -952,6 +964,14 @@ export function EditorContextInspector({
           </div>
         </>
       )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <aside className="editor-inspector" aria-label="Editor context inspector">
+      {content}
     </aside>
   );
 }

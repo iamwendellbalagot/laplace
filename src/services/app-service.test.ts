@@ -1000,4 +1000,59 @@ describe("TauriAppService", () => {
       expect.any(Object),
     );
   });
+
+  it("queries workspace pulse and manages the filesystem watcher", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({
+        projectId: "/work/project",
+        isGitRepository: true,
+        branch: "main",
+        headSha: "abc1234",
+        ahead: 0,
+        behind: 0,
+        dirtyCount: 2,
+        untrackedCount: 1,
+        latestExecutionStatus: "passed",
+        latestExecutionCommand: "pnpm test",
+        latestExecutionDigest: "deadbeef",
+        latestExecutionAt: 1000,
+        activeBuildRunning: false,
+      })
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    mocks.listen.mockResolvedValueOnce(() => undefined);
+
+    const service = new TauriAppService();
+    const pulse = await service.getWorkspacePulse("/work/project");
+    expect(pulse.branch).toBe("main");
+    expect(pulse.dirtyCount).toBe(2);
+
+    await service.startWorkspaceWatcher("/work/project");
+    await service.stopWorkspaceWatcher();
+    const unlisten = await service.listenWorkspaceFsChanged(() => undefined);
+    unlisten();
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_workspace_pulse", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        untrackedPath: null,
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      2,
+      "start_workspace_watcher",
+      expect.any(Object),
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "stop_workspace_watcher",
+      expect.any(Object),
+    );
+    expect(mocks.listen).toHaveBeenCalledWith(
+      "workspace:fs_changed",
+      expect.any(Function),
+    );
+  });
 });

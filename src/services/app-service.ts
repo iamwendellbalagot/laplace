@@ -63,6 +63,8 @@ import {
   type SkillInspectResult,
   type McpServerUpdateInput,
   type RuntimeDiagnostics,
+  type WorkspacePulse,
+  type WorkspaceFsChangedEvent,
 } from "./contracts";
 
 export interface AppService {
@@ -357,6 +359,12 @@ export interface AppService {
     },
   ): Promise<void>;
   listenTerminal(listener: (event: TerminalEvent) => void): Promise<UnlistenFn>;
+  getWorkspacePulse(projectId: string): Promise<WorkspacePulse>;
+  startWorkspaceWatcher(projectId: string): Promise<void>;
+  stopWorkspaceWatcher(): Promise<void>;
+  listenWorkspaceFsChanged(
+    listener: (event: WorkspaceFsChangedEvent) => void,
+  ): Promise<UnlistenFn>;
 }
 
 export class AppServiceError extends Error implements IpcError {
@@ -1784,6 +1792,50 @@ export class TauriAppService implements AppService {
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }
+  }
+
+  async getWorkspacePulse(projectId: string): Promise<WorkspacePulse> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      untrackedPath: null,
+    };
+    try {
+      return await invoke<WorkspacePulse>("get_workspace_pulse", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async startWorkspaceWatcher(projectId: string): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      untrackedPath: null,
+    };
+    try {
+      await invoke("start_workspace_watcher", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async stopWorkspaceWatcher(): Promise<void> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+    };
+    try {
+      await invoke("stop_workspace_watcher", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  listenWorkspaceFsChanged(
+    listener: (event: WorkspaceFsChangedEvent) => void,
+  ): Promise<UnlistenFn> {
+    return listen<WorkspaceFsChangedEvent>("workspace:fs_changed", (event) =>
+      listener(event.payload),
+    );
   }
 }
 
