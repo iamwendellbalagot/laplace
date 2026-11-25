@@ -2732,6 +2732,7 @@ pub(crate) async fn revert_workspace_file(
         ));
     }
     let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let _hmr_guard = rook_service::DevHmrGuard::acquire(&root);
     let pool = open_domain_database(&app, &db).await?;
     revert_workspace_file_with_pool(
         &pool,
@@ -2760,6 +2761,7 @@ pub(crate) async fn revert_workspace_hunk(
         ));
     }
     let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let _hmr_guard = rook_service::DevHmrGuard::acquire(&root);
     let pool = open_domain_database(&app, &db).await?;
     revert_workspace_hunk_with_pool(
         &pool,

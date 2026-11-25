@@ -770,6 +770,7 @@ pub(crate) async fn apply_worktree_experiment(
         &request.worktree_path,
         &request.operation_id,
     )?;
+    let _hmr_guard = rook_service::DevHmrGuard::acquire(&root);
     if let Ok(guard) = processes.0.lock() {
         for process in guard.values() {
             if let Ok(proc_guard) = process.lock() {

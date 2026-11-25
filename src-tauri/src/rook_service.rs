@@ -36,6 +36,25 @@ pub(crate) fn write_dev_rook_build_hmr_guard(workspace_root: &Path, active: bool
 #[cfg(not(debug_assertions))]
 pub(crate) fn write_dev_rook_build_hmr_guard(_workspace_root: &Path, _active: bool) {}
 
+pub(crate) struct DevHmrGuard {
+    workspace_root: PathBuf,
+}
+
+impl DevHmrGuard {
+    pub(crate) fn acquire(workspace_root: &Path) -> Self {
+        write_dev_rook_build_hmr_guard(workspace_root, true);
+        Self {
+            workspace_root: workspace_root.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for DevHmrGuard {
+    fn drop(&mut self) {
+        write_dev_rook_build_hmr_guard(&self.workspace_root, false);
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum RookMode {
