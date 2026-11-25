@@ -846,3 +846,62 @@ export interface WorkspaceFsChangedEvent {
   rescanRequired: boolean;
   timestampMs: number;
 }
+
+export interface CreateProjectEntryRequest extends ProjectsRequest {
+  projectId: string;
+  relativePath: string;
+  kind: "file" | "directory";
+}
+
+export interface CreateProjectEntryResponse {
+  schemaVersion: number;
+  operationId: string;
+  entry: ProjectEntry;
+}
+
+export interface RenameProjectEntryRequest extends ProjectsRequest {
+  projectId: string;
+  fromRelativePath: string;
+  toRelativePath: string;
+}
+
+export interface DeleteProjectEntryRequest extends ProjectsRequest {
+  projectId: string;
+  relativePath: string;
+  recursive: boolean;
+}
+
+export interface DeleteProjectEntryResponse {
+  schemaVersion: number;
+  operationId: string;
+  deleted: boolean;
+}
+
+export interface SearchProjectRequest extends ProjectsRequest {
+  projectId: string;
+  query: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  maxResults?: number;
+}
+
+export interface SearchMatch {
+  line: number;
+  column: number;
+  matchLength: number;
+  lineText: string;
+}
+
+export interface SearchFileMatches {
+  relativePath: string;
+  matches: SearchMatch[];
+}
+
+export interface SearchProjectResponse {
+  schemaVersion: number;
+  operationId: string;
+  files: SearchFileMatches[];
+  totalMatches: number;
+  searchedFiles: number;
+  truncated: boolean;
+}

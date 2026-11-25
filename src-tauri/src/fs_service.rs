@@ -763,6 +763,328 @@ pub(crate) async fn read_project_file(
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectEntryRequest {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub project_id: String,
+    pub relative_path: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectEntryResponse {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub entry: ProjectEntry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameProjectEntryRequest {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub project_id: String,
+    pub from_relative_path: String,
+    pub to_relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProjectEntryRequest {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub project_id: String,
+    pub relative_path: String,
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProjectEntryResponse {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub deleted: bool,
+}
+
+fn ensure_no_active_build(
+    processes: &RookProcesses,
+    project_id: &str,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    if let Ok(canonical) = fs::canonicalize(project_id) {
+        if processes.has_active_build(&canonical) {
+            return Err(IpcError::new(
+                "build_run_active",
+                "Stop Rook Build before modifying files in this workspace.",
+                operation_id.to_owned(),
+                true,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_safe_relative_path<'a>(
+    relative_path: &'a str,
+    operation_id: &str,
+) -> Result<&'a Path, IpcError> {
+    let relative = Path::new(relative_path.trim());
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(IpcError::new(
+            "invalid_relative_path",
+            "Use a relative path inside the open project.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    if relative
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        == Some(".git")
+    {
+        return Err(IpcError::new(
+            "protected_git_path",
+            "Git internal files cannot be modified from the explorer.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    Ok(relative)
+}
+
+fn verify_ancestors_without_symlinks(
+    root: &Path,
+    relative: &Path,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    let mut cursor = root.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(part) = component else {
+            continue;
+        };
+        cursor.push(part);
+        if let Ok(meta) = fs::symlink_metadata(&cursor) {
+            if meta.file_type().is_symlink() {
+                return Err(IpcError::new(
+                    "project_file_symlink",
+                    "Symbolic links cannot be traversed or modified by the explorer.",
+                    operation_id.to_owned(),
+                    false,
+                ));
+            }
+            if components.peek().is_some() && !meta.is_dir() {
+                return Err(IpcError::new(
+                    "invalid_parent_path",
+                    "Parent path already exists and is not a folder.",
+                    operation_id.to_owned(),
+                    false,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn create_project_entry_at(
+    project_id: &str,
+    relative_path: &str,
+    kind: &str,
+    operation_id: &str,
+) -> Result<ProjectEntry, IpcError> {
+    if kind != "file" && kind != "directory" {
+        return Err(IpcError::new(
+            "invalid_entry_kind",
+            "Entry kind must be 'file' or 'directory'.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    let root = fs::canonicalize(project_id).map_err(|_| {
+        IpcError::new(
+            "project_unavailable",
+            "The project folder is no longer available.",
+            operation_id.to_owned(),
+            true,
+        )
+    })?;
+    let relative = validate_safe_relative_path(relative_path, operation_id)?;
+    verify_ancestors_without_symlinks(&root, relative, operation_id)?;
+    let target = root.join(relative);
+    if fs::symlink_metadata(&target).is_ok() {
+        return Err(IpcError::new(
+            "entry_already_exists",
+            "A file or folder already exists at that path.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| map_file_write_error(&error, operation_id))?;
+        let canonical_parent =
+            fs::canonicalize(parent).map_err(|error| map_file_write_error(&error, operation_id))?;
+        if !canonical_parent.starts_with(&root) {
+            return Err(IpcError::new(
+                "project_path_escape",
+                "The target resolves outside the open project.",
+                operation_id.to_owned(),
+                false,
+            ));
+        }
+    }
+    if kind == "directory" {
+        fs::create_dir(&target).map_err(|error| map_file_write_error(&error, operation_id))?;
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(|error| map_file_write_error(&error, operation_id))?;
+    }
+    let name = relative
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(relative_path)
+        .to_owned();
+    let normalized = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    Ok(ProjectEntry {
+        name,
+        relative_path: normalized,
+        kind: if kind == "directory" {
+            ProjectEntryKind::Directory
+        } else {
+            ProjectEntryKind::File
+        },
+    })
+}
+
+pub(crate) fn rename_project_entry_at(
+    project_id: &str,
+    from_relative_path: &str,
+    to_relative_path: &str,
+    operation_id: &str,
+) -> Result<ProjectEntry, IpcError> {
+    let root = fs::canonicalize(project_id).map_err(|_| {
+        IpcError::new(
+            "project_unavailable",
+            "The project folder is no longer available.",
+            operation_id.to_owned(),
+            true,
+        )
+    })?;
+    let from_rel = validate_safe_relative_path(from_relative_path, operation_id)?;
+    let to_rel = validate_safe_relative_path(to_relative_path, operation_id)?;
+    verify_ancestors_without_symlinks(&root, from_rel, operation_id)?;
+    verify_ancestors_without_symlinks(&root, to_rel, operation_id)?;
+    let from_target = root.join(from_rel);
+    let from_meta = fs::symlink_metadata(&from_target)
+        .map_err(|error| map_file_write_error(&error, operation_id))?;
+    if from_meta.file_type().is_symlink() {
+        return Err(IpcError::new(
+            "project_file_symlink",
+            "Symbolic links cannot be renamed from the explorer.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    let to_target = root.join(to_rel);
+    if fs::symlink_metadata(&to_target).is_ok() {
+        return Err(IpcError::new(
+            "entry_already_exists",
+            "A file or folder already exists at the destination path.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    if let Some(parent) = to_target.parent() {
+        fs::create_dir_all(parent).map_err(|error| map_file_write_error(&error, operation_id))?;
+        let canonical_parent =
+            fs::canonicalize(parent).map_err(|error| map_file_write_error(&error, operation_id))?;
+        if !canonical_parent.starts_with(&root) {
+            return Err(IpcError::new(
+                "project_path_escape",
+                "The destination resolves outside the open project.",
+                operation_id.to_owned(),
+                false,
+            ));
+        }
+    }
+    fs::rename(&from_target, &to_target)
+        .map_err(|error| map_file_write_error(&error, operation_id))?;
+    let name = to_rel
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(to_relative_path)
+        .to_owned();
+    let normalized = to_rel
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    Ok(ProjectEntry {
+        name,
+        relative_path: normalized,
+        kind: if from_meta.is_dir() {
+            ProjectEntryKind::Directory
+        } else {
+            ProjectEntryKind::File
+        },
+    })
+}
+
+pub(crate) fn delete_project_entry_at(
+    project_id: &str,
+    relative_path: &str,
+    recursive: bool,
+    operation_id: &str,
+) -> Result<(), IpcError> {
+    let root = fs::canonicalize(project_id).map_err(|_| {
+        IpcError::new(
+            "project_unavailable",
+            "The project folder is no longer available.",
+            operation_id.to_owned(),
+            true,
+        )
+    })?;
+    let rel = validate_safe_relative_path(relative_path, operation_id)?;
+    verify_ancestors_without_symlinks(&root, rel, operation_id)?;
+    let target = root.join(rel);
+    let meta = fs::symlink_metadata(&target)
+        .map_err(|error| map_file_write_error(&error, operation_id))?;
+    if meta.file_type().is_symlink() {
+        return Err(IpcError::new(
+            "project_file_symlink",
+            "Symbolic links cannot be deleted from the explorer.",
+            operation_id.to_owned(),
+            false,
+        ));
+    }
+    if meta.is_dir() {
+        if recursive {
+            fs::remove_dir_all(&target)
+                .map_err(|error| map_file_write_error(&error, operation_id))?;
+        } else {
+            fs::remove_dir(&target).map_err(|error| map_file_write_error(&error, operation_id))?;
+        }
+    } else {
+        fs::remove_file(&target).map_err(|error| map_file_write_error(&error, operation_id))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) async fn save_project_file(
     processes: tauri::State<'_, RookProcesses>,
@@ -777,16 +1099,7 @@ pub(crate) async fn save_project_file(
             false,
         ));
     }
-    if let Ok(canonical) = fs::canonicalize(&request.project_id) {
-        if processes.has_active_build(&canonical) {
-            return Err(IpcError::new(
-                "build_run_active",
-                "Stop Rook Build before saving files in this workspace.",
-                request.operation_id,
-                true,
-            ));
-        }
-    }
+    ensure_no_active_build(&processes, &request.project_id, &request.operation_id)?;
     save_project_file_contents(
         &request.project_id,
         &request.relative_path,
@@ -799,4 +1112,132 @@ pub(crate) async fn save_project_file(
         operation_id: request.operation_id,
         saved: true,
     })
+}
+
+#[tauri::command]
+pub(crate) async fn create_project_entry(
+    processes: tauri::State<'_, RookProcesses>,
+    request: CreateProjectEntryRequest,
+) -> Result<CreateProjectEntryResponse, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(IpcError::new(
+            "invalid_project_request",
+            "The create entry request is invalid.",
+            request.operation_id,
+            false,
+        ));
+    }
+    ensure_no_active_build(&processes, &request.project_id, &request.operation_id)?;
+    let entry = create_project_entry_at(
+        &request.project_id,
+        &request.relative_path,
+        &request.kind,
+        &request.operation_id,
+    )?;
+    Ok(CreateProjectEntryResponse {
+        schema_version: IPC_SCHEMA_VERSION,
+        operation_id: request.operation_id,
+        entry,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn rename_project_entry(
+    processes: tauri::State<'_, RookProcesses>,
+    request: RenameProjectEntryRequest,
+) -> Result<CreateProjectEntryResponse, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(IpcError::new(
+            "invalid_project_request",
+            "The rename request is invalid.",
+            request.operation_id,
+            false,
+        ));
+    }
+    ensure_no_active_build(&processes, &request.project_id, &request.operation_id)?;
+    let entry = rename_project_entry_at(
+        &request.project_id,
+        &request.from_relative_path,
+        &request.to_relative_path,
+        &request.operation_id,
+    )?;
+    Ok(CreateProjectEntryResponse {
+        schema_version: IPC_SCHEMA_VERSION,
+        operation_id: request.operation_id,
+        entry,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn delete_project_entry(
+    processes: tauri::State<'_, RookProcesses>,
+    request: DeleteProjectEntryRequest,
+) -> Result<DeleteProjectEntryResponse, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(IpcError::new(
+            "invalid_project_request",
+            "The delete request is invalid.",
+            request.operation_id,
+            false,
+        ));
+    }
+    ensure_no_active_build(&processes, &request.project_id, &request.operation_id)?;
+    delete_project_entry_at(
+        &request.project_id,
+        &request.relative_path,
+        request.recursive,
+        &request.operation_id,
+    )?;
+    Ok(DeleteProjectEntryResponse {
+        schema_version: IPC_SCHEMA_VERSION,
+        operation_id: request.operation_id,
+        deleted: true,
+    })
+}
+
+#[cfg(test)]
+mod fs_crud_tests {
+    use super::*;
+
+    #[test]
+    fn creates_renames_and_deletes_entries_safely() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("laplace-fs-crud-{nanos}"));
+        fs::create_dir_all(&root).unwrap();
+        let root_str = root.to_str().unwrap();
+
+        let dir_entry =
+            create_project_entry_at(root_str, "src/utils", "directory", "op-1").unwrap();
+        assert_eq!(dir_entry.kind, ProjectEntryKind::Directory);
+        let file_entry =
+            create_project_entry_at(root_str, "src/utils/helper.ts", "file", "op-2").unwrap();
+        assert_eq!(file_entry.relative_path, "src/utils/helper.ts");
+
+        // Duplicate rejection
+        let dup = create_project_entry_at(root_str, "src/utils/helper.ts", "file", "op-3");
+        assert!(dup.is_err());
+
+        // Path escape and .git rejection
+        assert!(create_project_entry_at(root_str, "../escape.ts", "file", "op-4").is_err());
+        assert!(create_project_entry_at(root_str, ".git/config", "file", "op-5").is_err());
+
+        // Rename cleanly
+        let renamed =
+            rename_project_entry_at(root_str, "src/utils/helper.ts", "src/utils/math.ts", "op-6")
+                .unwrap();
+        assert_eq!(renamed.relative_path, "src/utils/math.ts");
+        assert!(root.join("src/utils/math.ts").is_file());
+
+        // Recursive directory removal
+        delete_project_entry_at(root_str, "src", true, "op-7").unwrap();
+        assert!(!root.join("src").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

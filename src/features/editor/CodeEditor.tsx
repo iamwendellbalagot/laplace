@@ -3,7 +3,10 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { Uri, type editor as MonacoEditor } from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/language/typescript/ts.worker?worker";
+import type { AppService } from "../../services/app-service";
 import type { EditorDiagnostic } from "../../services/contracts";
+import type { GutterLineMarker } from "./git-gutter";
+import { hydrateWorkspaceTypeScript } from "./ts-project-hydration";
 
 self.MonacoEnvironment = {
   getWorker(_moduleId, label) {
@@ -12,6 +15,8 @@ self.MonacoEnvironment = {
       : new EditorWorker();
   },
 };
+
+const hydratedVersions = new Map<string, number>();
 
 export interface RevealTarget {
   line: number;
@@ -36,11 +41,16 @@ export function CodeEditor({
   value,
   theme,
   fontSize,
+  projectId,
+  service,
+  syncVersion = 0,
+  gutterMarkers,
   revealTarget,
   onChange,
   onSelectionChange,
   onCursorChange,
   onDiagnosticsChange,
+  onTriggerInlineCommand,
   onFocus,
   onMount,
 }: {
@@ -48,23 +58,32 @@ export function CodeEditor({
   value: string;
   theme: "dark" | "light";
   fontSize: number;
+  projectId?: string;
+  service?: AppService;
+  syncVersion?: number;
+  gutterMarkers?: GutterLineMarker[];
   revealTarget?: RevealTarget | null;
   onChange: (value: string) => void;
   onSelectionChange?: (selection: CodeSelectionChange | null) => void;
   onCursorChange?: (cursor: CodeCursorChange) => void;
   onDiagnosticsChange?: (diagnostics: EditorDiagnostic[]) => void;
+  onTriggerInlineCommand?: () => void;
   onFocus?: () => void;
   onMount?: OnMount;
 }) {
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
+  const decorationsRef =
+    useRef<MonacoEditor.IEditorDecorationsCollection | null>(null);
   const selectionCbRef = useRef(onSelectionChange);
   const cursorCbRef = useRef(onCursorChange);
   const diagnosticsCbRef = useRef(onDiagnosticsChange);
+  const inlineCommandCbRef = useRef(onTriggerInlineCommand);
   const focusCbRef = useRef(onFocus);
   selectionCbRef.current = onSelectionChange;
   cursorCbRef.current = onCursorChange;
   diagnosticsCbRef.current = onDiagnosticsChange;
+  inlineCommandCbRef.current = onTriggerInlineCommand;
   focusCbRef.current = onFocus;
 
   function emitDiagnosticsForCurrentModel() {
@@ -95,6 +114,35 @@ export function CodeEditor({
   }
 
   useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    if (!decorationsRef.current) {
+      decorationsRef.current = editor.createDecorationsCollection();
+    }
+    const items = (gutterMarkers ?? []).map((marker) => ({
+      range: new monaco.Range(marker.startLine, 1, marker.endLine, 1),
+      options: {
+        isWholeLine: true,
+        linesDecorationsClassName: `laplace-gutter-${marker.kind}`,
+      },
+    }));
+    decorationsRef.current.set(items);
+  }, [gutterMarkers, path]);
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !service || !projectId) return;
+    const prevVersion = hydratedVersions.get(projectId);
+    if (prevVersion === syncVersion) return;
+    const timer = window.setTimeout(() => {
+      hydratedVersions.set(projectId, syncVersion);
+      void hydrateWorkspaceTypeScript(service, monaco, projectId);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [projectId, service, syncVersion]);
+
+  useEffect(() => {
     emitDiagnosticsForCurrentModel();
   }, [path]);
 
@@ -120,6 +168,35 @@ export function CodeEditor({
       onMount={(editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+        if (!decorationsRef.current) {
+          decorationsRef.current = editor.createDecorationsCollection();
+        }
+        editor.addAction({
+          id: "laplace.inlineCommand",
+          label: "Inline Edit with Rook (⌘K)",
+          keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+          run: () => {
+            inlineCommandCbRef.current?.();
+          },
+        });
+        if (service && projectId) {
+          const prevVersion = hydratedVersions.get(projectId);
+          if (prevVersion !== syncVersion) {
+            hydratedVersions.set(projectId, syncVersion);
+            void hydrateWorkspaceTypeScript(service, monaco, projectId);
+          }
+        }
+        if (gutterMarkers?.length) {
+          decorationsRef.current.set(
+            gutterMarkers.map((marker) => ({
+              range: new monaco.Range(marker.startLine, 1, marker.endLine, 1),
+              options: {
+                isWholeLine: true,
+                linesDecorationsClassName: `laplace-gutter-${marker.kind}`,
+              },
+            })),
+          );
+        }
         editor.onDidFocusEditorText(() => {
           focusCbRef.current?.();
         });

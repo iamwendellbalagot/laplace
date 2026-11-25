@@ -35,6 +35,7 @@ mod review;
 mod rook_runtime;
 mod rook_service;
 mod runs;
+mod search;
 mod watcher;
 mod workspace_state;
 
@@ -1649,6 +1650,10 @@ pub fn run() {
             workspace_state::prune_project_executions,
             fs_service::read_project_file,
             fs_service::save_project_file,
+            fs_service::create_project_entry,
+            fs_service::rename_project_entry,
+            fs_service::delete_project_entry,
+            search::search_project_text,
             start_terminal,
             write_terminal,
             stop_terminal,

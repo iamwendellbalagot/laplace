@@ -65,6 +65,14 @@ import {
   type RuntimeDiagnostics,
   type WorkspacePulse,
   type WorkspaceFsChangedEvent,
+  type CreateProjectEntryRequest,
+  type CreateProjectEntryResponse,
+  type RenameProjectEntryRequest,
+  type DeleteProjectEntryRequest,
+  type DeleteProjectEntryResponse,
+  type ProjectEntry,
+  type SearchProjectRequest,
+  type SearchProjectResponse,
 } from "./contracts";
 
 export interface AppService {
@@ -154,6 +162,30 @@ export interface AppService {
     expectedContent: string,
     content: string,
   ): Promise<boolean>;
+  createProjectEntry(
+    projectId: string,
+    relativePath: string,
+    kind: "file" | "directory",
+  ): Promise<ProjectEntry>;
+  renameProjectEntry(
+    projectId: string,
+    fromRelativePath: string,
+    toRelativePath: string,
+  ): Promise<ProjectEntry>;
+  deleteProjectEntry(
+    projectId: string,
+    relativePath: string,
+    recursive?: boolean,
+  ): Promise<boolean>;
+  searchProjectText(
+    projectId: string,
+    query: string,
+    options?: {
+      caseSensitive?: boolean;
+      wholeWord?: boolean;
+      maxResults?: number;
+    },
+  ): Promise<SearchProjectResponse>;
   gitStatus(projectId: string): Promise<GitStatus>;
   gitDiff(projectId: string): Promise<string>;
   startTerminal(sessionId: string, workspaceId: string): Promise<void>;
@@ -1789,6 +1821,102 @@ export class TauriAppService implements AppService {
         { request },
       );
       return response.saved;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async createProjectEntry(
+    projectId: string,
+    relativePath: string,
+    kind: "file" | "directory",
+  ): Promise<ProjectEntry> {
+    const request: CreateProjectEntryRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      relativePath,
+      kind,
+    };
+    try {
+      const response = await invoke<CreateProjectEntryResponse>(
+        "create_project_entry",
+        { request },
+      );
+      return response.entry;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async renameProjectEntry(
+    projectId: string,
+    fromRelativePath: string,
+    toRelativePath: string,
+  ): Promise<ProjectEntry> {
+    const request: RenameProjectEntryRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      fromRelativePath,
+      toRelativePath,
+    };
+    try {
+      const response = await invoke<CreateProjectEntryResponse>(
+        "rename_project_entry",
+        { request },
+      );
+      return response.entry;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async deleteProjectEntry(
+    projectId: string,
+    relativePath: string,
+    recursive = true,
+  ): Promise<boolean> {
+    const request: DeleteProjectEntryRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      relativePath,
+      recursive,
+    };
+    try {
+      const response = await invoke<DeleteProjectEntryResponse>(
+        "delete_project_entry",
+        { request },
+      );
+      return response.deleted;
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async searchProjectText(
+    projectId: string,
+    query: string,
+    options?: {
+      caseSensitive?: boolean;
+      wholeWord?: boolean;
+      maxResults?: number;
+    },
+  ): Promise<SearchProjectResponse> {
+    const request: SearchProjectRequest = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      query,
+      caseSensitive: options?.caseSensitive ?? false,
+      wholeWord: options?.wholeWord ?? false,
+      maxResults: options?.maxResults,
+    };
+    try {
+      return await invoke<SearchProjectResponse>("search_project_text", {
+        request,
+      });
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

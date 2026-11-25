@@ -5166,3 +5166,373 @@ kbd,
     display: none;
   }
 }
+
+/* Phase 2: Hierarchical File Tree, Search Panel, Inline ⌘K Command Bar & Git Gutters */
+.explorer-heading-tabs {
+  padding: 0 8px;
+}
+.explorer-mode-tabs {
+  display: inline-flex;
+  width: 100%;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--canvas);
+  gap: 2px;
+}
+.explorer-mode-tabs button {
+  flex: 1;
+  min-height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 11px var(--sans);
+  cursor: pointer;
+}
+.explorer-mode-tabs button.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.explorer-tree-panel,
+.workspace-search-panel {
+  display: flex;
+  flex: 1 1 0%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.explorer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.explorer-toolbar .explorer-root {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  min-height: 26px;
+}
+.explorer-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.explorer-toolbar-actions .icon-button {
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+}
+.explorer-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+  min-height: 25px;
+}
+.explorer-tree-row:hover {
+  background: var(--surface-hover);
+}
+.explorer-tree-row .explorer-entry {
+  flex: 1;
+  min-width: 0;
+  min-height: 25px;
+  padding: 0;
+  gap: 6px;
+  font: 11px var(--mono);
+  overflow: hidden;
+}
+.explorer-entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.explorer-git-badge {
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.02em;
+}
+.explorer-git-badge.is-modified {
+  color: var(--brass-light);
+}
+.explorer-git-badge.is-added,
+.explorer-git-badge.is-untracked {
+  color: var(--green);
+}
+.explorer-git-badge.is-deleted {
+  color: var(--red);
+}
+.explorer-dir-dirty-dot,
+.explorer-rook-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--brass);
+}
+.explorer-rook-dot.is-active {
+  animation: laplace-pulse 1.1s ease-in-out infinite;
+}
+.explorer-row-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.explorer-tree-row:hover .explorer-row-actions,
+.explorer-tree-row:focus-within .explorer-row-actions {
+  display: inline-flex;
+}
+.explorer-tree-row:hover .explorer-row-meta {
+  display: none;
+}
+.explorer-mini-btn {
+  border: 0;
+  padding: 0 4px;
+  height: 18px;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: 11px var(--sans);
+  cursor: pointer;
+}
+.explorer-mini-btn:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.explorer-mini-danger:hover {
+  color: var(--red);
+}
+.explorer-inline-form {
+  padding: 3px 8px 3px 0;
+}
+.explorer-inline-form input {
+  width: 100%;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--brass);
+  border-radius: 4px;
+  background: var(--canvas);
+  color: var(--text);
+  font: 11px var(--mono);
+  outline: 0;
+}
+.explorer-delete-confirm {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--red) 10%, var(--surface));
+  font-size: 11px;
+}
+.explorer-delete-confirm p {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.explorer-delete-confirm > div {
+  display: flex;
+  gap: 6px;
+}
+.explorer-error {
+  margin: 6px 10px;
+  font-size: 11px;
+}
+
+.workspace-search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.workspace-search-form input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--canvas);
+  color: var(--text);
+  font: 11.5px var(--mono);
+  outline: 0;
+}
+.workspace-search-form input:focus {
+  border-color: var(--brass);
+}
+.workspace-search-flags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.workspace-search-flags button {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 10px var(--mono);
+  cursor: pointer;
+}
+.workspace-search-flags button.is-active {
+  border-color: var(--brass);
+  background: var(--brass-tint);
+  color: var(--brass-light);
+}
+.workspace-search-attach {
+  margin-left: auto;
+  color: var(--brass-light) !important;
+}
+.workspace-search-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.workspace-search-capped {
+  color: var(--brass-light);
+}
+.workspace-search-results {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.workspace-search-filepath {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px 3px;
+  color: var(--text-secondary);
+  font: 600 10.5px var(--mono);
+}
+.workspace-search-filepath span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-search-filepath small {
+  color: var(--muted);
+}
+.workspace-search-hit {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 10.5px/1.4 var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-search-hit:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.workspace-search-hit code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.workspace-search-hit mark {
+  background: color-mix(in srgb, var(--brass) 35%, transparent);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.workspace-search-line {
+  flex: 0 0 28px;
+  color: var(--dim);
+  text-align: right;
+}
+
+/* Inline ⌘K Command Bar + Git Gutter Markers */
+.inline-command-bar {
+  margin: 8px 12px 4px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--brass) 65%, var(--border));
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+}
+.inline-command-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.inline-command-target {
+  color: var(--brass-light);
+  font: 10.5px var(--mono);
+}
+.inline-command-modes {
+  display: inline-flex;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--shell);
+}
+.inline-command-modes button {
+  height: 20px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: 10.5px var(--sans);
+  cursor: pointer;
+}
+.inline-command-modes button.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.inline-command-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inline-command-form input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--canvas);
+  color: var(--text);
+  font: 12px var(--sans);
+  outline: 0;
+}
+.inline-command-form input:focus {
+  border-color: var(--brass);
+}
+.inline-command-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+.laplace-gutter-added {
+  border-left: 3px solid var(--green);
+  margin-left: 3px;
+}
+.laplace-gutter-modified {
+  border-left: 3px solid var(--brass);
+  margin-left: 3px;
+}
+.laplace-gutter-deleted {
+  border-left: 3px solid var(--red);
+  margin-left: 3px;
+}

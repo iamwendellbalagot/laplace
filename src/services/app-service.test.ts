@@ -494,6 +494,55 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("creates, renames, deletes entries and searches workspace text", async () => {
+    const entry = {
+      name: "new.ts",
+      relativePath: "src/new.ts",
+      kind: "file" as const,
+    };
+    mocks.invoke
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        operationId: "op-create",
+        entry,
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        operationId: "op-rename",
+        entry: { ...entry, name: "next.ts", relativePath: "src/next.ts" },
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        operationId: "op-del",
+        deleted: true,
+      })
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        operationId: "op-search",
+        files: [],
+        totalMatches: 0,
+        searchedFiles: 1,
+        truncated: false,
+      });
+
+    const service = new TauriAppService();
+    await expect(
+      service.createProjectEntry("/tmp/example", "src/new.ts", "file"),
+    ).resolves.toEqual(entry);
+    await expect(
+      service.renameProjectEntry("/tmp/example", "src/new.ts", "src/next.ts"),
+    ).resolves.toMatchObject({ relativePath: "src/next.ts" });
+    await expect(
+      service.deleteProjectEntry("/tmp/example", "src/next.ts", false),
+    ).resolves.toBe(true);
+    await expect(
+      service.searchProjectText("/tmp/example", "alpha", {
+        caseSensitive: true,
+        wholeWord: false,
+      }),
+    ).resolves.toMatchObject({ searchedFiles: 1 });
+  });
+
   it("sends Git and terminal requests with workspace identity", async () => {
     mocks.invoke
       .mockResolvedValueOnce({ branch: "main", files: [] })

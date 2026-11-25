@@ -1324,14 +1324,18 @@ export function App({ service, browserPreview = false }: AppProps) {
     if (!activeProject || !inlinePatch) return;
     setInlinePatchSaving(true);
     setInlinePatchError(undefined);
+    const key = `${activeProject.id}\0${inlinePatch.path}`;
+    const liveDoc = documents.find((doc) => doc.key === key);
+    const expectedOnDisk = liveDoc
+      ? liveDoc.savedContent
+      : inlinePatch.baseContent;
     try {
       await service.saveProjectFile(
         activeProject.id,
         inlinePatch.path,
-        inlinePatch.baseContent,
+        expectedOnDisk,
         nextContent,
       );
-      const key = `${activeProject.id}\0${inlinePatch.path}`;
       setDocuments((current) =>
         current.map((doc) =>
           doc.key === key
@@ -1598,6 +1602,14 @@ export function App({ service, browserPreview = false }: AppProps) {
       } else if (
         (event.metaKey || event.ctrlKey) &&
         event.shiftKey &&
+        key === "f" &&
+        activeProject
+      ) {
+        event.preventDefault();
+        useAppStore.getState().focusWorkspaceSearch();
+      } else if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
         key === "r" &&
         activeProject
       ) {
@@ -1716,6 +1728,12 @@ export function App({ service, browserPreview = false }: AppProps) {
         label: "Focus Docked Rook Co-pilot",
         description: "Open and focus Rook beside the Editor (⌘L)",
         run: () => focusDockedRook(),
+      },
+      {
+        id: "search-workspace",
+        label: "Search Workspace Text",
+        description: "Find code across repository files (⌘⇧F)",
+        run: () => useAppStore.getState().focusWorkspaceSearch(),
       },
       {
         id: "open-verify-drawer",
@@ -2150,6 +2168,61 @@ export function App({ service, browserPreview = false }: AppProps) {
             "Open a file in Editor first to preview a Rook patch inline.",
           );
         }
+      }}
+      onProposeInlinePatch={(patch) => {
+        setInlinePatchError(undefined);
+        setInlinePatch(patch);
+        navigateTracked("editor");
+      }}
+      onEntryRenamed={(fromPath, toPath) => {
+        if (!activeProject) return;
+        const pid = activeProject.id;
+        setDocuments((current) =>
+          current.map((doc) => {
+            if (doc.projectId !== pid) return doc;
+            if (doc.path === fromPath) {
+              return { ...doc, path: toPath, key: `${pid}\0${toPath}` };
+            }
+            if (doc.path.startsWith(`${fromPath}/`)) {
+              const nextPath = `${toPath}${doc.path.slice(fromPath.length)}`;
+              return { ...doc, path: nextPath, key: `${pid}\0${nextPath}` };
+            }
+            return doc;
+          }),
+        );
+        if (activeDocumentKey === `${pid}\0${fromPath}`) {
+          setActiveDocumentKey(`${pid}\0${toPath}`);
+        }
+        if (selectedFilePath === fromPath) {
+          setSelectedFile(toPath, selectedFile);
+        }
+        bumpSyncVersion();
+        void refreshWorkspacePulse(pid);
+      }}
+      onEntryDeleted={(deletedPath) => {
+        if (!activeProject) return;
+        const pid = activeProject.id;
+        const isRemoved = (path: string) =>
+          path === deletedPath || path.startsWith(`${deletedPath}/`);
+        setDocuments((current) =>
+          current.filter(
+            (doc) => doc.projectId !== pid || !isRemoved(doc.path),
+          ),
+        );
+        if (selectedFilePath && isRemoved(selectedFilePath)) {
+          setSelectedFile(undefined, undefined);
+        }
+        bumpSyncVersion();
+        void refreshWorkspacePulse(pid);
+      }}
+      onRefreshWorkspace={() => {
+        if (!activeProject) return;
+        bumpSyncVersion();
+        void service
+          .gitStatus(activeProject.id)
+          .then(setEditorGitStatus)
+          .catch(() => undefined);
+        void refreshWorkspacePulse(activeProject.id);
       }}
       onUndoRookTurn={undoRookTurn}
     />

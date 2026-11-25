@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { AppService } from "../../services/app-service";
 import type {
   EditorDiagnostic,
@@ -18,6 +18,7 @@ import {
   type BottomDrawerTab,
   type RightPanelTab,
 } from "../../state/app-store";
+import { useRookStore } from "../../state/rook-store";
 import type { EditorDocument } from "../../state/workspace-store";
 import { GitPanel } from "../git/GitPanel";
 import { RookPanel } from "../rook/RookPanel";
@@ -32,11 +33,15 @@ import type {
   EditorCursorState,
   EditorSelection,
 } from "./EditorContextInspector";
+import { FileTreeExplorer } from "./FileTreeExplorer";
+import { parseUnifiedDiffHunksForFile } from "./git-gutter";
+import { InlineCommandBar } from "./InlineCommandBar";
 import {
   InlinePatchOverlay,
   type PendingInlinePatch,
 } from "./InlinePatchOverlay";
 import { WorkspaceRightPanel } from "./WorkspaceRightPanel";
+import { WorkspaceSearchPanel } from "./WorkspaceSearchPanel";
 import type { ReturnSourceAnchor } from "../context/ContextLensScreen";
 
 const CodeEditor = lazy(() =>
@@ -284,8 +289,8 @@ export function WorkspaceScreen({
   preferences,
   onPreferencesChange,
   activeProject,
-  projectEntries,
-  projectEntriesTruncated,
+  projectEntries: _projectEntries,
+  projectEntriesTruncated: _projectEntriesTruncated,
   projectDirectory,
   selectedFilePath,
   selectedFile,
@@ -352,6 +357,10 @@ export function WorkspaceScreen({
   onRookStart,
   onRookDraftSave,
   onPreviewRookPatch,
+  onProposeInlinePatch,
+  onEntryRenamed,
+  onEntryDeleted,
+  onRefreshWorkspace,
   onUndoRookTurn,
 }: {
   service: AppService;
@@ -446,19 +455,43 @@ export function WorkspaceScreen({
   onRookStart: () => void;
   onRookDraftSave: (draft: string) => void;
   onPreviewRookPatch: (code: string) => void;
+  onProposeInlinePatch?: (patch: PendingInlinePatch) => void;
+  onEntryRenamed?: (fromRelativePath: string, toRelativePath: string) => void;
+  onEntryDeleted?: (relativePath: string) => void;
+  onRefreshWorkspace?: () => void;
   onUndoRookTurn: (
     messageIndex: number,
     touchedFiles: string[],
   ) => Promise<void>;
 }) {
+  const leftSidebarTab = useAppStore((s) => s.leftSidebarTab);
+  const setLeftSidebarTab = useAppStore((s) => s.setLeftSidebarTab);
+  const searchFocusNonce = useAppStore((s) => s.searchFocusNonce);
   const rightPanelTab = useAppStore((s) => s.rightPanelTab);
   const setRightPanelTab = useAppStore((s) => s.setRightPanelTab);
   const rookExpanded = useAppStore((s) => s.rookExpanded);
   const setRookExpanded = useAppStore((s) => s.setRookExpanded);
   const bottomDrawerTab = useAppStore((s) => s.bottomDrawerTab);
   const setBottomDrawerTab = useAppStore((s) => s.setBottomDrawerTab);
+  const rookRunId = useRookStore((s) => s.runId);
+  const rookMessages = useRookStore((s) => s.messages);
+  const rookMode = useRookStore((s) => s.mode);
+  const rookTouchedPaths = useMemo(() => {
+    const paths = new Set<string>();
+    const recent = rookMessages.slice(-4);
+    for (const msg of recent) {
+      for (const file of msg.touchedFiles ?? []) paths.add(file);
+    }
+    return [...paths];
+  }, [rookMessages]);
 
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
+  const [gitDiffText, setGitDiffText] = useState("");
+  const [inlineCommandTarget, setInlineCommandTarget] = useState<{
+    filePath: string;
+    startLine: number;
+    endLine: number;
+  } | null>(null);
   const activeDocument = documents.find(
     (document) =>
       document.key === activeDocumentKey &&
@@ -485,6 +518,46 @@ export function WorkspaceScreen({
     setDraftWidth(preferences.inspectorWidth);
     draftWidthRef.current = preferences.inspectorWidth;
   }, [preferences.inspectorWidth]);
+
+  useEffect(() => {
+    if (browserPreview || !activeProject || !activeProject.isGitRepository) {
+      setGitDiffText("");
+      return;
+    }
+    let cancelled = false;
+    void service
+      .gitDiff(activeProject.id)
+      .then((diff) => {
+        if (!cancelled) setGitDiffText(diff);
+      })
+      .catch(() => {
+        if (!cancelled) setGitDiffText("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeProject?.id,
+    activeProject?.isGitRepository,
+    browserPreview,
+    service,
+    workspaceSyncVersion,
+  ]);
+
+  const primaryGutterMarkers = useMemo(
+    () =>
+      activeDocument
+        ? parseUnifiedDiffHunksForFile(gitDiffText, activeDocument.path)
+        : [],
+    [gitDiffText, activeDocument],
+  );
+  const splitGutterMarkers = useMemo(
+    () =>
+      splitDocument
+        ? parseUnifiedDiffHunksForFile(gitDiffText, splitDocument.path)
+        : [],
+    [gitDiffText, splitDocument],
+  );
 
   const changeWidth = (width: number) => {
     const bounded = Math.max(220, Math.min(560, width));
@@ -537,98 +610,66 @@ export function WorkspaceScreen({
     <section className="editor-shell" aria-label="Editor workspace">
       {activeProject && (
         <aside className="project-explorer" aria-label="Project files">
-          <div className="explorer-heading">
-            <span className="eyebrow">Project files</span>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Refresh project folder"
-              title="Refresh this folder"
-              onClick={() => void onOpenProjectDirectory(projectDirectory)}
+          <div className="explorer-heading explorer-heading-tabs">
+            <div
+              className="explorer-mode-tabs"
+              role="tablist"
+              aria-label="Workspace explorer mode"
             >
-              ↻
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Open another project folder"
-              disabled={projectPending}
-              onClick={() => onOpenProject()}
-            >
-              +
-            </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={leftSidebarTab === "files"}
+                className={leftSidebarTab === "files" ? "is-active" : ""}
+                onClick={() => setLeftSidebarTab("files")}
+              >
+                Files
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={leftSidebarTab === "search"}
+                className={leftSidebarTab === "search" ? "is-active" : ""}
+                onClick={() => setLeftSidebarTab("search")}
+              >
+                Search
+              </button>
+            </div>
           </div>
-          <div className="explorer-root">
-            <span className="explorer-folder-glyph" aria-hidden="true">
-              ⌄
-            </span>
-            <strong>{activeProject.name}</strong>
-          </div>
-          {projectDirectory && (
-            <button
-              className="explorer-up"
-              type="button"
-              onClick={() => {
-                const parent = projectDirectory
-                  .split(/[\\/]/)
-                  .slice(0, -1)
-                  .join("/");
-                void onOpenProjectDirectory(parent);
-              }}
-            >
-              <span aria-hidden="true">↰</span> Parent folder
-            </button>
+
+          {leftSidebarTab === "files" ? (
+            <FileTreeExplorer
+              service={service}
+              browserPreview={browserPreview}
+              activeProject={activeProject}
+              gitStatus={editorGitStatus}
+              syncVersion={workspaceSyncVersion}
+              selectedFilePath={selectedFilePath}
+              projectPending={projectPending}
+              rookTouchedPaths={rookTouchedPaths}
+              rookBuildRunning={Boolean(rookRunId && rookMode === "build")}
+              onOpenProjectFile={onOpenProjectFile}
+              onOpenProject={() => onOpenProject()}
+              onEntryRenamed={(from, to) => onEntryRenamed?.(from, to)}
+              onEntryDeleted={(rel) => onEntryDeleted?.(rel)}
+              onRefreshWorkspace={() =>
+                onRefreshWorkspace
+                  ? onRefreshWorkspace()
+                  : void onOpenProjectDirectory(projectDirectory)
+              }
+            />
+          ) : (
+            <WorkspaceSearchPanel
+              service={service}
+              browserPreview={browserPreview}
+              activeProject={activeProject}
+              focusNonce={searchFocusNonce}
+              onOpenLocation={(relPath, line, col) =>
+                onJumpToLocation(relPath, line, col, true)
+              }
+              onAttachToRook={(chip) => onAttachContextChipToRook(chip, "ask")}
+            />
           )}
-          <div
-            className="explorer-list"
-            role="list"
-            aria-label="Files and folders"
-          >
-            {projectEntries.map((entry) =>
-              entry.kind === "directory" ? (
-                <button
-                  className="explorer-entry explorer-directory"
-                  key={entry.relativePath}
-                  type="button"
-                  onClick={() => onOpenProjectDirectory(entry.relativePath)}
-                >
-                  <span aria-hidden="true">▸</span>
-                  <span>{entry.name}</span>
-                </button>
-              ) : entry.kind === "file" ? (
-                <button
-                  className={`explorer-entry explorer-file${selectedFilePath === entry.relativePath ? " explorer-file-active" : ""}`}
-                  key={entry.relativePath}
-                  type="button"
-                  onClick={() => onOpenProjectFile(entry.relativePath)}
-                >
-                  <span aria-hidden="true">·</span>
-                  <span>{entry.name}</span>
-                </button>
-              ) : (
-                <div
-                  className="explorer-entry explorer-symlink"
-                  key={entry.relativePath}
-                  role="listitem"
-                  title="Symbolic links are not followed in the explorer."
-                >
-                  <span aria-hidden="true">↗</span>
-                  <span>{entry.name}</span>
-                </div>
-              ),
-            )}
-            {projectEntries.length === 0 && (
-              <p className="explorer-empty">
-                This folder has no visible entries.
-              </p>
-            )}
-            {projectEntriesTruncated && (
-              <p className="explorer-limit" role="status">
-                Showing the first 1,000 entries. Narrow this folder before
-                browsing more.
-              </p>
-            )}
-          </div>
         </aside>
       )}
 
@@ -720,6 +761,30 @@ export function WorkspaceScreen({
               >
                 {splitDocument ? "Close split" : "Split"}
               </button>
+              {!browserPreview && activeProject && focusedDocument && (
+                <button
+                  className="editor-save-button"
+                  type="button"
+                  title="Inline Edit with Rook (⌘K / Ctrl+K)"
+                  onClick={() => {
+                    const sel =
+                      editorSelection?.path === focusedDocument.path
+                        ? editorSelection
+                        : null;
+                    const cur =
+                      editorCursor?.path === focusedDocument.path
+                        ? editorCursor
+                        : null;
+                    setInlineCommandTarget({
+                      filePath: focusedDocument.path,
+                      startLine: sel?.startLine ?? cur?.line ?? 1,
+                      endLine: sel?.endLine ?? cur?.line ?? 1,
+                    });
+                  }}
+                >
+                  Edit ⌘K
+                </button>
+              )}
             </div>
           ) : (
             <>
@@ -756,6 +821,41 @@ export function WorkspaceScreen({
             </button>
           </div>
         )}
+
+        {inlineCommandTarget &&
+          activeProject &&
+          !browserPreview &&
+          (() => {
+            const targetDoc =
+              projectDocuments.find(
+                (d) => d.path === inlineCommandTarget.filePath,
+              ) ?? focusedDocument;
+            if (!targetDoc) return null;
+            return (
+              <InlineCommandBar
+                service={service}
+                projectId={activeProject.id}
+                filePath={targetDoc.path}
+                fileContent={targetDoc.content}
+                startLine={inlineCommandTarget.startLine}
+                endLine={inlineCommandTarget.endLine}
+                diagnostics={
+                  editorCursor?.path === targetDoc.path ? editorDiagnostics : []
+                }
+                onClose={() => setInlineCommandTarget(null)}
+                onProposePatch={(patch) => {
+                  if (onProposeInlinePatch) {
+                    onProposeInlinePatch(patch);
+                  }
+                }}
+                onExplainInRook={(chip, promptText) => {
+                  onAttachContextChipToRook(chip, "ask");
+                  onRookDraftSave(promptText);
+                  setRightPanelTab("rook");
+                }}
+              />
+            );
+          })()}
 
         {inlinePatch ? (
           <InlinePatchOverlay
@@ -820,6 +920,10 @@ export function WorkspaceScreen({
                   value={activeDocument.content}
                   theme={preferences.theme}
                   fontSize={preferences.editorFontSize}
+                  projectId={activeProject?.id}
+                  service={service}
+                  syncVersion={workspaceSyncVersion}
+                  gutterMarkers={primaryGutterMarkers}
                   revealTarget={
                     revealTarget && revealTarget.key === activeDocument.key
                       ? ({
@@ -830,6 +934,21 @@ export function WorkspaceScreen({
                       : null
                   }
                   onFocus={() => onActiveEditorPaneChange("primary")}
+                  onTriggerInlineCommand={() => {
+                    const sel =
+                      editorSelection?.path === activeDocument.path
+                        ? editorSelection
+                        : null;
+                    const cur =
+                      editorCursor?.path === activeDocument.path
+                        ? editorCursor
+                        : null;
+                    setInlineCommandTarget({
+                      filePath: activeDocument.path,
+                      startLine: sel?.startLine ?? cur?.line ?? 1,
+                      endLine: sel?.endLine ?? cur?.line ?? 1,
+                    });
+                  }}
                   onSelectionChange={(sel) =>
                     onEditorSelectionChange(
                       sel ? { path: activeDocument.path, ...sel } : null,
@@ -896,6 +1015,10 @@ export function WorkspaceScreen({
                     value={splitDocument.content}
                     theme={preferences.theme}
                     fontSize={preferences.editorFontSize}
+                    projectId={activeProject?.id}
+                    service={service}
+                    syncVersion={workspaceSyncVersion}
+                    gutterMarkers={splitGutterMarkers}
                     revealTarget={
                       revealTarget && revealTarget.key === splitDocument.key
                         ? ({
@@ -906,6 +1029,21 @@ export function WorkspaceScreen({
                         : null
                     }
                     onFocus={() => onActiveEditorPaneChange("secondary")}
+                    onTriggerInlineCommand={() => {
+                      const sel =
+                        editorSelection?.path === splitDocument.path
+                          ? editorSelection
+                          : null;
+                      const cur =
+                        editorCursor?.path === splitDocument.path
+                          ? editorCursor
+                          : null;
+                      setInlineCommandTarget({
+                        filePath: splitDocument.path,
+                        startLine: sel?.startLine ?? cur?.line ?? 1,
+                        endLine: sel?.endLine ?? cur?.line ?? 1,
+                      });
+                    }}
                     onSelectionChange={(sel) =>
                       onEditorSelectionChange(
                         sel ? { path: splitDocument.path, ...sel } : null,
