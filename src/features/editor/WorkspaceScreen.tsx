@@ -536,6 +536,7 @@ export function WorkspaceScreen({
   );
   const [draftDrawerHeight, setDraftDrawerHeight] =
     useState(resolvedDrawerHeight);
+  const [isResizingInspector, setIsResizingInspector] = useState(false);
   const [gitDiffText, setGitDiffText] = useState("");
   const [inlineCommandTarget, setInlineCommandTarget] = useState<{
     filePath: string;
@@ -974,22 +975,6 @@ export function WorkspaceScreen({
                     Edit ⌘K
                   </button>
                 )}
-                {preferences.inspectorCollapsed && (
-                  <button
-                    className="editor-panel-toggle"
-                    type="button"
-                    aria-label="Show Rook & Context panel"
-                    title="Show Rook & Context panel (⌘L)"
-                    onClick={() =>
-                      void onPreferencesChange({
-                        ...preferences,
-                        inspectorCollapsed: false,
-                      })
-                    }
-                  >
-                    ‹ Rook
-                  </button>
-                )}
               </div>
             </>
           ) : (
@@ -1003,22 +988,6 @@ export function WorkspaceScreen({
                       : "Folder · no Git"
                     : "No project"}
                 </span>
-                {preferences.inspectorCollapsed && (
-                  <button
-                    className="editor-panel-toggle"
-                    type="button"
-                    aria-label="Show Rook & Context panel"
-                    title="Show Rook & Context panel (⌘L)"
-                    onClick={() =>
-                      void onPreferencesChange({
-                        ...preferences,
-                        inspectorCollapsed: false,
-                      })
-                    }
-                  >
-                    ‹ Rook
-                  </button>
-                )}
               </div>
             </>
           )}
@@ -1502,125 +1471,179 @@ export function WorkspaceScreen({
         )}
       </div>
 
-      {!preferences.inspectorCollapsed && (
-        <div
-          className="inspector-separator"
-          role="separator"
-          aria-label="Resize right panel"
-          aria-orientation="vertical"
-          aria-valuemin={220}
-          aria-valuemax={560}
-          aria-valuenow={draftWidth}
-          tabIndex={0}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-              event.preventDefault();
-              const delta = event.key === "ArrowLeft" ? 16 : -16;
-              const width = Math.max(220, Math.min(560, draftWidth + delta));
-              changeWidth(width);
-              void onPreferencesChange({
-                ...preferences,
-                inspectorWidth: width,
-              });
-            } else if (event.key === "Home" || event.key === "End") {
-              event.preventDefault();
-              const width = event.key === "Home" ? 220 : 560;
-              changeWidth(width);
-              void onPreferencesChange({
-                ...preferences,
-                inspectorWidth: width,
-              });
-            }
-          }}
-          onPointerDown={(event) => {
-            drag.current = { x: event.clientX, width: draftWidth };
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }}
-          onPointerMove={(event) => {
-            if (drag.current) {
-              changeWidth(drag.current.width + drag.current.x - event.clientX);
-            }
-          }}
-          onPointerUp={() => {
-            if (!drag.current) return;
-            drag.current = undefined;
+      <div
+        className={`rook-dock-floating${preferences.inspectorCollapsed ? " is-collapsed" : ""}${isResizingInspector ? " is-resizing" : ""}`}
+      >
+        <button
+          type="button"
+          className="rook-dock-toggle"
+          aria-expanded={!preferences.inspectorCollapsed}
+          aria-controls="workspace-rook-dock"
+          aria-label={
+            preferences.inspectorCollapsed ? "Show Rook dock" : "Hide Rook dock"
+          }
+          title={
+            preferences.inspectorCollapsed
+              ? "Show Rook dock (⌘L)"
+              : "Hide Rook dock (⌘L)"
+          }
+          onClick={() =>
             void onPreferencesChange({
               ...preferences,
-              inspectorWidth: draftWidthRef.current,
-            });
-          }}
-          onPointerCancel={() => {
-            drag.current = undefined;
-          }}
-        />
-      )}
-
-      {!preferences.inspectorCollapsed ? (
-        <WorkspaceRightPanel
-          service={service}
-          browserPreview={browserPreview}
-          activeTab={rightPanelTab}
-          onTabChange={(tab: RightPanelTab) => setRightPanelTab(tab)}
-          onHide={() =>
-            void onPreferencesChange({
-              ...preferences,
-              inspectorCollapsed: true,
+              inspectorCollapsed: !preferences.inspectorCollapsed,
             })
           }
-          activeProject={activeProject}
-          activeDocument={focusedDocument}
-          selection={editorSelection}
-          cursor={editorCursor}
-          diagnostics={editorDiagnostics}
-          gitStatus={editorGitStatus}
-          executions={executions.filter(
-            (item) => item.projectId === activeProject?.id,
-          )}
-          syncVersion={workspaceSyncVersion}
-          returnAnchor={returnSourceAnchor}
-          rookFocusNonce={rookFocusNonce}
-          onReturnToAnchor={() => {
-            if (returnSourceAnchor) {
-              onJumpToLocation(
-                returnSourceAnchor.filePath,
-                returnSourceAnchor.line,
-                returnSourceAnchor.column,
-                false,
-              );
-            }
-          }}
-          onAttachToRook={(chip, mode) => onAttachContextChipToRook(chip, mode)}
-          onOpenInlinePatch={onOpenInlinePatch}
-          onOpenFileInReview={(relativePath) =>
-            onOpenWorkspaceReview([relativePath], "head")
-          }
-          onOpenReview={onOpenWorkspaceReview}
-          onOpenVerify={() => {
-            setBottomDrawerTab("verify");
-            if (bottomDrawerCollapsed) {
+        >
+          <svg
+            className="rook-dock-toggle-icon"
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M6.25 3.5L10.75 8L6.25 12.5"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+
+        {!preferences.inspectorCollapsed && (
+          <div
+            className="inspector-separator rook-dock-resizer"
+            role="separator"
+            aria-label="Resize right panel"
+            aria-orientation="vertical"
+            aria-valuemin={220}
+            aria-valuemax={560}
+            aria-valuenow={draftWidth}
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                event.preventDefault();
+                const delta = event.key === "ArrowLeft" ? 16 : -16;
+                const width = Math.max(220, Math.min(560, draftWidth + delta));
+                changeWidth(width);
+                void onPreferencesChange({
+                  ...preferences,
+                  inspectorWidth: width,
+                });
+              } else if (event.key === "Home" || event.key === "End") {
+                event.preventDefault();
+                const width = event.key === "Home" ? 220 : 560;
+                changeWidth(width);
+                void onPreferencesChange({
+                  ...preferences,
+                  inspectorWidth: width,
+                });
+              }
+            }}
+            onPointerDown={(event) => {
+              drag.current = { x: event.clientX, width: draftWidth };
+              setIsResizingInspector(true);
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              if (drag.current) {
+                changeWidth(
+                  drag.current.width + drag.current.x - event.clientX,
+                );
+              }
+            }}
+            onPointerUp={() => {
+              if (!drag.current) return;
+              drag.current = undefined;
+              setIsResizingInspector(false);
               void onPreferencesChange({
                 ...preferences,
-                bottomDrawerCollapsed: false,
+                inspectorWidth: draftWidthRef.current,
               });
+            }}
+            onPointerCancel={() => {
+              drag.current = undefined;
+              setIsResizingInspector(false);
+            }}
+          />
+        )}
+
+        <div
+          id="workspace-rook-dock"
+          className="rook-dock-surface"
+          inert={preferences.inspectorCollapsed}
+          aria-hidden={preferences.inspectorCollapsed}
+        >
+          <WorkspaceRightPanel
+            service={service}
+            browserPreview={browserPreview}
+            activeTab={rightPanelTab}
+            onTabChange={(tab: RightPanelTab) => setRightPanelTab(tab)}
+            onHide={() =>
+              void onPreferencesChange({
+                ...preferences,
+                inspectorCollapsed: true,
+              })
             }
-          }}
-          onJumpToLocation={onJumpToLocation}
-          onExpandToContextLens={onExpandToContextLens}
-          onRookModeChange={onRookModeChange}
-          onRookTrustBuild={onRookTrustBuild}
-          onRookDismissTrustPrompt={onRookDismissTrustPrompt}
-          onRookNewSession={onRookNewSession}
-          onRookOpenSession={onRookOpenSession}
-          onRookStart={onRookStart}
-          onRookDraftSave={onRookDraftSave}
-          onPreviewRookPatch={onPreviewRookPatch}
-          onUndoTurn={onUndoRookTurn}
-          onToggleRookExpand={() => setRookExpanded(true)}
-          onRookBuildTargetChange={onRookBuildTargetChange}
-          onApplyWorktree={onApplyWorktree}
-          onDiscardWorktree={onDiscardWorktree}
-        />
-      ) : null}
+            activeProject={activeProject}
+            activeDocument={focusedDocument}
+            selection={editorSelection}
+            cursor={editorCursor}
+            diagnostics={editorDiagnostics}
+            gitStatus={editorGitStatus}
+            executions={executions.filter(
+              (item) => item.projectId === activeProject?.id,
+            )}
+            syncVersion={workspaceSyncVersion}
+            returnAnchor={returnSourceAnchor}
+            rookFocusNonce={rookFocusNonce}
+            onReturnToAnchor={() => {
+              if (returnSourceAnchor) {
+                onJumpToLocation(
+                  returnSourceAnchor.filePath,
+                  returnSourceAnchor.line,
+                  returnSourceAnchor.column,
+                  false,
+                );
+              }
+            }}
+            onAttachToRook={(chip, mode) =>
+              onAttachContextChipToRook(chip, mode)
+            }
+            onOpenInlinePatch={onOpenInlinePatch}
+            onOpenFileInReview={(relativePath) =>
+              onOpenWorkspaceReview([relativePath], "head")
+            }
+            onOpenReview={onOpenWorkspaceReview}
+            onOpenVerify={() => {
+              setBottomDrawerTab("verify");
+              if (bottomDrawerCollapsed) {
+                void onPreferencesChange({
+                  ...preferences,
+                  bottomDrawerCollapsed: false,
+                });
+              }
+            }}
+            onJumpToLocation={onJumpToLocation}
+            onExpandToContextLens={onExpandToContextLens}
+            onRookModeChange={onRookModeChange}
+            onRookTrustBuild={onRookTrustBuild}
+            onRookDismissTrustPrompt={onRookDismissTrustPrompt}
+            onRookNewSession={onRookNewSession}
+            onRookOpenSession={onRookOpenSession}
+            onRookStart={onRookStart}
+            onRookDraftSave={onRookDraftSave}
+            onPreviewRookPatch={onPreviewRookPatch}
+            onUndoTurn={onUndoRookTurn}
+            onToggleRookExpand={() => setRookExpanded(true)}
+            onRookBuildTargetChange={onRookBuildTargetChange}
+            onApplyWorktree={onApplyWorktree}
+            onDiscardWorktree={onDiscardWorktree}
+          />
+        </div>
+      </div>
     </section>
   );
 }
