@@ -537,6 +537,7 @@ export function WorkspaceScreen({
   const [draftDrawerHeight, setDraftDrawerHeight] =
     useState(resolvedDrawerHeight);
   const [isResizingInspector, setIsResizingInspector] = useState(false);
+  const [isResizingExplorer, setIsResizingExplorer] = useState(false);
   const [gitDiffText, setGitDiffText] = useState("");
   const [inlineCommandTarget, setInlineCommandTarget] = useState<{
     filePath: string;
@@ -731,9 +732,17 @@ export function WorkspaceScreen({
 
   return (
     <section className="editor-shell" aria-label="Editor workspace">
-      {activeProject &&
-        (!explorerCollapsed ? (
-          <>
+      {activeProject && (
+        <div
+          className={`files-dock-floating${explorerCollapsed ? " is-collapsed" : ""}${isResizingExplorer ? " is-resizing" : ""}`}
+          aria-label="Files dock"
+        >
+          <div
+            id="workspace-files-dock"
+            className="files-dock-surface"
+            inert={explorerCollapsed}
+            aria-hidden={explorerCollapsed}
+          >
             <aside className="project-explorer" aria-label="Project files">
               <div className="explorer-heading explorer-heading-tabs">
                 <div
@@ -762,7 +771,7 @@ export function WorkspaceScreen({
                 </div>
                 <button
                   type="button"
-                  className="panel-collapse-button"
+                  className="icon-button"
                   aria-label="Hide file explorer"
                   title="Hide file explorer (⌘B)"
                   onClick={() =>
@@ -772,7 +781,7 @@ export function WorkspaceScreen({
                     })
                   }
                 >
-                  ‹
+                  ×
                 </button>
               </div>
 
@@ -827,8 +836,11 @@ export function WorkspaceScreen({
                 />
               </div>
             </aside>
+          </div>
+
+          {!explorerCollapsed && (
             <div
-              className="inspector-separator explorer-separator"
+              className="inspector-separator explorer-separator files-dock-resizer"
               role="separator"
               aria-label="Resize file explorer"
               aria-orientation="vertical"
@@ -865,6 +877,7 @@ export function WorkspaceScreen({
                   x: event.clientX,
                   width: draftExplorerWidth,
                 };
+                setIsResizingExplorer(true);
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
               onPointerMove={(event) => {
@@ -879,6 +892,7 @@ export function WorkspaceScreen({
               onPointerUp={() => {
                 if (!explorerDrag.current) return;
                 explorerDrag.current = undefined;
+                setIsResizingExplorer(false);
                 void onPreferencesChange({
                   ...preferences,
                   explorerWidth: draftExplorerWidthRef.current,
@@ -886,31 +900,42 @@ export function WorkspaceScreen({
               }}
               onPointerCancel={() => {
                 explorerDrag.current = undefined;
+                setIsResizingExplorer(false);
               }}
             />
-          </>
-        ) : null)}
+          )}
+
+          <button
+            type="button"
+            className="files-dock-toggle"
+            aria-expanded={!explorerCollapsed}
+            aria-controls="workspace-files-dock"
+            aria-label={
+              explorerCollapsed ? "Show file explorer" : "Hide file explorer"
+            }
+            title={
+              explorerCollapsed
+                ? "Show file explorer (⌘B)"
+                : "Hide file explorer (⌘B)"
+            }
+            onClick={() =>
+              void onPreferencesChange({
+                ...preferences,
+                explorerCollapsed: !explorerCollapsed,
+              })
+            }
+          >
+            <span className="files-dock-toggle-icon" aria-hidden="true">
+              ‹
+            </span>
+          </button>
+        </div>
+      )}
 
       <div className="editor-placeholder">
         <div
-          className={`editor-placeholder-top${projectDocuments.length === 0 && !explorerCollapsed ? " editor-placeholder-top-empty" : ""}`}
+          className={`editor-placeholder-top${projectDocuments.length === 0 ? " editor-placeholder-top-empty" : ""}`}
         >
-          {activeProject && explorerCollapsed && (
-            <button
-              className="editor-panel-toggle editor-panel-toggle-left"
-              type="button"
-              aria-label="Show file explorer"
-              title="Show file explorer (⌘B)"
-              onClick={() =>
-                void onPreferencesChange({
-                  ...preferences,
-                  explorerCollapsed: false,
-                })
-              }
-            >
-              Files ›
-            </button>
-          )}
           {projectDocuments.length > 0 ? (
             <>
               <div
