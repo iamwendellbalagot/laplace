@@ -5717,3 +5717,222 @@ kbd,
   font: 11px var(--sans);
   color: var(--muted);
 }
+
+/* Phase 4: Unified Command Palette & Worktree Experiments */
+.command-palette-unified {
+  width: min(680px, calc(100vw - 34px));
+}
+.palette-scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 75%, var(--canvas));
+}
+.palette-scope-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: 11px var(--sans);
+  cursor: pointer;
+}
+.palette-scope-tab.is-active {
+  border-color: color-mix(in srgb, var(--brass) 45%, var(--border));
+  background: var(--surface);
+  color: var(--text);
+}
+.palette-scope-tab kbd {
+  font: 9px var(--mono);
+  color: var(--dim);
+}
+.palette-indexing-note {
+  margin-left: auto;
+  font: 10px var(--mono);
+  color: var(--muted);
+}
+.palette-kind-badge {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: 9px var(--mono);
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.palette-kind-badge.is-rook {
+  border-color: color-mix(in srgb, var(--brass) 45%, var(--border));
+  color: var(--brass);
+}
+.palette-kind-badge.is-symbol {
+  border-color: color-mix(
+    in srgb,
+    var(--info, var(--brass)) 38%,
+    var(--border)
+  );
+}
+
+.rook-target-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rook-target-toggle button {
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: 11px var(--sans);
+  cursor: pointer;
+}
+.rook-target-toggle button.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.rook-target-toggle button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rook-worktree-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--brass) 10%, var(--surface));
+}
+.rook-worktree-banner-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.rook-worktree-count {
+  font: 11px var(--sans);
+  color: var(--muted);
+}
+.rook-worktree-banner-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.rook-worktree-compare-dialog {
+  position: fixed;
+  z-index: 12;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100vw - 40px));
+  height: min(76vh, 660px);
+  transform: translate(-50%, -50%);
+  border: 1px solid color-mix(in srgb, var(--brass) 55%, var(--border));
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 48%);
+  overflow: hidden;
+}
+.rook-worktree-compare-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.rook-worktree-compare-header h2 {
+  margin: 0;
+  font-size: 14px;
+}
+.rook-worktree-compare-header p {
+  margin: 2px 0 0;
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+.rook-worktree-compare-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.rook-worktree-compare-body {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+.rook-worktree-compare-files {
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.rook-worktree-file-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.rook-worktree-file-row.is-active {
+  border-color: color-mix(in srgb, var(--brass) 45%, var(--border));
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.rook-worktree-file-path {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--mono);
+}
+.rook-worktree-file-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 10px var(--sans);
+  color: var(--muted);
+}
+.rook-worktree-compare-diff {
+  min-width: 0;
+  overflow: auto;
+  padding: 10px 14px;
+  background: var(--canvas);
+}
+.rook-worktree-diff-pre {
+  margin: 0;
+  font: 11px/1.55 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rook-diff-line {
+  display: block;
+  padding: 0 4px;
+}
+.rook-diff-line.diff-line-add {
+  background: color-mix(in srgb, #2e8b57 18%, transparent);
+}
+.rook-diff-line.diff-line-del {
+  background: color-mix(in srgb, #c94a4a 18%, transparent);
+}
+.rook-diff-line.diff-line-hunk {
+  color: var(--brass);
+}

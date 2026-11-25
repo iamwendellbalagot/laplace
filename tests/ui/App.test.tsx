@@ -717,6 +717,20 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
         baseRevision: "abc123",
       }),
     ),
+    inspectWorktreeExperiment: vi.fn(
+      async (_projectId: string, worktreePath: string) => ({
+        worktreePath,
+        branch: "laplace/exp-1",
+        files: [],
+        conflictCount: 0,
+      }),
+    ),
+    applyWorktreeExperiment: vi.fn(async () => ({
+      appliedFiles: [],
+      removedWorktree: true,
+    })),
+    discardWorktreeExperiment: vi.fn(async () => true),
+    listProjectSymbols: vi.fn(async () => []),
     listExecutions: vi.fn(async () => []),
     listProjectRecipes: vi.fn(async () => []),
     runProjectRecipe: vi.fn(async () => ({

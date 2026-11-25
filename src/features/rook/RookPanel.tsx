@@ -89,6 +89,9 @@ export function RookPanel({
   onOpenVerify,
   onUndoTurn,
   onToggleExpand,
+  onRookBuildTargetChange,
+  onApplyWorktree,
+  onDiscardWorktree,
 }: {
   service: AppService;
   variant: "docked" | "expanded";
@@ -114,6 +117,11 @@ export function RookPanel({
   onOpenVerify?: () => void;
   onUndoTurn?: (messageIndex: number, touchedFiles: string[]) => Promise<void>;
   onToggleExpand?: () => void;
+  onRookBuildTargetChange?: (
+    target: "direct" | "worktree",
+  ) => Promise<void> | void;
+  onApplyWorktree?: () => Promise<void>;
+  onDiscardWorktree?: () => Promise<void>;
 }) {
   const activeProject = useWorkspaceStore((s) => s.activeProject);
   const documents = useWorkspaceStore((s) => s.documents);
@@ -128,6 +136,9 @@ export function RookPanel({
   const rookTrustPromptPending = useRookStore((s) => s.trustPromptPending);
   const planFirst = useRookStore((s) => s.planFirst);
   const autoVerifyAfterBuild = useRookStore((s) => s.autoVerifyAfterBuild);
+  const buildTarget = useRookStore((s) => s.buildTarget);
+  const activeWorktree = useRookStore((s) => s.activeWorktree);
+  const worktreeSnapshot = useRookStore((s) => s.worktreeSnapshot);
   const providers = useRookStore((s) => s.providers);
   const providerControlsAvailable = useRookStore(
     (s) => s.providerControlsAvailable,
@@ -162,6 +173,11 @@ export function RookPanel({
     (s) => s.setAutoVerifyAfterBuild,
   );
   const setPendingPlanTurn = useRookStore((s) => s.setPendingPlanTurn);
+  const setWorktreeSnapshot = useRookStore((s) => s.setWorktreeSnapshot);
+
+  const [worktreeCompareOpen, setWorktreeCompareOpen] = useState(false);
+  const [worktreeBusy, setWorktreeBusy] = useState(false);
+  const [selectedComparePath, setSelectedComparePath] = useState<string>();
 
   const [runningVerifyTurn, setRunningVerifyTurn] = useState<number | null>(
     null,
@@ -369,7 +385,12 @@ export function RookPanel({
     setVerifyFeedback(undefined);
     try {
       const execution = recipe
-        ? await service.runProjectRecipe(activeProject.id, recipe.name)
+        ? await service.runProjectRecipe(
+            activeProject.id,
+            recipe.name,
+            activeWorktree?.changeId,
+            activeWorktree?.path,
+          )
         : await service.runCheck(activeProject.id, "pnpm", ["test"]);
       setExecutions((items) => [execution, ...items]);
       setVerifyFeedback(
@@ -718,6 +739,127 @@ export function RookPanel({
               >
                 Stay in Ask
               </button>
+            </div>
+          </div>
+        )}
+
+        {activeWorktree && (
+          <div
+            className="rook-worktree-banner"
+            role="region"
+            aria-label="Isolated candidate worktree"
+          >
+            <div className="rook-worktree-banner-info">
+              <span className="status-pill">
+                Worktree · {activeWorktree.branch}
+              </span>
+              <span className="rook-worktree-count">
+                {worktreeSnapshot
+                  ? `${worktreeSnapshot.files.length} changed`
+                  : "Isolated sandbox"}
+              </span>
+              {worktreeSnapshot && worktreeSnapshot.conflictCount > 0 && (
+                <span className="verify-status-pill verify-status-failed">
+                  {worktreeSnapshot.conflictCount} conflict
+                </span>
+              )}
+            </div>
+            <div className="rook-worktree-banner-actions">
+              <button
+                type="button"
+                className="button button-quiet"
+                disabled={worktreeBusy}
+                onClick={async () => {
+                  setWorktreeBusy(true);
+                  try {
+                    const snap = await service.inspectWorktreeExperiment(
+                      activeProject.id,
+                      activeWorktree.path,
+                    );
+                    setWorktreeSnapshot(snap);
+                    setSelectedComparePath(snap.files[0]?.path);
+                    setWorktreeCompareOpen(true);
+                  } catch (failure) {
+                    setError(
+                      errorMessage(
+                        failure,
+                        "Candidate worktree changes could not be inspected.",
+                      ),
+                    );
+                  } finally {
+                    setWorktreeBusy(false);
+                  }
+                }}
+              >
+                Compare
+              </button>
+              {projectRecipes[0] && (
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  disabled={worktreeBusy || Boolean(runId)}
+                  onClick={() => void runTurnVerifyCheck(messages.length)}
+                >
+                  Verify
+                </button>
+              )}
+              {onApplyWorktree && (
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={
+                    worktreeBusy ||
+                    Boolean(runId) ||
+                    (worktreeSnapshot !== null &&
+                      worktreeSnapshot.files.length === 0) ||
+                    (worktreeSnapshot !== null &&
+                      worktreeSnapshot.conflictCount > 0)
+                  }
+                  onClick={async () => {
+                    setWorktreeBusy(true);
+                    try {
+                      await onApplyWorktree();
+                      setWorktreeCompareOpen(false);
+                    } catch (failure) {
+                      setError(
+                        errorMessage(
+                          failure,
+                          "Candidate worktree edits could not be applied.",
+                        ),
+                      );
+                    } finally {
+                      setWorktreeBusy(false);
+                    }
+                  }}
+                >
+                  Apply
+                </button>
+              )}
+              {onDiscardWorktree && (
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  disabled={worktreeBusy || Boolean(runId)}
+                  onClick={async () => {
+                    setWorktreeBusy(true);
+                    try {
+                      await onDiscardWorktree();
+                      setWorktreeCompareOpen(false);
+                    } catch (failure) {
+                      setError(
+                        errorMessage(
+                          failure,
+                          "Candidate worktree could not be discarded.",
+                        ),
+                      );
+                    } finally {
+                      setWorktreeBusy(false);
+                    }
+                  }}
+                >
+                  Discard
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1210,6 +1352,39 @@ export function RookPanel({
                     Plan first
                   </button>
                 )}
+
+                {rookMode === "build" &&
+                  activeProject.isGitRepository &&
+                  onRookBuildTargetChange && (
+                    <div
+                      className="rook-target-toggle"
+                      role="group"
+                      aria-label="Build target"
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={buildTarget === "direct"}
+                        className={buildTarget === "direct" ? "is-active" : ""}
+                        disabled={rookPending || Boolean(runId) || worktreeBusy}
+                        title="Edit files directly in main workspace"
+                        onClick={() => void onRookBuildTargetChange("direct")}
+                      >
+                        Direct
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={buildTarget === "worktree"}
+                        className={
+                          buildTarget === "worktree" ? "is-active" : ""
+                        }
+                        disabled={rookPending || Boolean(runId) || worktreeBusy}
+                        title="Experiment in an isolated candidate Git worktree"
+                        onClick={() => void onRookBuildTargetChange("worktree")}
+                      >
+                        Worktree
+                      </button>
+                    </div>
+                  )}
 
                 {providerControlsAvailable && (
                   <Dialog.Root
@@ -1756,6 +1931,198 @@ export function RookPanel({
           </p>
         )}
       </div>
+
+      {activeWorktree && (
+        <Dialog.Root
+          open={worktreeCompareOpen}
+          onOpenChange={setWorktreeCompareOpen}
+        >
+          <Dialog.Portal>
+            <Dialog.Overlay className="palette-overlay" />
+            <Dialog.Content className="rook-worktree-compare-dialog">
+              <header className="rook-worktree-compare-header">
+                <div>
+                  <Dialog.Title>
+                    Compare candidate worktree vs workspace
+                  </Dialog.Title>
+                  <Dialog.Description>
+                    Branch {activeWorktree.branch} ·{" "}
+                    {worktreeSnapshot?.files.length ?? 0} changed file
+                    {worktreeSnapshot?.files.length === 1 ? "" : "s"}
+                  </Dialog.Description>
+                </div>
+                <div className="rook-worktree-compare-actions">
+                  {projectRecipes[0] && (
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      disabled={worktreeBusy || Boolean(runId)}
+                      onClick={() => void runTurnVerifyCheck(messages.length)}
+                    >
+                      Verify worktree
+                    </button>
+                  )}
+                  {onApplyWorktree && (
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      disabled={
+                        worktreeBusy ||
+                        !worktreeSnapshot?.files.length ||
+                        worktreeSnapshot.conflictCount > 0
+                      }
+                      onClick={async () => {
+                        setWorktreeBusy(true);
+                        try {
+                          await onApplyWorktree();
+                          setWorktreeCompareOpen(false);
+                        } catch (failure) {
+                          setError(
+                            errorMessage(
+                              failure,
+                              "Candidate worktree edits could not be applied.",
+                            ),
+                          );
+                        } finally {
+                          setWorktreeBusy(false);
+                        }
+                      }}
+                    >
+                      Apply to Workspace
+                    </button>
+                  )}
+                  {onDiscardWorktree && (
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      disabled={worktreeBusy}
+                      onClick={async () => {
+                        setWorktreeBusy(true);
+                        try {
+                          await onDiscardWorktree();
+                          setWorktreeCompareOpen(false);
+                        } catch (failure) {
+                          setError(
+                            errorMessage(
+                              failure,
+                              "Candidate worktree could not be discarded.",
+                            ),
+                          );
+                        } finally {
+                          setWorktreeBusy(false);
+                        }
+                      }}
+                    >
+                      Discard
+                    </button>
+                  )}
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="Close comparison"
+                    >
+                      ×
+                    </button>
+                  </Dialog.Close>
+                </div>
+              </header>
+
+              {worktreeSnapshot && worktreeSnapshot.conflictCount > 0 && (
+                <p className="inline-error" role="alert">
+                  {worktreeSnapshot.conflictCount} file
+                  {worktreeSnapshot.conflictCount === 1
+                    ? " has"
+                    : "s have"}{" "}
+                  uncommitted edits in your main workspace. Commit or revert
+                  those files in main before applying.
+                </p>
+              )}
+
+              <div className="rook-worktree-compare-body">
+                <div
+                  className="rook-worktree-compare-files"
+                  role="listbox"
+                  aria-label="Worktree changed files"
+                >
+                  {!worktreeSnapshot || worktreeSnapshot.files.length === 0 ? (
+                    <p className="palette-empty">
+                      No edits recorded in this candidate worktree yet.
+                    </p>
+                  ) : (
+                    worktreeSnapshot.files.map((file) => {
+                      const active =
+                        (selectedComparePath ??
+                          worktreeSnapshot.files[0]?.path) === file.path;
+                      return (
+                        <button
+                          key={file.path}
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`rook-worktree-file-row${active ? " is-active" : ""}`}
+                          onClick={() => setSelectedComparePath(file.path)}
+                        >
+                          <span className="rook-worktree-file-path">
+                            {file.path}
+                          </span>
+                          <span className="rook-worktree-file-meta">
+                            <span>{file.status}</span>
+                            {file.conflictsWithMain && (
+                              <span className="verify-status-pill verify-status-failed">
+                                conflict
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="rook-worktree-compare-diff">
+                  {(() => {
+                    const activeFile = worktreeSnapshot?.files.find(
+                      (item) =>
+                        item.path ===
+                        (selectedComparePath ??
+                          worktreeSnapshot.files[0]?.path),
+                    );
+                    if (!activeFile) {
+                      return (
+                        <p className="palette-empty">
+                          Select a changed file to inspect its unified diff.
+                        </p>
+                      );
+                    }
+                    const diffLines = activeFile.diff
+                      ? activeFile.diff.split("\n")
+                      : ["(No textual diff available)"];
+                    return (
+                      <pre className="rook-worktree-diff-pre">
+                        {diffLines.map((line, i) => {
+                          const cls = line.startsWith("+")
+                            ? "diff-line-add"
+                            : line.startsWith("-")
+                              ? "diff-line-del"
+                              : line.startsWith("@@")
+                                ? "diff-line-hunk"
+                                : "diff-line-ctx";
+                          return (
+                            <span key={i} className={`rook-diff-line ${cls}`}>
+                              {line}
+                            </span>
+                          );
+                        })}
+                      </pre>
+                    );
+                  })()}
+                </div>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
     </section>
   );
 }

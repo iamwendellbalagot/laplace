@@ -122,6 +122,8 @@ pub(crate) struct RookRequest {
     pub(crate) operation_id: String,
     pub(crate) session_id: String,
     pub(crate) workspace_id: String,
+    #[serde(default)]
+    pub(crate) worktree_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -608,6 +610,12 @@ pub(crate) async fn start_rook_session(
             ));
         }
     }
+    let effective_root = match request.worktree_path.as_deref() {
+        Some(wt) if !wt.trim().is_empty() => {
+            git_service::resolve_candidate_worktree_path(&app, &root, wt, &request.operation_id)?
+        }
+        _ => root.clone(),
+    };
     let runtime = rook_runtime::resolve_rook_runtime_for_launch(&app, &request.operation_id)?;
     let app_data_dir = app.path().app_data_dir().map_err(|_| {
         terminal_error(
@@ -618,7 +626,7 @@ pub(crate) async fn start_rook_session(
     })?;
     let workspace_sessions_dir = app_data_dir.join("rook-sessions").join(format!(
         "{:x}",
-        Sha256::digest(root.to_string_lossy().as_bytes())
+        Sha256::digest(effective_root.to_string_lossy().as_bytes())
     ));
     fs::create_dir_all(&workspace_sessions_dir).map_err(|_| {
         terminal_error(
@@ -628,7 +636,7 @@ pub(crate) async fn start_rook_session(
         )
     })?;
     let mut child = spawn_rook(
-        &root,
+        &effective_root,
         &workspace_sessions_dir,
         &runtime,
         mode,
@@ -698,7 +706,7 @@ pub(crate) async fn start_rook_session(
         let prior_session_id: Option<String> = sqlx::query_scalar(
             "SELECT session_id FROM rook_workspace_sessions WHERE project_id = ?",
         )
-        .bind(root.to_string_lossy().as_ref())
+        .bind(effective_root.to_string_lossy().as_ref())
         .fetch_optional(&pool)
         .await
         .map_err(|_| {
@@ -781,7 +789,8 @@ pub(crate) async fn start_rook_session(
             serde_json::json!({"limit":200}),
             &request.operation_id,
         )?;
-        save_rook_workspace_session(&pool, &root, &session_id, &request.operation_id).await?;
+        save_rook_workspace_session(&pool, &effective_root, &session_id, &request.operation_id)
+            .await?;
         (session_id, history["messages"].clone())
     } else {
         let created = rook_rpc(
@@ -917,7 +926,7 @@ pub(crate) async fn start_rook_session(
                 pending,
                 next_request,
                 pending_auth_logins: HashSet::new(),
-                workspace_path: root.clone(),
+                workspace_path: effective_root.clone(),
                 session_storage: host_session_storage,
                 mode,
                 active_run,

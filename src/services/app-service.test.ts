@@ -1118,4 +1118,85 @@ describe("TauriAppService", () => {
       expect.any(Function),
     );
   });
+
+  it("sends Phase 4 candidate worktree experiment and workspace symbols IPC commands", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce([
+        { name: "bootApp", kind: "function", filePath: "src/main.ts", line: 3 },
+      ])
+      .mockResolvedValueOnce({
+        worktreePath: "/tmp/wt",
+        branch: "laplace/exp-1",
+        files: [],
+        conflictCount: 0,
+      })
+      .mockResolvedValueOnce({
+        appliedFiles: ["src/a.ts"],
+        removedWorktree: true,
+      })
+      .mockResolvedValueOnce(true);
+    const service = new TauriAppService();
+
+    const syms = await service.listProjectSymbols("/work/project");
+    expect(syms[0]?.name).toBe("bootApp");
+    await service.inspectWorktreeExperiment("/work/project", "/tmp/wt");
+    await service.applyWorktreeExperiment(
+      "/work/project",
+      "/tmp/wt",
+      "exp-1",
+      true,
+    );
+    await service.discardWorktreeExperiment(
+      "/work/project",
+      "/tmp/wt",
+      "exp-1",
+    );
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "list_project_symbols", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      2,
+      "inspect_worktree_experiment",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          worktreePath: "/tmp/wt",
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "apply_worktree_experiment",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          worktreePath: "/tmp/wt",
+          changeId: "exp-1",
+          removeAfterApply: true,
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      4,
+      "discard_worktree_experiment",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          worktreePath: "/tmp/wt",
+          changeId: "exp-1",
+        },
+      },
+    );
+  });
 });

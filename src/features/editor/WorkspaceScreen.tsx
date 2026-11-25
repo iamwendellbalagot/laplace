@@ -362,6 +362,9 @@ export function WorkspaceScreen({
   onEntryDeleted,
   onRefreshWorkspace,
   onUndoRookTurn,
+  onRookBuildTargetChange,
+  onApplyWorktree,
+  onDiscardWorktree,
 }: {
   service: AppService;
   preferences: UiPreferences;
@@ -463,6 +466,11 @@ export function WorkspaceScreen({
     messageIndex: number,
     touchedFiles: string[],
   ) => Promise<void>;
+  onRookBuildTargetChange?: (
+    target: "direct" | "worktree",
+  ) => Promise<void> | void;
+  onApplyWorktree?: () => Promise<void>;
+  onDiscardWorktree?: () => Promise<void>;
 }) {
   const leftSidebarTab = useAppStore((s) => s.leftSidebarTab);
   const setLeftSidebarTab = useAppStore((s) => s.setLeftSidebarTab);
@@ -605,6 +613,9 @@ export function WorkspaceScreen({
           }}
           onUndoTurn={onUndoRookTurn}
           onToggleExpand={() => setRookExpanded(false)}
+          onRookBuildTargetChange={onRookBuildTargetChange}
+          onApplyWorktree={onApplyWorktree}
+          onDiscardWorktree={onDiscardWorktree}
         />
       </section>
     );
@@ -1298,6 +1309,9 @@ export function WorkspaceScreen({
           onPreviewRookPatch={onPreviewRookPatch}
           onUndoTurn={onUndoRookTurn}
           onToggleRookExpand={() => setRookExpanded(true)}
+          onRookBuildTargetChange={onRookBuildTargetChange}
+          onApplyWorktree={onApplyWorktree}
+          onDiscardWorktree={onDiscardWorktree}
         />
       ) : (
         <button

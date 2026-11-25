@@ -6,6 +6,8 @@ import type {
   RookProvider,
   RookSandboxStatus,
   RookSessionSummary,
+  WorktreeExperimentSnapshot,
+  WorktreeRecord,
 } from "../services/contracts";
 
 export type RookChatTool = {
@@ -52,6 +54,9 @@ interface RookStoreState {
   planFirst: boolean;
   autoVerifyAfterBuild: boolean;
   pendingPlanTurn: PendingPlanTurn | null;
+  buildTarget: "direct" | "worktree";
+  activeWorktree: WorktreeRecord | null;
+  worktreeSnapshot: WorktreeExperimentSnapshot | null;
   providers: RookProvider[];
   providerControlsAvailable: boolean;
   models: RookModel[];
@@ -77,6 +82,9 @@ interface RookStoreState {
   setPlanFirst: (enabled: boolean) => void;
   setAutoVerifyAfterBuild: (enabled: boolean) => void;
   setPendingPlanTurn: (plan: PendingPlanTurn | null) => void;
+  setBuildTarget: (target: "direct" | "worktree") => void;
+  setActiveWorktree: (worktree: WorktreeRecord | null) => void;
+  setWorktreeSnapshot: (snapshot: WorktreeExperimentSnapshot | null) => void;
   setProviders: (
     update: RookProvider[] | ((prev: RookProvider[]) => RookProvider[]),
   ) => void;
@@ -116,6 +124,9 @@ export const useRookStore = create<RookStoreState>((set) => ({
   planFirst: false,
   autoVerifyAfterBuild: false,
   pendingPlanTurn: null,
+  buildTarget: "direct",
+  activeWorktree: null,
+  worktreeSnapshot: null,
   providers: [],
   providerControlsAvailable: false,
   models: [],
@@ -138,6 +149,9 @@ export const useRookStore = create<RookStoreState>((set) => ({
   setAutoVerifyAfterBuild: (autoVerifyAfterBuild) =>
     set({ autoVerifyAfterBuild }),
   setPendingPlanTurn: (pendingPlanTurn) => set({ pendingPlanTurn }),
+  setBuildTarget: (buildTarget) => set({ buildTarget }),
+  setActiveWorktree: (activeWorktree) => set({ activeWorktree }),
+  setWorktreeSnapshot: (worktreeSnapshot) => set({ worktreeSnapshot }),
   setProviders: (update) =>
     set((state) => ({
       providers:
@@ -207,5 +221,8 @@ export const useRookStore = create<RookStoreState>((set) => ({
       queuedSteering: null,
       permissionPending: false,
       pendingPlanTurn: null,
+      buildTarget: "direct",
+      activeWorktree: null,
+      worktreeSnapshot: null,
     }),
 }));

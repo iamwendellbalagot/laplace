@@ -972,3 +972,29 @@ export interface SearchProjectResponse {
   searchedFiles: number;
   truncated: boolean;
 }
+
+export interface ProjectSymbolEntry {
+  name: string;
+  kind: string;
+  filePath: string;
+  line: number;
+}
+
+export interface WorktreeChangedFile {
+  path: string;
+  status: string;
+  conflictsWithMain: boolean;
+  diff: string;
+}
+
+export interface WorktreeExperimentSnapshot {
+  worktreePath: string;
+  branch: string | null;
+  files: WorktreeChangedFile[];
+  conflictCount: number;
+}
+
+export interface WorktreeApplyResult {
+  appliedFiles: string[];
+  removedWorktree: boolean;
+}

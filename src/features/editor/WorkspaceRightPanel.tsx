@@ -51,6 +51,9 @@ export function WorkspaceRightPanel({
   onPreviewRookPatch,
   onUndoTurn,
   onToggleRookExpand,
+  onRookBuildTargetChange,
+  onApplyWorktree,
+  onDiscardWorktree,
 }: {
   service: AppService;
   browserPreview: boolean;
@@ -93,6 +96,11 @@ export function WorkspaceRightPanel({
   onPreviewRookPatch: (code: string) => void;
   onUndoTurn: (messageIndex: number, touchedFiles: string[]) => Promise<void>;
   onToggleRookExpand: () => void;
+  onRookBuildTargetChange?: (
+    target: "direct" | "worktree",
+  ) => Promise<void> | void;
+  onApplyWorktree?: () => Promise<void>;
+  onDiscardWorktree?: () => Promise<void>;
 }) {
   return (
     <aside
@@ -165,6 +173,9 @@ export function WorkspaceRightPanel({
           onOpenVerify={onOpenVerify}
           onUndoTurn={onUndoTurn}
           onToggleExpand={onToggleRookExpand}
+          onRookBuildTargetChange={onRookBuildTargetChange}
+          onApplyWorktree={onApplyWorktree}
+          onDiscardWorktree={onDiscardWorktree}
         />
       ) : (
         <EditorContextInspector

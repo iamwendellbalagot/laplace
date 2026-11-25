@@ -86,6 +86,8 @@ pub(crate) struct RecipeRequest {
     pub(crate) recipe_name: String,
     #[serde(default)]
     pub(crate) change_id: Option<String>,
+    #[serde(default)]
+    pub(crate) worktree_path: Option<String>,
 }
 
 pub(crate) fn validate_check_request(request: &RunCheckRequest) -> Result<(), IpcError> {
@@ -876,7 +878,13 @@ pub(crate) async fn run_project_recipe(
             ));
         }
     }
-    let recipes = read_project_recipes(&root, &request.operation_id)?.ok_or_else(|| {
+    let target_root = match request.worktree_path.as_deref() {
+        Some(wt) if !wt.trim().is_empty() => {
+            git_service::resolve_candidate_worktree_path(&app, &root, wt, &request.operation_id)?
+        }
+        _ => root.clone(),
+    };
+    let recipes = read_project_recipes(&target_root, &request.operation_id)?.ok_or_else(|| {
         terminal_error(
             "recipe_missing",
             "No approved project recipes file was found.",
@@ -891,9 +899,9 @@ pub(crate) async fn run_project_recipe(
         )
     })?;
     let cwd = if let Some(relative) = &recipe.cwd {
-        resolve_project_directory(&root.to_string_lossy(), relative)?
+        resolve_project_directory(&target_root.to_string_lossy(), relative)?
     } else {
-        root.clone()
+        target_root.clone()
     };
     if VERIFY_RUNNING
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

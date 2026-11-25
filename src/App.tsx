@@ -12,6 +12,7 @@ import type {
   AppEvent,
   EditorDiagnostic,
   ProjectSummary,
+  ProjectSymbolEntry,
   ReviewDiffBaseline,
   RookContextChip,
   RookMode,
@@ -147,6 +148,11 @@ export function App({ service, browserPreview = false }: AppProps) {
   const rookPermissionPending = useRookStore((s) => s.permissionPending);
 
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
+  const [paletteSymbols, setPaletteSymbols] = useState<ProjectSymbolEntry[]>(
+    [],
+  );
+  const [paletteLoadingExtras, setPaletteLoadingExtras] = useState(false);
   const [savingPreferences, setSavingPreferences] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string>();
   const [rookDevSettings, setRookDevSettings] =
@@ -584,6 +590,7 @@ export function App({ service, browserPreview = false }: AppProps) {
     project: ProjectSummary,
     targetMode: RookMode = rookMode,
     forceRestart = false,
+    worktreePathOverride?: string | null,
   ) {
     const store = useRookStore.getState();
     if (rookStarting.current || (store.session && !forceRestart)) return;
@@ -595,9 +602,21 @@ export function App({ service, browserPreview = false }: AppProps) {
     let sessionId: string | undefined;
     try {
       const id = (sessionId = crypto.randomUUID().replaceAll("-", ""));
+      const effectiveWorktreePath =
+        targetMode === "build"
+          ? worktreePathOverride !== undefined
+            ? worktreePathOverride || undefined
+            : store.buildTarget === "worktree"
+              ? store.activeWorktree?.path
+              : undefined
+          : undefined;
       const result =
         targetMode === "build"
-          ? await service.startRookBuild(id, project.path)
+          ? await service.startRookBuild(
+              id,
+              project.path,
+              effectiveWorktreePath,
+            )
           : await service.startRookAsk(id, project.path);
       if (rookProjectId.current !== project.id) {
         await service.stopRookAsk(id).catch(() => undefined);
@@ -688,6 +707,97 @@ export function App({ service, browserPreview = false }: AppProps) {
       store.setError(
         errorMessage(failure, "Project trust could not be enabled."),
       );
+    }
+  }
+
+  async function switchRookBuildTarget(target: "direct" | "worktree") {
+    const store = useRookStore.getState();
+    if (
+      !activeProject ||
+      !activeProject.isGitRepository ||
+      rookStarting.current ||
+      Boolean(store.runId) ||
+      target === store.buildTarget
+    ) {
+      return;
+    }
+    store.setError(undefined);
+    try {
+      let wt = store.activeWorktree;
+      if (target === "worktree" && !wt) {
+        const changeId = `exp-${crypto.randomUUID().slice(0, 8)}`;
+        wt = await service.createCandidateWorktree(activeProject.id, changeId);
+        store.setActiveWorktree(wt);
+        store.setWorktreeSnapshot(null);
+      }
+      store.setBuildTarget(target);
+      const previousSession = store.session;
+      store.setSession(undefined);
+      if (previousSession) {
+        await service.stopRookAsk(previousSession).catch(() => undefined);
+      }
+      await ensureRookSession(
+        activeProject,
+        "build",
+        true,
+        target === "worktree" ? wt?.path : null,
+      );
+    } catch (failure) {
+      store.setError(
+        errorMessage(
+          failure,
+          "Candidate worktree target could not be toggled.",
+        ),
+      );
+    }
+  }
+
+  async function applyActiveWorktree() {
+    const store = useRookStore.getState();
+    const wt = store.activeWorktree;
+    if (!activeProject || !wt || Boolean(store.runId)) return;
+    await service.applyWorktreeExperiment(
+      activeProject.id,
+      wt.path,
+      wt.changeId,
+      true,
+    );
+    store.setActiveWorktree(null);
+    store.setWorktreeSnapshot(null);
+    store.setBuildTarget("direct");
+    const previousSession = store.session;
+    store.setSession(undefined);
+    if (previousSession) {
+      await service.stopRookAsk(previousSession).catch(() => undefined);
+    }
+    await ensureRookSession(activeProject, "build", true, null);
+    await syncWorkspaceFromDisk(activeProject.id);
+    void service
+      .gitStatus(activeProject.id)
+      .then(setEditorGitStatus)
+      .catch(() => undefined);
+    void refreshWorkspacePulse(activeProject.id);
+  }
+
+  async function discardActiveWorktree() {
+    const store = useRookStore.getState();
+    const wt = store.activeWorktree;
+    if (!activeProject || !wt || Boolean(store.runId)) return;
+    await service.discardWorktreeExperiment(
+      activeProject.id,
+      wt.path,
+      wt.changeId,
+    );
+    store.setActiveWorktree(null);
+    store.setWorktreeSnapshot(null);
+    if (store.buildTarget === "worktree") {
+      store.setBuildTarget("direct");
+      const previousSession = store.session;
+      store.setSession(undefined);
+      if (previousSession) {
+        await service.stopRookAsk(previousSession).catch(() => undefined);
+      }
+      await ensureRookSession(activeProject, "build", true, null);
     }
   }
 
@@ -1032,6 +1142,8 @@ export function App({ service, browserPreview = false }: AppProps) {
           store.setRunId(undefined);
           if (rookModeRef.current === "build" && rookProjectId.current) {
             const projectId = rookProjectId.current;
+            const activeWt =
+              store.buildTarget === "worktree" ? store.activeWorktree : null;
             const settledMessage = useRookStore
               .getState()
               .messages.find(
@@ -1051,7 +1163,12 @@ export function App({ service, browserPreview = false }: AppProps) {
               const recipes = useWorkspaceStore.getState().projectRecipes;
               if (recipes.length === 0) return;
               void service
-                .runProjectRecipe(projectId, recipes[0].name)
+                .runProjectRecipe(
+                  projectId,
+                  recipes[0].name,
+                  activeWt?.changeId,
+                  activeWt?.path,
+                )
                 .then((execution) => {
                   useWorkspaceStore
                     .getState()
@@ -1060,25 +1177,26 @@ export function App({ service, browserPreview = false }: AppProps) {
                 })
                 .catch(() => undefined);
             };
-            void syncWorkspaceFromDisk(projectId);
-            if (activeProject?.isGitRepository) {
+            if (activeWt) {
               void service
-                .getWorkspaceReview(projectId)
-                .then((review) => {
-                  if (review.changedSinceCheckpoint.length > 0 && runId) {
+                .inspectWorktreeExperiment(projectId, activeWt.path)
+                .then((snap) => {
+                  useRookStore.getState().setWorktreeSnapshot(snap);
+                  const changedPaths = snap.files.map((item) => item.path);
+                  if (changedPaths.length > 0 && runId) {
                     updateAssistant(runId, (message) => ({
                       ...message,
                       touchedFiles: Array.from(
                         new Set([
                           ...(message.touchedFiles ?? []),
-                          ...review.changedSinceCheckpoint,
+                          ...changedPaths,
                         ]),
                       ),
                     }));
                   }
                   const totalTouched =
                     (settledMessage?.touchedFiles?.length ?? 0) +
-                    review.changedSinceCheckpoint.length;
+                    changedPaths.length;
                   runAutoVerify(totalTouched > 0);
                 })
                 .catch(() =>
@@ -1087,7 +1205,35 @@ export function App({ service, browserPreview = false }: AppProps) {
                   ),
                 );
             } else {
-              runAutoVerify((settledMessage?.touchedFiles?.length ?? 0) > 0);
+              void syncWorkspaceFromDisk(projectId);
+              if (activeProject?.isGitRepository) {
+                void service
+                  .getWorkspaceReview(projectId)
+                  .then((review) => {
+                    if (review.changedSinceCheckpoint.length > 0 && runId) {
+                      updateAssistant(runId, (message) => ({
+                        ...message,
+                        touchedFiles: Array.from(
+                          new Set([
+                            ...(message.touchedFiles ?? []),
+                            ...review.changedSinceCheckpoint,
+                          ]),
+                        ),
+                      }));
+                    }
+                    const totalTouched =
+                      (settledMessage?.touchedFiles?.length ?? 0) +
+                      review.changedSinceCheckpoint.length;
+                    runAutoVerify(totalTouched > 0);
+                  })
+                  .catch(() =>
+                    runAutoVerify(
+                      (settledMessage?.touchedFiles?.length ?? 0) > 0,
+                    ),
+                  );
+              } else {
+                runAutoVerify((settledMessage?.touchedFiles?.length ?? 0) > 0);
+              }
             }
           }
           const queued = store.queuedSteering;
@@ -1760,30 +1906,57 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
-  const commands = useMemo<PaletteCommand[]>(
-    () => [
+  useEffect(() => {
+    if (!paletteOpen || !activeProject || browserPreview) return;
+    let cancelled = false;
+    setPaletteLoadingExtras(true);
+    void Promise.allSettled([
+      service.listProjectFiles(activeProject.id),
+      service.listProjectSymbols(activeProject.id),
+    ]).then(([filesRes, symbolsRes]) => {
+      if (cancelled) return;
+      if (filesRes.status === "fulfilled") setPaletteFiles(filesRes.value);
+      if (symbolsRes.status === "fulfilled")
+        setPaletteSymbols(symbolsRes.value);
+      setPaletteLoadingExtras(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [paletteOpen, activeProject, browserPreview, service]);
+
+  const commands = useMemo<PaletteCommand[]>(() => {
+    const activeDoc = documents.find(
+      (doc) =>
+        doc.key === activeDocumentKey && doc.projectId === activeProject?.id,
+    );
+    const items: PaletteCommand[] = [
       ...navigationItems.map((item) => ({
         id: `navigate-${item.id}`,
         label: `Go to ${item.label}`,
         description: item.description,
+        category: "action" as const,
         run: () => navigateTracked(item.id),
       })),
-      {
-        id: "focus-rook",
-        label: "Focus Docked Rook Co-pilot",
-        description: "Open and focus Rook beside the Editor (⌘L)",
-        run: () => focusDockedRook(),
-      },
       {
         id: "search-workspace",
         label: "Search Workspace Text",
         description: "Find code across repository files (⌘⇧F)",
+        category: "action",
         run: () => useAppStore.getState().focusWorkspaceSearch(),
+      },
+      {
+        id: "open-quick-open",
+        label: "Quick Open File",
+        description: "Jump to a workspace file (⌘P)",
+        category: "action",
+        run: () => void openQuickOpen(),
       },
       {
         id: "open-verify-drawer",
         label: "Open Verification Drawer",
         description: "Run checks and inspect evidence in Workspace",
+        category: "action",
         run: () => {
           setBottomDrawerTab("verify");
           navigateTracked("editor");
@@ -1793,6 +1966,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         id: "open-project-pulse",
         label: "Go to Project Pulse",
         description: "Workspace overview and recent sessions",
+        category: "action",
         run: () => navigateTracked("home"),
       },
       {
@@ -1801,6 +1975,7 @@ export function App({ service, browserPreview = false }: AppProps) {
           ? "Expand navigation rail"
           : "Collapse navigation rail",
         description: "Toggle the left navigation rail",
+        category: "action",
         run: () =>
           void savePreferences({
             ...preferences,
@@ -1813,6 +1988,7 @@ export function App({ service, browserPreview = false }: AppProps) {
           ? "Show co-pilot & context panel"
           : "Hide co-pilot & context panel",
         description: "Toggle the Workspace right panel",
+        category: "action",
         run: () =>
           void savePreferences({
             ...preferences,
@@ -1823,16 +1999,178 @@ export function App({ service, browserPreview = false }: AppProps) {
         id: "toggle-theme",
         label: `Use ${preferences.theme === "dark" ? "light" : "dark"} theme`,
         description: "Change the application color treatment",
+        category: "action",
         run: () =>
           void savePreferences({
             ...preferences,
             theme: preferences.theme === "dark" ? "light" : "dark",
           }),
       },
-    ],
+      // Rook commands
+      {
+        id: "rook-focus-docked",
+        label: "Focus Docked Rook Co-pilot",
+        description: "Open and focus Rook beside the Editor (⌘L)",
+        category: "rook",
+        run: () => focusDockedRook(),
+      },
+      {
+        id: "rook-toggle-expanded",
+        label: useAppStore.getState().rookExpanded
+          ? "Dock Rook Co-pilot"
+          : "Expand Rook Focus View",
+        description: "Toggle full-width Rook panel (⌘⇧R)",
+        category: "rook",
+        run: () => {
+          setPage("editor");
+          setRookExpanded(!useAppStore.getState().rookExpanded);
+        },
+      },
+      {
+        id: "rook-new-session",
+        label: "Rook: New Conversation",
+        description: "Start a fresh Rook session thread",
+        category: "rook",
+        run: () => {
+          focusDockedRook();
+          void startNewRookChat();
+        },
+      },
+      {
+        id: "rook-switch-ask-build",
+        label:
+          rookMode === "build"
+            ? "Rook: Switch to Ask mode"
+            : "Rook: Switch to Build mode",
+        description: "Toggle read-only Ask vs mutating Build",
+        category: "rook",
+        run: () => {
+          focusDockedRook();
+          void switchRookMode(rookMode === "build" ? "ask" : "build");
+        },
+      },
+      {
+        id: "rook-toggle-plan-first",
+        label: "Rook: Toggle Plan First",
+        description: "Require Build plan confirmation before editing files",
+        category: "rook",
+        run: () => {
+          useRookStore
+            .getState()
+            .setPlanFirst(!useRookStore.getState().planFirst);
+          focusDockedRook();
+        },
+      },
+    ];
+
+    if (activeProject?.isGitRepository) {
+      items.push(
+        {
+          id: "rook-toggle-worktree",
+          label:
+            useRookStore.getState().buildTarget === "worktree"
+              ? "Rook: Return Build to Direct Workspace"
+              : "Rook: Build in Isolated Worktree",
+          description: "Run candidate Build edits safely in a Git worktree",
+          category: "rook",
+          run: () => {
+            focusDockedRook();
+            if (useRookStore.getState().mode !== "build") {
+              void switchRookMode("build").then(() =>
+                switchRookBuildTarget("worktree"),
+              );
+            } else {
+              void switchRookBuildTarget(
+                useRookStore.getState().buildTarget === "worktree"
+                  ? "direct"
+                  : "worktree",
+              );
+            }
+          },
+        },
+        {
+          id: "open-workspace-review-palette",
+          label: "Review: Inspect Workspace Diff & Blast Radius",
+          description: "Compare edits against HEAD or checkpoint",
+          category: "action",
+          run: () => openWorkspaceReview(undefined, "head"),
+        },
+      );
+    }
+
+    if (activeDoc) {
+      items.push({
+        id: "rook-ask-active-file",
+        label: `Rook: Ask about ${activeDoc.path.split("/").at(-1) ?? activeDoc.path}`,
+        description: `Attach ${activeDoc.path} context chip to Rook`,
+        category: "rook",
+        run: () => {
+          attachContextChipToRook(
+            {
+              id: `file-${activeDoc.path}`,
+              label: activeDoc.path,
+              kind: "file",
+              filePath: activeDoc.path,
+              content: activeDoc.content.slice(0, 16_000),
+            },
+            "ask",
+          );
+        },
+      });
+    }
+
+    if (activeProject && !browserPreview) {
+      for (const path of paletteFiles) {
+        const name = path.split("/").at(-1) ?? path;
+        items.push({
+          id: `file:${path}`,
+          label: name,
+          description: path,
+          category: "file",
+          keywords: path,
+          supportsSplit: true,
+          run: (options) => {
+            setRookExpanded(false);
+            navigateTo("editor");
+            void openProjectFile(path, { split: options?.split });
+          },
+        });
+      }
+
+      for (const sym of paletteSymbols) {
+        items.push({
+          id: `sym:${sym.filePath}:${sym.line}:${sym.name}`,
+          label: sym.name,
+          description: `${sym.kind} · ${sym.filePath}:${sym.line}`,
+          category: "symbol",
+          keywords: `${sym.filePath} ${sym.kind}`,
+          supportsSplit: true,
+          run: (options) => {
+            setRookExpanded(false);
+            navigateTo("editor");
+            void openProjectFile(sym.filePath, {
+              line: sym.line,
+              column: 1,
+              split: options?.split,
+            });
+          },
+        });
+      }
+    }
+
+    return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [preferences, service],
-  );
+  }, [
+    preferences,
+    service,
+    activeProject?.id,
+    activeDocumentKey,
+    documents,
+    browserPreview,
+    rookMode,
+    paletteFiles,
+    paletteSymbols,
+  ]);
 
   const platformShortcut = /Mac|iPhone|iPad/.test(navigator.platform)
     ? "⌘⇧P"
@@ -2290,6 +2628,9 @@ export function App({ service, browserPreview = false }: AppProps) {
         void refreshWorkspacePulse(activeProject.id);
       }}
       onUndoRookTurn={undoRookTurn}
+      onRookBuildTargetChange={switchRookBuildTarget}
+      onApplyWorktree={applyActiveWorktree}
+      onDiscardWorktree={discardActiveWorktree}
     />
   );
 
@@ -2355,8 +2696,9 @@ export function App({ service, browserPreview = false }: AppProps) {
           </Dialog.Trigger>
           <CommandPalette
             commands={commands}
-            onRun={(command) => {
-              command.run();
+            loadingExtras={paletteLoadingExtras}
+            onRun={(command, options) => {
+              command.run(options);
               setPaletteOpen(false);
             }}
           />

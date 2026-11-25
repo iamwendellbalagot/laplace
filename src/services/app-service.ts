@@ -31,6 +31,9 @@ import {
   type ChangeRecord,
   type ChangeStatus,
   type WorktreeRecord,
+  type WorktreeExperimentSnapshot,
+  type WorktreeApplyResult,
+  type ProjectSymbolEntry,
   type ExecutionRecord,
   type BehaviorComparisonRecord,
   type NormalizationRules,
@@ -304,6 +307,21 @@ export interface AppService {
     projectId: string,
     changeId: string,
   ): Promise<WorktreeRecord>;
+  inspectWorktreeExperiment(
+    projectId: string,
+    worktreePath: string,
+  ): Promise<WorktreeExperimentSnapshot>;
+  applyWorktreeExperiment(
+    projectId: string,
+    worktreePath: string,
+    changeId: string,
+    removeAfterApply?: boolean,
+  ): Promise<WorktreeApplyResult>;
+  discardWorktreeExperiment(
+    projectId: string,
+    worktreePath: string,
+    changeId: string,
+  ): Promise<boolean>;
   runCheck(
     projectId: string,
     program: string,
@@ -334,6 +352,7 @@ export interface AppService {
     projectId: string,
     recipeName: string,
     changeId?: string,
+    worktreePath?: string,
   ): Promise<ExecutionRecord>;
   cancelCheck(): Promise<void>;
   startRookAsk(
@@ -343,7 +362,9 @@ export interface AppService {
   startRookBuild(
     sessionId: string,
     workspaceId: string,
+    worktreePath?: string,
   ): Promise<RookInitResponse>;
+  listProjectSymbols(projectId: string): Promise<ProjectSymbolEntry[]>;
   listRookSessions(sessionId: string): Promise<RookSessionSummary[]>;
   newRookSession(sessionId: string, mode?: RookMode): Promise<string>;
   loadRookSession(sessionId: string, rookSessionId: string): Promise<void>;
@@ -901,6 +922,68 @@ export class TauriAppService implements AppService {
     });
   }
 
+  async inspectWorktreeExperiment(
+    projectId: string,
+    worktreePath: string,
+  ): Promise<WorktreeExperimentSnapshot> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      worktreePath,
+    };
+    try {
+      return await invoke<WorktreeExperimentSnapshot>(
+        "inspect_worktree_experiment",
+        { request },
+      );
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async applyWorktreeExperiment(
+    projectId: string,
+    worktreePath: string,
+    changeId: string,
+    removeAfterApply = true,
+  ): Promise<WorktreeApplyResult> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      worktreePath,
+      changeId,
+      removeAfterApply,
+    };
+    try {
+      return await invoke<WorktreeApplyResult>("apply_worktree_experiment", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async discardWorktreeExperiment(
+    projectId: string,
+    worktreePath: string,
+    changeId: string,
+  ): Promise<boolean> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      worktreePath,
+      changeId,
+    };
+    try {
+      return await invoke<boolean>("discard_worktree_experiment", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
   async runCheck(
     projectId: string,
     program: string,
@@ -1016,6 +1099,7 @@ export class TauriAppService implements AppService {
     projectId: string,
     recipeName: string,
     changeId?: string,
+    worktreePath?: string,
   ): Promise<ExecutionRecord> {
     const request = {
       schemaVersion: IPC_SCHEMA_VERSION,
@@ -1023,6 +1107,7 @@ export class TauriAppService implements AppService {
       projectId,
       recipeName,
       changeId: changeId ?? null,
+      ...(worktreePath ? { worktreePath } : {}),
     };
     try {
       return await invoke<ExecutionRecord>("run_project_recipe", { request });
@@ -1060,12 +1145,14 @@ export class TauriAppService implements AppService {
   async startRookBuild(
     sessionId: string,
     workspaceId: string,
+    worktreePath?: string,
   ): Promise<RookInitResponse> {
     const request = {
       schemaVersion: IPC_SCHEMA_VERSION,
       operationId: crypto.randomUUID(),
       sessionId,
       workspaceId,
+      ...(worktreePath ? { worktreePath } : {}),
     };
     try {
       return await invoke("start_rook_build", { request });
@@ -1452,6 +1539,17 @@ export class TauriAppService implements AppService {
     const request = this.workspaceRequest(projectId);
     try {
       return await invoke<string[]>("list_project_files", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async listProjectSymbols(projectId: string): Promise<ProjectSymbolEntry[]> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<ProjectSymbolEntry[]>("list_project_symbols", {
+        request,
+      });
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

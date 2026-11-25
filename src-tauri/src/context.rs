@@ -106,6 +106,15 @@ pub(crate) struct FileContextSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ProjectSymbolEntry {
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) file_path: String,
+    pub(crate) line: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct FileHistoryCommit {
     pub(crate) sha: String,
     pub(crate) short_sha: String,
@@ -2242,6 +2251,63 @@ pub(crate) async fn get_system_context(
     get_system_context_with_pool(&pool, index.inner(), &root, &request.operation_id).await
 }
 
+pub(crate) fn list_project_symbols_at(
+    index: &ContextIndexState,
+    root: &Path,
+    _operation_id: &str,
+) -> Result<Vec<ProjectSymbolEntry>, IpcError> {
+    let workspace_key = root.to_string_lossy().into_owned();
+    let (token, generation) = index.begin_generation(&workspace_key);
+    let (cache, _cancelled) = update_workspace_index(root, index, &token, generation);
+    let mut entries = Vec::new();
+    for (file_path, file) in &cache.files {
+        for sym in &file.symbols {
+            entries.push(ProjectSymbolEntry {
+                name: sym.name.clone(),
+                kind: sym.kind.clone(),
+                file_path: file_path.clone(),
+                line: sym.line,
+            });
+        }
+    }
+    entries.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| a.file_path.cmp(&b.file_path))
+            .then_with(|| a.line.cmp(&b.line))
+    });
+    entries.truncate(1500);
+    Ok(entries)
+}
+
+#[tauri::command]
+pub(crate) async fn list_project_symbols(
+    index: tauri::State<'_, ContextIndexState>,
+    request: GitRequest,
+) -> Result<Vec<ProjectSymbolEntry>, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_context_request",
+            "The workspace symbols request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_project_root(&request.project_id, &request.operation_id)?;
+    let state = index.inner().clone();
+    let op = request.operation_id.clone();
+    tokio::task::spawn_blocking(move || list_project_symbols_at(&state, &root, &op))
+        .await
+        .map_err(|_| {
+            terminal_error(
+                "context_index_failed",
+                "Workspace symbols indexing was interrupted.",
+                &request.operation_id,
+            )
+        })?
+}
+
 #[tauri::command]
 pub(crate) async fn cancel_context_index(
     index: tauri::State<'_, ContextIndexState>,
@@ -2658,6 +2724,40 @@ mod context_tests {
         assert_eq!(history.notes[0].body, "Check trim edge case");
         assert_eq!(history.checks.len(), 1);
         assert_eq!(history.checks[0].command, "pnpm test");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_project_symbols_across_workspace() {
+        let root = std::env::temp_dir().join(format!(
+            "laplace-symbols-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/auth.ts"),
+            "export function rotateSessionToken() { return true; }\nexport interface SessionClaim { id: string }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn verify_claim() -> bool { true }\n",
+        )
+        .unwrap();
+
+        let state = ContextIndexState::default();
+        let symbols = list_project_symbols_at(&state, &root, "op-sym-1").unwrap();
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "rotateSessionToken" && s.file_path == "src/auth.ts"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "SessionClaim" && s.file_path == "src/auth.ts"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "verify_claim" && s.file_path == "src/lib.rs"));
 
         let _ = fs::remove_dir_all(&root);
     }
