@@ -2,6 +2,40 @@ use super::*;
 
 pub(crate) static ROOK_DEV_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(any(debug_assertions, test))]
+pub(crate) fn write_rook_build_hmr_guard_at(
+    marker_path: &Path,
+    workspace_root: &Path,
+    active: bool,
+    timestamp_ms: i64,
+) {
+    let payload = if active {
+        serde_json::json!({
+            "workspacePath": workspace_root.to_string_lossy(),
+            "active": true,
+            "updatedAtMs": timestamp_ms,
+        })
+    } else {
+        serde_json::json!({
+            "workspacePath": workspace_root.to_string_lossy(),
+            "active": false,
+            "endedAtMs": timestamp_ms,
+        })
+    };
+    if let Ok(bytes) = serde_json::to_vec(&payload) {
+        let _ = fs::write(marker_path, bytes);
+    }
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn write_dev_rook_build_hmr_guard(workspace_root: &Path, active: bool) {
+    let marker_path = std::env::temp_dir().join("laplace-dev-rook-build.json");
+    write_rook_build_hmr_guard_at(&marker_path, workspace_root, active, now_ms());
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn write_dev_rook_build_hmr_guard(_workspace_root: &Path, _active: bool) {}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum RookMode {
@@ -41,6 +75,10 @@ impl Drop for RookProcesses {
                     if let Ok(mut pending) = process.pending.lock() {
                         pending.clear();
                     }
+                    if process.mode == RookMode::Build && process.active_run.load(Ordering::SeqCst)
+                    {
+                        write_dev_rook_build_hmr_guard(&process.workspace_path, false);
+                    }
                     let _ = process.child.kill();
                 }
             }
@@ -78,6 +116,9 @@ impl RookProcesses {
                 pending.clear();
             }
             process.active_run.store(false, Ordering::SeqCst);
+            if process.mode == RookMode::Build {
+                write_dev_rook_build_hmr_guard(&process.workspace_path, false);
+            }
             let _ = process.child.kill();
         }
         Ok(())
@@ -817,6 +858,7 @@ pub(crate) async fn start_rook_session(
     let process_id = request.session_id.clone();
     let pending_events = Arc::clone(&pending);
     let active_run_events = Arc::clone(&active_run);
+    let event_workspace_path = effective_root.clone();
     std::thread::spawn(move || {
         let mut line = String::new();
         while std::io::BufRead::read_line(&mut stdout, &mut line).unwrap_or(0) > 0 {
@@ -824,6 +866,9 @@ pub(crate) async fn start_rook_session(
                 if value["method"] == "session/update" {
                     if value["params"]["event"]["type"] == "run_settled" {
                         active_run_events.store(false, Ordering::SeqCst);
+                        if mode == RookMode::Build {
+                            write_dev_rook_build_hmr_guard(&event_workspace_path, false);
+                        }
                     }
                     if let Some(request_id) = value["params"]["requestId"].as_u64() {
                         if let Ok(mut waiting) = pending_events.lock() {
@@ -840,6 +885,9 @@ pub(crate) async fn start_rook_session(
                         if let Some(sender) = waiting.remove(&id) {
                             if value["result"]["settled"] == true {
                                 active_run_events.store(false, Ordering::SeqCst);
+                                if mode == RookMode::Build {
+                                    write_dev_rook_build_hmr_guard(&event_workspace_path, false);
+                                }
                                 if let Some(run_id) = value["result"]["runId"].as_str() {
                                     let settled = serde_json::json!({
                                         "method": "session/update",
@@ -855,6 +903,9 @@ pub(crate) async fn start_rook_session(
                                 }
                             } else if !value["error"].is_null() {
                                 active_run_events.store(false, Ordering::SeqCst);
+                                if mode == RookMode::Build {
+                                    write_dev_rook_build_hmr_guard(&event_workspace_path, false);
+                                }
                             }
                             let _ = sender.send(value);
                             line.clear();
@@ -881,6 +932,9 @@ pub(crate) async fn start_rook_session(
             line.clear();
         }
         active_run_events.store(false, Ordering::SeqCst);
+        if mode == RookMode::Build {
+            write_dev_rook_build_hmr_guard(&event_workspace_path, false);
+        }
     });
     let response = RookInitResponse {
         session_id: request.session_id.clone(),
@@ -1159,8 +1213,14 @@ pub(crate) async fn prompt_rook_ask(
         })?
         .insert(request_id, tokio::sync::oneshot::channel().0);
     process.active_run.store(true, Ordering::SeqCst);
+    if process.mode == RookMode::Build {
+        write_dev_rook_build_hmr_guard(&process.workspace_path, true);
+    }
     if writeln!(process.stdin, "{}", prompt).is_err() {
         process.active_run.store(false, Ordering::SeqCst);
+        if process.mode == RookMode::Build {
+            write_dev_rook_build_hmr_guard(&process.workspace_path, false);
+        }
         if let Ok(mut pending) = process.pending.lock() {
             pending.remove(&request_id);
         }
@@ -1450,6 +1510,9 @@ pub(crate) async fn rook_provider_request(
         if request.method == "session/prompt" {
             params["context"] = serde_json::json!("");
             process.active_run.store(true, Ordering::SeqCst);
+            if process.mode == RookMode::Build {
+                write_dev_rook_build_hmr_guard(&process.workspace_path, true);
+            }
         } else if request.method == "session/new" && params.get("mode").is_none() {
             params["mode"] = serde_json::json!(process.mode.as_str());
         }
@@ -1458,6 +1521,9 @@ pub(crate) async fn rook_provider_request(
         if writeln!(process.stdin, "{message}").is_err() {
             if request.method == "session/prompt" {
                 process.active_run.store(false, Ordering::SeqCst);
+                if process.mode == RookMode::Build {
+                    write_dev_rook_build_hmr_guard(&process.workspace_path, false);
+                }
             }
             process
                 .pending
@@ -1646,4 +1712,35 @@ pub(crate) async fn open_rook_auth_url(
                 &request.operation_id,
             )
         })
+}
+
+#[cfg(test)]
+mod rook_build_hmr_guard_tests {
+    use super::*;
+
+    #[test]
+    fn writes_active_and_inactive_hmr_guard_markers() {
+        let marker = std::env::temp_dir().join(format!(
+            "laplace-hmr-guard-test-{}-{}.json",
+            std::process::id(),
+            now_ms()
+        ));
+        let workspace = PathBuf::from("/tmp/laplace-self");
+
+        write_rook_build_hmr_guard_at(&marker, &workspace, true, 1_000);
+        let active_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        assert_eq!(active_json["workspacePath"], "/tmp/laplace-self");
+        assert_eq!(active_json["active"], true);
+        assert_eq!(active_json["updatedAtMs"], 1_000);
+
+        write_rook_build_hmr_guard_at(&marker, &workspace, false, 2_500);
+        let inactive_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        assert_eq!(inactive_json["workspacePath"], "/tmp/laplace-self");
+        assert_eq!(inactive_json["active"], false);
+        assert_eq!(inactive_json["endedAtMs"], 2_500);
+
+        let _ = fs::remove_file(&marker);
+    }
 }

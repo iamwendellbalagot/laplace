@@ -18,6 +18,7 @@
     "test:ui": "vitest run tests/ui",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:self": "LAPLACE_NO_HMR=1 tauri dev --no-watch",
     "tauri:build": "tauri build --no-bundle",
     "stage:rook": "node scripts/stage-rook-runtime.mjs",
     "tauri:bundle": "tauri build --config src-tauri/tauri.bundle.conf.json"

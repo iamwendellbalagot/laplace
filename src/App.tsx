@@ -1026,7 +1026,7 @@ export function App({ service, browserPreview = false }: AppProps) {
             ) {
               return items.map((m) =>
                 m.role === "assistant" && m.runId === runId
-                  ? { ...m, activeTextStart: m.text.length }
+                  ? { ...m, activeTextStart: (m.text ?? "").length }
                   : m,
               );
             }
@@ -1122,22 +1122,25 @@ export function App({ service, browserPreview = false }: AppProps) {
         ) {
           updateAssistant(runId, (message) => ({
             ...message,
-            text: message.text + (agentEvent.text as string),
+            text: (message.text ?? "") + (agentEvent.text as string),
           }));
         } else if (
           agentEvent?.type === "message_complete" &&
           typeof agentEvent.text === "string"
         ) {
-          updateAssistant(runId, (message) => ({
-            ...message,
-            text: `${message.text.slice(0, message.activeTextStart ?? message.text.length)}${agentEvent.text as string}`,
-            activeTextStart: undefined,
-            stopReason:
-              typeof agentEvent.stopReason === "string"
-                ? agentEvent.stopReason
-                : undefined,
-            incomplete: false,
-          }));
+          updateAssistant(runId, (message) => {
+            const currentText = message.text ?? "";
+            return {
+              ...message,
+              text: `${currentText.slice(0, message.activeTextStart ?? currentText.length)}${agentEvent.text as string}`,
+              activeTextStart: undefined,
+              stopReason:
+                typeof agentEvent.stopReason === "string"
+                  ? agentEvent.stopReason
+                  : undefined,
+              incomplete: false,
+            };
+          });
         } else if (
           agentEvent?.type === "error" &&
           typeof agentEvent.message === "string"

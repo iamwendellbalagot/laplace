@@ -962,8 +962,8 @@ export function RookPanel({
                             ? "✓"
                             : "!"}
                       </span>
-                      <span>{tool.name.replaceAll("_", " ")}</span>
-                      <span>{tool.summary}</span>
+                      <span>{(tool.name ?? "tool").replaceAll("_", " ")}</span>
+                      <span>{tool.summary ?? ""}</span>
                       <span>
                         {tool.status === "running"
                           ? "Checking"
