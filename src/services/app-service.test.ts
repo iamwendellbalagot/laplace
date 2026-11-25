@@ -762,6 +762,11 @@ describe("TauriAppService", () => {
       .mockResolvedValueOnce({
         projectId: "/work/project",
         changedFilesCount: 1,
+      })
+      .mockResolvedValueOnce({
+        projectId: "/work/project",
+        baseline: "last_review",
+        totalSteps: 1,
       });
     const service = new TauriAppService();
 
@@ -788,6 +793,7 @@ describe("TauriAppService", () => {
       expectedModified: "line 1\nline TWO\n",
     });
     await service.getWorkspaceImpactReport("/work/project", ["src/a.ts"]);
+    await service.getWorkspaceWalkthrough("/work/project", "last_review");
 
     expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_workspace_review", {
       request: {
@@ -828,6 +834,18 @@ describe("TauriAppService", () => {
         allowUnverified: false,
       },
     });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      7,
+      "get_workspace_walkthrough",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          baseline: "last_review",
+        },
+      },
+    );
   });
 
   it("sends Plan 13 context lens, history, and confirmation IPC commands", async () => {

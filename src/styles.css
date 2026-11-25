@@ -6431,3 +6431,293 @@ kbd,
 .rook-diff-line.diff-line-hunk {
   color: var(--brass);
 }
+
+/* Semantic Change Walkthrough */
+.review-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--canvas);
+}
+.review-view-btn {
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.review-view-btn:hover {
+  color: var(--text);
+}
+.review-view-btn.is-active {
+  background: var(--surface-raised);
+  color: var(--accent);
+}
+.walkthrough-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+.walkthrough-progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--canvas);
+}
+.walkthrough-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.walkthrough-progress-head strong {
+  color: var(--text);
+}
+.walkthrough-progress-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.walkthrough-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 160ms ease;
+}
+.walkthrough-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.walkthrough-filter-btn {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.walkthrough-filter-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface-raised);
+}
+.walkthrough-narrate-btn {
+  width: 100%;
+  justify-content: center;
+  font-size: 11px;
+}
+.walkthrough-chapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.walkthrough-chapter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.walkthrough-step-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 6px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--canvas);
+}
+.walkthrough-step-card:hover {
+  border-color: var(--border);
+}
+.walkthrough-step-card.is-active {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+.walkthrough-step-card.is-reviewed {
+  opacity: 0.72;
+}
+.walkthrough-check-btn {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 10.5px var(--mono);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.walkthrough-check-btn.is-reviewed {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.walkthrough-step-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+.walkthrough-step-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.walkthrough-step-title {
+  font: 500 11.5px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.walkthrough-step-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.walkthrough-step-meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.walkthrough-step-delta {
+  flex: 0 0 auto;
+  font: 10px var(--mono);
+  color: var(--muted);
+}
+.walkthrough-risk-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+.walkthrough-risk-dot.is-high {
+  background: var(--red);
+}
+.walkthrough-risk-dot.is-medium {
+  background: var(--brass);
+}
+.walkthrough-risk-dot.is-low {
+  background: var(--border);
+}
+.walkthrough-risk-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+.walkthrough-risk-pill.is-high {
+  border-color: var(--red);
+  color: var(--red);
+}
+.walkthrough-risk-pill.is-medium {
+  border-color: var(--brass);
+  color: var(--brass-light);
+}
+.walkthrough-empty-filter {
+  margin: 8px 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.walkthrough-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+.walkthrough-banner-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.walkthrough-banner-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.walkthrough-step-counter {
+  font: 600 11px var(--mono);
+  color: var(--accent);
+}
+.walkthrough-banner-symbol {
+  font: 600 12px var(--mono);
+  color: var(--text);
+}
+.walkthrough-banner-heading code {
+  font: 11px var(--mono);
+  color: var(--brass-light);
+}
+.walkthrough-banner-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.walkthrough-banner-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.walkthrough-causal-reason {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.walkthrough-banner-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.walkthrough-commit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}

@@ -41,6 +41,7 @@ import {
   type ChangeReviewSnapshot,
   type WorkspaceReviewSnapshot,
   type WorkspaceImpactReport,
+  type WorkspaceWalkthrough,
   type RevertTarget,
   type GitDiffPair,
   type ReviewComment,
@@ -253,6 +254,10 @@ export interface AppService {
     projectId: string,
     changedPaths?: string[],
   ): Promise<WorkspaceImpactReport>;
+  getWorkspaceWalkthrough?(
+    projectId: string,
+    baseline?: ReviewDiffBaseline,
+  ): Promise<WorkspaceWalkthrough>;
   commitWorkspaceReview(
     projectId: string,
     selectedPaths: string[],
@@ -725,6 +730,23 @@ export class TauriAppService implements AppService {
         "get_workspace_impact_report",
         { request },
       );
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getWorkspaceWalkthrough(
+    projectId: string,
+    baseline: ReviewDiffBaseline = "head",
+  ): Promise<WorkspaceWalkthrough> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      baseline,
+    };
+    try {
+      return await invoke<WorkspaceWalkthrough>("get_workspace_walkthrough", {
+        request,
+      });
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

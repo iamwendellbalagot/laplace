@@ -37,6 +37,7 @@ mod rook_runtime;
 mod rook_service;
 mod runs;
 mod search;
+mod walkthrough;
 mod watcher;
 mod workspace_state;
 
@@ -1712,6 +1713,7 @@ pub fn run() {
             review::prepare_change_integration,
             review::execute_change_integration,
             impact::get_workspace_impact_report,
+            walkthrough::get_workspace_walkthrough,
             git_service::git_status,
             git_service::git_diff,
             git_service::create_candidate_worktree,

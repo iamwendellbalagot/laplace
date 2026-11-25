@@ -19,8 +19,10 @@ import type {
   RookContextChip,
   RookMode,
   UiPreferences,
+  WalkthroughStep,
   WorkspaceImpactReport,
   WorkspaceReviewSnapshot,
+  WorkspaceWalkthrough,
 } from "../../services/contracts";
 import {
   comparisonOutcomeLabel,
@@ -28,6 +30,14 @@ import {
   formatComparisonMarkdown,
 } from "../compare/comparison-helpers";
 import { computeDiffHunks, impactRoleLabel, type DiffHunk } from "./diff-hunks";
+import { WalkthroughSidebar } from "./WalkthroughSidebar";
+import {
+  findNextUnreviewedStep,
+  formatWalkthroughNarrationPrompt,
+  reconcileReviewedSteps,
+  stepDisplayTitle,
+  type WalkthroughFilter,
+} from "./walkthrough-helpers";
 
 const ReviewDiffEditor = lazy(() =>
   import("./ReviewDiffEditor").then((module) => ({
@@ -102,7 +112,17 @@ export function WorkspaceReviewScreen({
 }) {
   const [snapshot, setSnapshot] = useState<WorkspaceReviewSnapshot>();
   const [impactReport, setImpactReport] = useState<WorkspaceImpactReport>();
-  const [groupByRole, setGroupByRole] = useState(true);
+  const [walkthrough, setWalkthrough] = useState<WorkspaceWalkthrough>();
+  const [viewMode, setViewMode] = useState<"walkthrough" | "role" | "flat">(
+    "walkthrough",
+  );
+  const [activeStepId, setActiveStepId] = useState<string>();
+  const [reviewedStepIds, setReviewedStepIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [reviewedDigest, setReviewedDigest] = useState<string>();
+  const [walkthroughFilter, setWalkthroughFilter] =
+    useState<WalkthroughFilter>("all");
   const [activeHunkIndex, setActiveHunkIndex] = useState(0);
   const [revealModifiedLine, setRevealModifiedLine] = useState<number>();
   const [loading, setLoading] = useState(true);
@@ -167,12 +187,41 @@ export function WorkspaceReviewScreen({
       } else {
         setImpactReport(undefined);
       }
+      if (next.changedFiles.length > 0 && service.getWorkspaceWalkthrough) {
+        const effectiveBaseline: ReviewDiffBaseline =
+          diffBaseline === "last_review" && next.lastCheckpointDigest
+            ? "last_review"
+            : "head";
+        void service
+          .getWorkspaceWalkthrough(project.id, effectiveBaseline)
+          .then((wt) => {
+            setWalkthrough(wt);
+            setReviewedStepIds((prev) =>
+              reconcileReviewedSteps(
+                reviewedDigest,
+                wt.sourceDigest,
+                prev,
+                wt.steps,
+              ),
+            );
+            setReviewedDigest(wt.sourceDigest);
+            setActiveStepId((current) =>
+              current && wt.steps.some((s) => s.id === current)
+                ? current
+                : wt.steps[0]?.id,
+            );
+          })
+          .catch(() => setWalkthrough(undefined));
+      } else {
+        setWalkthrough(undefined);
+        setActiveStepId(undefined);
+      }
     } catch (failure) {
       setError(errorText(failure, "Working-tree review could not be loaded."));
     } finally {
       setLoading(false);
     }
-  }, [diffBaseline, project.id, service]);
+  }, [diffBaseline, project.id, reviewedDigest, service]);
 
   useEffect(() => {
     void loadReview();
@@ -259,6 +308,154 @@ export function WorkspaceReviewScreen({
   }, [activeHunkIndex, hunks.length]);
 
   const activeHunk = hunks[activeHunkIndex];
+
+  const hasWalkthrough = Boolean(walkthrough && walkthrough.steps.length > 0);
+  const inWalkthroughMode = viewMode === "walkthrough" && hasWalkthrough;
+
+  const activeWalkthroughStep = useMemo(() => {
+    if (!inWalkthroughMode || !walkthrough) return undefined;
+    return (
+      walkthrough.steps.find((s) => s.id === activeStepId) ??
+      walkthrough.steps[0]
+    );
+  }, [activeStepId, inWalkthroughMode, walkthrough]);
+
+  const activeWalkthroughChapter = useMemo(() => {
+    if (!activeWalkthroughStep || !walkthrough) return undefined;
+    return walkthrough.chapters.find(
+      (c) => c.id === activeWalkthroughStep.chapter,
+    );
+  }, [activeWalkthroughStep, walkthrough]);
+
+  const selectWalkthroughStep = useCallback((step: WalkthroughStep) => {
+    setActiveStepId(step.id);
+    setSelectedFile(step.filePath);
+    setActiveHunkIndex(step.hunkIndex ?? 0);
+    setRevealModifiedLine(Math.max(1, step.newStart || step.oldStart || 1));
+  }, []);
+
+  // Keep selectedFile and diff scroll synced when entering Walkthrough mode or changing steps
+  useEffect(() => {
+    if (!inWalkthroughMode || !activeWalkthroughStep) return;
+    if (selectedFile !== activeWalkthroughStep.filePath) {
+      setSelectedFile(activeWalkthroughStep.filePath);
+    }
+    const targetHunk = activeWalkthroughStep.hunkIndex ?? 0;
+    setActiveHunkIndex(targetHunk);
+    setRevealModifiedLine(
+      Math.max(
+        1,
+        activeWalkthroughStep.newStart || activeWalkthroughStep.oldStart || 1,
+      ),
+    );
+  }, [activeWalkthroughStep, inWalkthroughMode, selectedFile]);
+
+  const handleToggleStepReviewed = useCallback((stepId: string) => {
+    setReviewedStepIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(stepId)) {
+        next.delete(stepId);
+      } else {
+        next.add(stepId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleMarkReviewedAndNext = useCallback(() => {
+    if (!walkthrough || !activeWalkthroughStep) return;
+    const nextReviewed = new Set(reviewedStepIds);
+    nextReviewed.add(activeWalkthroughStep.id);
+    setReviewedStepIds(nextReviewed);
+    const nextStep = findNextUnreviewedStep(
+      walkthrough.steps,
+      nextReviewed,
+      activeWalkthroughStep.id,
+    );
+    if (nextStep) {
+      selectWalkthroughStep(nextStep);
+    } else {
+      const currentIdx = walkthrough.steps.findIndex(
+        (s) => s.id === activeWalkthroughStep.id,
+      );
+      const fallbackNext = walkthrough.steps[currentIdx + 1];
+      if (fallbackNext) {
+        selectWalkthroughStep(fallbackNext);
+      }
+    }
+  }, [
+    activeWalkthroughStep,
+    reviewedStepIds,
+    selectWalkthroughStep,
+    walkthrough,
+  ]);
+
+  const handleStepOffset = useCallback(
+    (delta: -1 | 1) => {
+      if (!walkthrough || walkthrough.steps.length === 0) return;
+      const currentIdx = activeWalkthroughStep
+        ? walkthrough.steps.findIndex((s) => s.id === activeWalkthroughStep.id)
+        : 0;
+      const nextIdx = Math.max(
+        0,
+        Math.min(walkthrough.steps.length - 1, currentIdx + delta),
+      );
+      const target = walkthrough.steps[nextIdx];
+      if (target) {
+        selectWalkthroughStep(target);
+      }
+    },
+    [activeWalkthroughStep, selectWalkthroughStep, walkthrough],
+  );
+
+  useEffect(() => {
+    if (!inWalkthroughMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable ||
+          target.classList.contains("inputarea"))
+      ) {
+        return;
+      }
+      if (event.key === "n" || event.key === "]") {
+        event.preventDefault();
+        handleStepOffset(1);
+      } else if (event.key === "p" || event.key === "[") {
+        event.preventDefault();
+        handleStepOffset(-1);
+      } else if (event.key === "r") {
+        event.preventDefault();
+        handleMarkReviewedAndNext();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleMarkReviewedAndNext, handleStepOffset, inWalkthroughMode]);
+
+  function handleNarrateWalkthroughInRook() {
+    if (!walkthrough || walkthrough.steps.length === 0) return;
+    const prompt = formatWalkthroughNarrationPrompt(walkthrough);
+    if (onAskRookWithContext) {
+      onAskRookWithContext(
+        {
+          id: `walkthrough:${walkthrough.sourceDigest.slice(0, 10)}`,
+          kind: "context_bundle",
+          label: `Walkthrough (${walkthrough.totalSteps} steps)`,
+          content: prompt,
+        },
+        prompt,
+        "ask",
+      );
+    } else {
+      onSendNotesToRook(prompt);
+    }
+  }
 
   async function handleRevertHunk(hunk: DiffHunk) {
     if (!selectedFile || !diffPair || inlineDirty) return;
@@ -541,7 +738,11 @@ export function WorkspaceReviewScreen({
     : undefined;
 
   const groupedVisibleFiles = useMemo(() => {
-    if (!groupByRole || !impactReport || impactReport.files.length === 0) {
+    if (
+      viewMode !== "role" ||
+      !impactReport ||
+      impactReport.files.length === 0
+    ) {
       return [{ role: "all", label: "Changed files", files: visibleFiles }];
     }
     const order = [
@@ -570,7 +771,7 @@ export function WorkspaceReviewScreen({
         label: impactRoleLabel(role),
         files,
       }));
-  }, [fileAnalysisByPath, groupByRole, impactReport, visibleFiles]);
+  }, [fileAnalysisByPath, impactReport, viewMode, visibleFiles]);
 
   const projectChecks = useMemo(
     () => executions.filter((item) => item.projectId === project.id),
@@ -727,76 +928,117 @@ export function WorkspaceReviewScreen({
                     }
                   }}
                 />
-                <span>Changed ({visibleFiles.length})</span>
+                <span>
+                  {inWalkthroughMode
+                    ? "Walkthrough"
+                    : `Changed (${visibleFiles.length})`}
+                </span>
               </div>
-              {impactReport && impactReport.files.length > 0 && (
+              <div
+                className="review-view-switch"
+                role="group"
+                aria-label="Review view mode"
+              >
+                {hasWalkthrough && (
+                  <button
+                    type="button"
+                    className={`review-view-btn${viewMode === "walkthrough" ? " is-active" : ""}`}
+                    onClick={() => setViewMode("walkthrough")}
+                  >
+                    Story
+                  </button>
+                )}
+                {impactReport && impactReport.files.length > 0 && (
+                  <button
+                    type="button"
+                    className={`review-view-btn${viewMode === "role" ? " is-active" : ""}`}
+                    onClick={() => setViewMode("role")}
+                  >
+                    Role
+                  </button>
+                )}
                 <button
                   type="button"
-                  className={`button button-quiet${groupByRole ? " is-active" : ""}`}
-                  onClick={() => setGroupByRole((v) => !v)}
+                  className={`review-view-btn${viewMode === "flat" ? " is-active" : ""}`}
+                  onClick={() => setViewMode("flat")}
                 >
-                  {groupByRole ? "By role" : "Flat"}
+                  Flat
                 </button>
-              )}
+              </div>
             </div>
-            <div
-              className="review-file-list"
-              role="list"
-              aria-label="Changed files list"
-            >
-              {groupedVisibleFiles.map((group) => (
-                <div className="review-role-group" key={group.role}>
-                  {groupedVisibleFiles.length > 1 && (
-                    <span className="review-role-heading">
-                      {group.label} ({group.files.length})
-                    </span>
-                  )}
-                  {group.files.map((file) => {
-                    const checked = selectedPaths.includes(file.path);
-                    const active = selectedFile === file.path;
-                    const fileImpact = fileAnalysisByPath.get(file.path);
-                    const baseName = file.path.split("/").at(-1) ?? file.path;
-                    const dirName = file.path.includes("/")
-                      ? file.path.slice(0, file.path.lastIndexOf("/"))
-                      : "";
-                    return (
-                      <div
-                        key={file.path}
-                        className={`review-file-row${active ? " is-active" : ""}`}
-                        role="listitem"
-                        title={fileImpact?.summary ?? file.path}
-                      >
-                        <input
-                          type="checkbox"
-                          aria-label={`Include ${file.path} in commit`}
-                          checked={checked}
-                          onChange={(event) =>
-                            setSelectedPaths((current) =>
-                              event.target.checked
-                                ? [...new Set([...current, file.path])]
-                                : current.filter((item) => item !== file.path),
-                            )
-                          }
-                        />
-                        <button
-                          type="button"
-                          className="review-file-select"
-                          onClick={() => setSelectedFile(file.path)}
+            {inWalkthroughMode && walkthrough ? (
+              <WalkthroughSidebar
+                walkthrough={walkthrough}
+                activeStepId={activeWalkthroughStep?.id}
+                reviewedIds={reviewedStepIds}
+                filter={walkthroughFilter}
+                onFilterChange={setWalkthroughFilter}
+                onSelectStep={selectWalkthroughStep}
+                onToggleReviewed={handleToggleStepReviewed}
+                onNarrateInRook={handleNarrateWalkthroughInRook}
+              />
+            ) : (
+              <div
+                className="review-file-list"
+                role="list"
+                aria-label="Changed files list"
+              >
+                {groupedVisibleFiles.map((group) => (
+                  <div className="review-role-group" key={group.role}>
+                    {groupedVisibleFiles.length > 1 && (
+                      <span className="review-role-heading">
+                        {group.label} ({group.files.length})
+                      </span>
+                    )}
+                    {group.files.map((file) => {
+                      const checked = selectedPaths.includes(file.path);
+                      const active = selectedFile === file.path;
+                      const fileImpact = fileAnalysisByPath.get(file.path);
+                      const baseName = file.path.split("/").at(-1) ?? file.path;
+                      const dirName = file.path.includes("/")
+                        ? file.path.slice(0, file.path.lastIndexOf("/"))
+                        : "";
+                      return (
+                        <div
+                          key={file.path}
+                          className={`review-file-row${active ? " is-active" : ""}`}
+                          role="listitem"
+                          title={fileImpact?.summary ?? file.path}
                         >
-                          <span className="review-file-badge">
-                            {fileBadge(file.indexStatus, file.worktreeStatus)}
-                          </span>
-                          <span className="review-file-name">
-                            <strong>{baseName}</strong>
-                            {dirName && <small>{dirName}</small>}
-                          </span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
+                          <input
+                            type="checkbox"
+                            aria-label={`Include ${file.path} in commit`}
+                            checked={checked}
+                            onChange={(event) =>
+                              setSelectedPaths((current) =>
+                                event.target.checked
+                                  ? [...new Set([...current, file.path])]
+                                  : current.filter(
+                                      (item) => item !== file.path,
+                                    ),
+                              )
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="review-file-select"
+                            onClick={() => setSelectedFile(file.path)}
+                          >
+                            <span className="review-file-badge">
+                              {fileBadge(file.indexStatus, file.worktreeStatus)}
+                            </span>
+                            <span className="review-file-name">
+                              <strong>{baseName}</strong>
+                              {dirName && <small>{dirName}</small>}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
           </aside>
         )}
 
@@ -862,98 +1104,232 @@ export function WorkspaceReviewScreen({
                   )}
                 </div>
               </div>
-              {diffPair?.kind === "text" && hunks.length > 0 && activeHunk && (
+              {inWalkthroughMode && activeWalkthroughStep && walkthrough ? (
                 <div
-                  className="review-hunk-bar"
+                  className="walkthrough-banner"
                   role="region"
-                  aria-label="Hunk controls"
+                  aria-label="Active walkthrough step"
                 >
-                  <div className="review-hunk-meta">
-                    <strong>
-                      Hunk {activeHunkIndex + 1} of {hunks.length}
-                    </strong>
-                    <code>{activeHunk.header}</code>
-                  </div>
-                  <div className="review-hunk-actions">
-                    <button
-                      type="button"
-                      className="button button-quiet"
-                      disabled={activeHunkIndex <= 0}
-                      title="Previous hunk"
-                      onClick={() => {
-                        const prev = Math.max(0, activeHunkIndex - 1);
-                        setActiveHunkIndex(prev);
-                        setRevealModifiedLine(
-                          Math.max(
-                            1,
-                            hunks[prev].newStart || hunks[prev].oldStart,
-                          ),
-                        );
-                      }}
-                    >
-                      ↑ Prev
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-quiet"
-                      disabled={activeHunkIndex >= hunks.length - 1}
-                      title="Next hunk"
-                      onClick={() => {
-                        const next = Math.min(
-                          hunks.length - 1,
-                          activeHunkIndex + 1,
-                        );
-                        setActiveHunkIndex(next);
-                        setRevealModifiedLine(
-                          Math.max(
-                            1,
-                            hunks[next].newStart || hunks[next].oldStart,
-                          ),
-                        );
-                      }}
-                    >
-                      ↓ Next
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-quiet"
-                      disabled={actionPending || inlineDirty}
-                      title={
-                        inlineDirty
-                          ? "Save or discard inline diff edits first"
-                          : "Revert only this hunk"
-                      }
-                      onClick={() => void handleRevertHunk(activeHunk)}
-                    >
-                      Revert hunk
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-quiet"
-                      onClick={() =>
-                        setCommentLine(
-                          String(
-                            Math.max(
-                              1,
-                              activeHunk.newStart || activeHunk.oldStart || 1,
-                            ),
-                          ),
-                        )
-                      }
-                    >
-                      Note line
-                    </button>
-                    {onAskRookWithContext && (
+                  <div className="walkthrough-banner-top">
+                    <div className="walkthrough-banner-heading">
+                      <span className="walkthrough-step-counter">
+                        Step {activeWalkthroughStep.order} of{" "}
+                        {walkthrough.totalSteps}
+                      </span>
+                      {activeWalkthroughChapter && (
+                        <span className="status-pill">
+                          {activeWalkthroughChapter.title}
+                        </span>
+                      )}
+                      <strong className="walkthrough-banner-symbol">
+                        {stepDisplayTitle(activeWalkthroughStep)}
+                      </strong>
+                      {activeWalkthroughStep.header && (
+                        <code>{activeWalkthroughStep.header}</code>
+                      )}
+                    </div>
+                    <div className="walkthrough-banner-nav">
                       <button
                         type="button"
                         className="button button-quiet"
-                        onClick={() => handleAskRookAboutHunk(activeHunk)}
+                        disabled={activeWalkthroughStep.order <= 1}
+                        title="Previous step (p)"
+                        onClick={() => handleStepOffset(-1)}
                       >
-                        Ask Rook why ↗
+                        ← Prev
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        title="Mark reviewed and jump to next unreviewed step (r)"
+                        onClick={handleMarkReviewedAndNext}
+                      >
+                        {reviewedStepIds.has(activeWalkthroughStep.id)
+                          ? "Next →"
+                          : "✓ Reviewed & Next"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="walkthrough-banner-bottom">
+                    <p className="walkthrough-causal-reason">
+                      {activeWalkthroughStep.causalReason}
+                    </p>
+                    <div className="walkthrough-banner-chips">
+                      {activeWalkthroughStep.riskReasons.map((reason) => (
+                        <span
+                          key={reason}
+                          className={`walkthrough-risk-pill is-${activeWalkthroughStep.riskLevel}`}
+                        >
+                          {reason}
+                        </span>
+                      ))}
+                      <label className="walkthrough-commit-toggle">
+                        <input
+                          type="checkbox"
+                          checked={selectedPaths.includes(
+                            activeWalkthroughStep.filePath,
+                          )}
+                          onChange={(event) =>
+                            setSelectedPaths((current) =>
+                              event.target.checked
+                                ? [
+                                    ...new Set([
+                                      ...current,
+                                      activeWalkthroughStep.filePath,
+                                    ]),
+                                  ]
+                                : current.filter(
+                                    (item) =>
+                                      item !== activeWalkthroughStep.filePath,
+                                  ),
+                            )
+                          }
+                        />
+                        <span>In commit</span>
+                      </label>
+                      {activeHunk && (
+                        <>
+                          <button
+                            type="button"
+                            className="button button-quiet"
+                            disabled={actionPending || inlineDirty}
+                            title={
+                              inlineDirty
+                                ? "Save or discard inline diff edits first"
+                                : "Revert only this hunk"
+                            }
+                            onClick={() => void handleRevertHunk(activeHunk)}
+                          >
+                            Revert hunk
+                          </button>
+                          <button
+                            type="button"
+                            className="button button-quiet"
+                            onClick={() =>
+                              setCommentLine(
+                                String(
+                                  Math.max(
+                                    1,
+                                    activeHunk.newStart ||
+                                      activeHunk.oldStart ||
+                                      1,
+                                  ),
+                                ),
+                              )
+                            }
+                          >
+                            Note line
+                          </button>
+                          {onAskRookWithContext && (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              onClick={() => handleAskRookAboutHunk(activeHunk)}
+                            >
+                              Ask Rook why ↗
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
+              ) : (
+                diffPair?.kind === "text" &&
+                hunks.length > 0 &&
+                activeHunk && (
+                  <div
+                    className="review-hunk-bar"
+                    role="region"
+                    aria-label="Hunk controls"
+                  >
+                    <div className="review-hunk-meta">
+                      <strong>
+                        Hunk {activeHunkIndex + 1} of {hunks.length}
+                      </strong>
+                      <code>{activeHunk.header}</code>
+                    </div>
+                    <div className="review-hunk-actions">
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        disabled={activeHunkIndex <= 0}
+                        title="Previous hunk"
+                        onClick={() => {
+                          const prev = Math.max(0, activeHunkIndex - 1);
+                          setActiveHunkIndex(prev);
+                          setRevealModifiedLine(
+                            Math.max(
+                              1,
+                              hunks[prev].newStart || hunks[prev].oldStart,
+                            ),
+                          );
+                        }}
+                      >
+                        ↑ Prev
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        disabled={activeHunkIndex >= hunks.length - 1}
+                        title="Next hunk"
+                        onClick={() => {
+                          const next = Math.min(
+                            hunks.length - 1,
+                            activeHunkIndex + 1,
+                          );
+                          setActiveHunkIndex(next);
+                          setRevealModifiedLine(
+                            Math.max(
+                              1,
+                              hunks[next].newStart || hunks[next].oldStart,
+                            ),
+                          );
+                        }}
+                      >
+                        ↓ Next
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        disabled={actionPending || inlineDirty}
+                        title={
+                          inlineDirty
+                            ? "Save or discard inline diff edits first"
+                            : "Revert only this hunk"
+                        }
+                        onClick={() => void handleRevertHunk(activeHunk)}
+                      >
+                        Revert hunk
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        onClick={() =>
+                          setCommentLine(
+                            String(
+                              Math.max(
+                                1,
+                                activeHunk.newStart || activeHunk.oldStart || 1,
+                              ),
+                            ),
+                          )
+                        }
+                      >
+                        Note line
+                      </button>
+                      {onAskRookWithContext && (
+                        <button
+                          type="button"
+                          className="button button-quiet"
+                          onClick={() => handleAskRookAboutHunk(activeHunk)}
+                        >
+                          Ask Rook why ↗
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
               )}
               <div className="review-diff-surface">
                 {diffLoading ? (

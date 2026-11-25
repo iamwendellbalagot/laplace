@@ -1002,3 +1002,56 @@ export interface WorktreeApplyResult {
   appliedFiles: string[];
   removedWorktree: boolean;
 }
+
+export type WalkthroughChapterId =
+  | "foundation"
+  | "core"
+  | "consumers"
+  | "verification"
+  | "config"
+  | string;
+
+export type WalkthroughRiskLevel = "high" | "medium" | "low";
+
+export interface WalkthroughStep {
+  id: string;
+  order: number;
+  chapter: WalkthroughChapterId;
+  filePath: string;
+  role: string;
+  fileStatus: string;
+  symbolName: string | null;
+  symbolKind: string | null;
+  hunkIndex: number | null;
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  addedLines: number;
+  removedLines: number;
+  header: string | null;
+  causalReason: string;
+  riskLevel: WalkthroughRiskLevel;
+  riskReasons: string[];
+  directCallersCount: number;
+  untouchedCallersCount: number;
+  relatedTestsCount: number;
+}
+
+export interface WalkthroughChapter {
+  id: WalkthroughChapterId;
+  title: string;
+  summary: string;
+  stepIds: string[];
+}
+
+export interface WorkspaceWalkthrough {
+  projectId: string;
+  baseline: ReviewDiffBaseline | string;
+  sourceDigest: string;
+  totalSteps: number;
+  highRiskCount: number;
+  chapters: WalkthroughChapter[];
+  steps: WalkthroughStep[];
+  truncated: boolean;
+}

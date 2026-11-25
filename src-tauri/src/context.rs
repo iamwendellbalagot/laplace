@@ -271,7 +271,7 @@ pub(crate) struct CachedIndexedFile {
     size_bytes: u64,
     pub(crate) digest: String,
     pub(crate) language: String,
-    symbols: Vec<FileSymbol>,
+    pub(crate) symbols: Vec<FileSymbol>,
     pub(crate) raw_imports: Vec<RawImport>,
     pub(crate) has_inline_rust_tests: bool,
     cached_text: Option<String>,

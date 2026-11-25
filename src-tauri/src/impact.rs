@@ -141,7 +141,7 @@ pub(crate) fn classify_file_role(relative_path: &str) -> &'static str {
     "ui"
 }
 
-fn is_sensitive_config_path(relative_path: &str) -> bool {
+pub(crate) fn is_sensitive_config_path(relative_path: &str) -> bool {
     let lower = relative_path.to_ascii_lowercase();
     let name = Path::new(&lower)
         .file_name()
