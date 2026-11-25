@@ -572,6 +572,15 @@ export function WorkspaceScreen({
   const drawerDrag = useRef<{ y: number; height: number } | undefined>(
     undefined,
   );
+  const editorTabsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const activeTab =
+      editorTabsRef.current?.querySelector(".editor-tab-active");
+    if (activeTab instanceof HTMLElement) {
+      activeTab.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
+  }, [activeDocumentKey, projectDocuments.length]);
 
   useEffect(() => {
     setDraftWidth(preferences.inspectorWidth);
@@ -905,50 +914,81 @@ export function WorkspaceScreen({
           {projectDocuments.length > 0 ? (
             <>
               <div
+                ref={editorTabsRef}
                 className="editor-tabs"
                 role="tablist"
                 aria-label="Open files"
+                onWheel={(event) => {
+                  const el = event.currentTarget;
+                  if (
+                    el.scrollWidth > el.clientWidth &&
+                    Math.abs(event.deltaY) > Math.abs(event.deltaX)
+                  ) {
+                    el.scrollLeft += event.deltaY;
+                  }
+                }}
               >
-                {projectDocuments.map((document) => (
-                  <div
-                    className={`editor-tab${document.key === activeDocumentKey ? " editor-tab-active" : ""}`}
-                    key={document.key}
-                    role="presentation"
-                  >
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={document.key === activeDocumentKey}
-                      title={document.path}
-                      onClick={() => {
-                        onSelectDocument(document.key);
-                      }}
+                {projectDocuments.map((document) => {
+                  const fileName = document.path.split(/[\\/]/).at(-1);
+                  const isActive = document.key === activeDocumentKey;
+                  const isDirty = document.content !== document.savedContent;
+                  return (
+                    <div
+                      className={`editor-tab${isActive ? " editor-tab-active" : ""}`}
+                      key={document.key}
+                      role="presentation"
                     >
-                      {document.path.split(/[\\/]/).at(-1)}
-                      {document.externalChange && (
-                        <span
-                          className="editor-tab-conflict"
-                          aria-label="changed on disk"
-                          title="Changed on disk"
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        title={document.path}
+                        onClick={() => {
+                          onSelectDocument(document.key);
+                        }}
+                      >
+                        <span className="editor-tab-label">{fileName}</span>
+                        {document.externalChange && (
+                          <span
+                            className="editor-tab-conflict"
+                            aria-label="changed on disk"
+                            title="Changed on disk"
+                          >
+                            ↻
+                          </span>
+                        )}
+                        {isDirty && (
+                          <span
+                            className="editor-tab-dirty"
+                            aria-label="unsaved changes"
+                            title="Unsaved changes"
+                          />
+                        )}
+                      </button>
+                      <button
+                        className="editor-tab-close"
+                        type="button"
+                        aria-label={`Close ${fileName}`}
+                        onClick={() => onCloseDocument(document)}
+                      >
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          aria-hidden="true"
                         >
-                          {" "}
-                          ↻
-                        </span>
-                      )}
-                      {document.content !== document.savedContent && (
-                        <span aria-label="unsaved changes"> ●</span>
-                      )}
-                    </button>
-                    <button
-                      className="editor-tab-close"
-                      type="button"
-                      aria-label={`Close ${document.path.split(/[\\/]/).at(-1)}`}
-                      onClick={() => onCloseDocument(document)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
+                          <path
+                            d="M3 3L9 9M9 3L3 9"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
               <div className="editor-top-actions">
                 {!browserPreview && activeProject && focusedDocument && (
