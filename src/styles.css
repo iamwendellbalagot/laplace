@@ -5773,15 +5773,13 @@ kbd,
 }
 .rook-panel-docked .rook-message-user .rook-markdown,
 .rook-panel-docked .rook-message-user .rook-markdown p {
-  font: 12px/1.5 var(--mono);
   color: var(--text);
 }
 .rook-panel-docked .rook-message-assistant {
   padding: 2px 2px 4px;
 }
 .rook-panel-docked .rook-message p {
-  font-size: 12.5px;
-  line-height: 1.56;
+  font: 12px/1.52 var(--mono);
 }
 .rook-panel-docked .rook-tool-trace {
   display: flex;
@@ -5856,6 +5854,8 @@ kbd,
 }
 .rook-panel-docked .rook-markdown {
   gap: 7px;
+  font: 12px/1.52 var(--mono);
+  color: var(--text-secondary);
 }
 .rook-panel-docked .rook-markdown h3,
 .rook-panel-docked .rook-markdown h4,
@@ -5886,7 +5886,7 @@ kbd,
   border-left: 2px solid var(--dim);
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 .rook-panel-docked .rook-inline-code {
   padding: 1px 4px;
