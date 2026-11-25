@@ -3150,9 +3150,8 @@ kbd,
     width: min(380px, calc(100vw - 44px)) !important;
     max-width: calc(100vw - 24px);
   }
-  .files-dock-floating {
-    width: min(300px, calc(100vw - 44px)) !important;
-    max-width: calc(100vw - 24px);
+  .files-side-dock:not(.is-collapsed) {
+    width: min(260px, 42vw);
   }
   .inspector-separator:not(.explorer-separator) {
     display: none;
@@ -5105,43 +5104,45 @@ kbd,
   }
 }
 
-.rook-dock-floating,
-.files-dock-floating {
+.rook-dock-floating {
   position: absolute;
   top: 12px;
+  right: 12px;
   bottom: 12px;
   z-index: 6;
   display: flex;
-  max-width: min(560px, calc(100% - 40px));
-  pointer-events: none;
-  transform: translate3d(0, 0, 0);
-  will-change: transform;
-}
-.rook-dock-floating {
-  right: 12px;
   width: clamp(
     220px,
     var(--inspector-width-live, var(--inspector-width, 340px)),
     48vw
   );
+  max-width: min(560px, calc(100% - 40px));
+  pointer-events: none;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
 }
-.files-dock-floating {
-  left: 12px;
+.rook-dock-floating.is-collapsed {
+  transform: translate3d(calc(100% + 12px), 0, 0);
+}
+.files-side-dock {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex: 0 0 auto;
   width: clamp(
     170px,
     var(--explorer-width-live, var(--explorer-width, 238px)),
     38vw
   );
-  max-width: min(420px, calc(100% - 40px));
+  max-width: min(420px, 42vw);
+  height: 100%;
+  overflow: visible;
 }
-.rook-dock-floating.is-collapsed {
-  transform: translate3d(calc(100% + 12px), 0, 0);
+.files-side-dock.is-collapsed {
+  width: 0;
+  min-width: 0;
 }
-.files-dock-floating.is-collapsed {
-  transform: translate3d(calc(-100% - 12px), 0, 0);
-}
-.rook-dock-surface,
-.files-dock-surface {
+.rook-dock-surface {
   position: relative;
   display: flex;
   flex: 1 1 auto;
@@ -5160,8 +5161,20 @@ kbd,
     inset 0 1px 0 rgb(255 255 255 / 4%);
   pointer-events: auto;
 }
-.app-shell[data-theme="light"] .rook-dock-surface,
-.app-shell[data-theme="light"] .files-dock-surface {
+.files-side-surface {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--canvas);
+  transform: translate3d(0, 0, 0);
+}
+.app-shell[data-theme="light"] .rook-dock-surface {
   border-color: var(--border);
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   box-shadow:
@@ -5169,10 +5182,17 @@ kbd,
     0 2px 8px rgb(15 23 42 / 6%),
     inset 0 1px 0 rgb(255 255 255 / 75%);
 }
+.app-shell[data-theme="light"] .files-side-surface {
+  background: var(--surface);
+}
 .rook-dock-floating.is-collapsed .rook-dock-surface,
-.files-dock-floating.is-collapsed .files-dock-surface {
+.files-side-dock.is-collapsed .files-side-surface {
   opacity: 0;
   pointer-events: none;
+}
+.files-side-dock.is-collapsed .files-side-surface {
+  border-right-width: 0;
+  transform: translate3d(-10px, 0, 0);
 }
 .rook-dock-toggle,
 .files-dock-toggle {
@@ -5207,7 +5227,7 @@ kbd,
   right: -24px;
   border-left: 0;
   border-radius: 0 8px 8px 0;
-  box-shadow: 6px 4px 16px rgb(0 0 0 / 26%);
+  box-shadow: 6px 4px 16px rgb(0 0 0 / 22%);
 }
 .app-shell[data-theme="light"] .rook-dock-toggle {
   border-color: var(--border);
@@ -5226,7 +5246,7 @@ kbd,
   color: var(--text);
 }
 .rook-dock-floating.is-collapsed .rook-dock-toggle,
-.files-dock-floating.is-collapsed .files-dock-toggle {
+.files-side-dock.is-collapsed .files-dock-toggle {
   border-color: color-mix(in srgb, var(--green) 42%, var(--border));
   background: color-mix(in srgb, var(--green) 10%, var(--surface-raised));
   color: var(--green);
@@ -5234,63 +5254,78 @@ kbd,
 .rook-dock-floating.is-collapsed .rook-dock-toggle {
   box-shadow: -6px 4px 18px rgb(0 0 0 / 30%);
 }
-.files-dock-floating.is-collapsed .files-dock-toggle {
+.files-side-dock.is-collapsed .files-dock-toggle {
   box-shadow: 6px 4px 18px rgb(0 0 0 / 30%);
 }
 .rook-dock-floating.is-collapsed .rook-dock-toggle:hover,
 .rook-dock-floating.is-collapsed .rook-dock-toggle:focus-visible,
-.files-dock-floating.is-collapsed .files-dock-toggle:hover,
-.files-dock-floating.is-collapsed .files-dock-toggle:focus-visible {
+.files-side-dock.is-collapsed .files-dock-toggle:hover,
+.files-side-dock.is-collapsed .files-dock-toggle:focus-visible {
   border-color: color-mix(in srgb, var(--green) 65%, var(--border));
   background: color-mix(in srgb, var(--green) 16%, var(--surface-hover));
   color: var(--brass-light);
 }
 .rook-dock-floating.is-collapsed .rook-dock-toggle-icon,
-.files-dock-floating.is-collapsed .files-dock-toggle-icon {
+.files-side-dock.is-collapsed .files-dock-toggle-icon {
   transform: rotate(180deg);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .rook-dock-floating,
-  .files-dock-floating {
+  .rook-dock-floating {
     transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
+  .files-side-dock {
+    transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
   .rook-dock-floating.is-resizing,
-  .files-dock-floating.is-resizing {
+  .files-side-dock.is-resizing,
+  .files-side-dock.is-resizing .files-side-surface {
     transition: none;
   }
-  .rook-dock-surface,
-  .files-dock-surface {
+  .rook-dock-surface {
     transition: opacity 180ms ease-out;
+  }
+  .files-side-surface {
+    transition:
+      opacity 160ms ease-out,
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .rook-dock-toggle-icon,
   .files-dock-toggle-icon {
     transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
-.rook-dock-resizer,
-.files-dock-resizer {
+.rook-dock-resizer {
   position: absolute;
   top: 12px;
   bottom: 12px;
+  left: -3px;
   z-index: 2;
   width: 6px;
   margin: 0;
   border-radius: 3px;
   pointer-events: auto;
 }
-.rook-dock-resizer {
-  left: -3px;
-}
-.files-dock-resizer {
+.files-side-resizer {
+  position: absolute;
+  top: 0;
   right: -3px;
+  bottom: 0;
+  z-index: 2;
+  width: 6px;
+  margin: 0;
   border-left: 0;
+  pointer-events: auto;
 }
 
 .files-dock-surface .project-explorer {
-  width: 100%;
-  min-width: 0;
+  width: clamp(
+    170px,
+    var(--explorer-width-live, var(--explorer-width, 238px)),
+    38vw
+  );
+  min-width: 170px;
   max-width: none;
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   height: 100%;
   background: transparent;
 }

@@ -734,12 +734,12 @@ export function WorkspaceScreen({
     <section className="editor-shell" aria-label="Editor workspace">
       {activeProject && (
         <div
-          className={`files-dock-floating${explorerCollapsed ? " is-collapsed" : ""}${isResizingExplorer ? " is-resizing" : ""}`}
-          aria-label="Files dock"
+          className={`files-side-dock${explorerCollapsed ? " is-collapsed" : ""}${isResizingExplorer ? " is-resizing" : ""}`}
+          aria-label="Files panel"
         >
           <div
             id="workspace-files-dock"
-            className="files-dock-surface"
+            className="files-dock-surface files-side-surface"
             inert={explorerCollapsed}
             aria-hidden={explorerCollapsed}
           >
@@ -840,7 +840,7 @@ export function WorkspaceScreen({
 
           {!explorerCollapsed && (
             <div
-              className="inspector-separator explorer-separator files-dock-resizer"
+              className="inspector-separator explorer-separator files-side-resizer"
               role="separator"
               aria-label="Resize file explorer"
               aria-orientation="vertical"
