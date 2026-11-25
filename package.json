@@ -18,7 +18,9 @@
     "test:ui": "vitest run tests/ui",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --no-bundle"
+    "tauri:build": "tauri build --no-bundle",
+    "stage:rook": "node scripts/stage-rook-runtime.mjs",
+    "tauri:bundle": "tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "5.3.0",

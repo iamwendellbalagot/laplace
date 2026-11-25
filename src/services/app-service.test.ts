@@ -919,6 +919,14 @@ describe("TauriAppService", () => {
     );
   });
 
+  it("reads runtime diagnostics", async () => {
+    mocks.invoke.mockResolvedValueOnce({ appVersion: "0.1.0" });
+    await new TauriAppService().getRuntimeDiagnostics();
+    expect(mocks.invoke).toHaveBeenCalledWith("get_runtime_diagnostics", {
+      request: { schemaVersion: 1, operationId: expect.any(String) },
+    });
+  });
+
   it("reads capabilities, inspects skills, and updates MCP config via Rook", async () => {
     mocks.invoke
       .mockResolvedValueOnce({

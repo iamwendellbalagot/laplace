@@ -25,7 +25,10 @@ use tauri_plugin_opener::OpenerExt;
 mod capabilities;
 mod compare;
 mod context;
+mod db_recovery;
+mod redact;
 mod review;
+mod rook_runtime;
 mod runs;
 mod workspace_state;
 
@@ -2566,10 +2569,11 @@ async fn open_domain_database(
                 "database",
             )
         })?;
+    db_recovery::check_and_backup_before_migrate(&path, &pool).await?;
     MIGRATOR.run(&pool).await.map_err(|_| {
         terminal_error(
             "database_migration_failed",
-            "Laplace data storage could not be upgraded safely.",
+            "Laplace data storage could not be upgraded safely. A pre-upgrade backup was kept in the backups folder.",
             "database",
         )
     })?;
@@ -3143,26 +3147,7 @@ async fn start_rook_session(
             ));
         }
     }
-    let rook_bin = if tauri::is_dev() {
-        let settings = read_rook_dev_settings(&rook_dev_settings_path(&app)?)?;
-        let path = settings.checkout_path.ok_or_else(|| {
-            terminal_error(
-                "rook_checkout_required",
-                "Select a local Rook checkout in Settings → Developer before starting Rook.",
-                &request.operation_id,
-            )
-        })?;
-        let checkout = valid_rook_checkout(Path::new(&path)).ok_or_else(|| {
-            terminal_error(
-                "rook_checkout_invalid",
-                "The selected Rook checkout is no longer valid. Select it again in Settings → Developer.",
-                &request.operation_id,
-            )
-        })?;
-        Some(checkout.join("bin/rook.mjs").to_string_lossy().into_owned())
-    } else {
-        None
-    };
+    let runtime = rook_runtime::resolve_rook_runtime_for_launch(&app, &request.operation_id)?;
     let app_data_dir = app.path().app_data_dir().map_err(|_| {
         terminal_error(
             "rook_session_path_unavailable",
@@ -3184,7 +3169,7 @@ async fn start_rook_session(
     let mut child = spawn_rook(
         &root,
         &workspace_sessions_dir,
-        rook_bin.as_deref(),
+        &runtime,
         mode,
         &request.operation_id,
     )?;
@@ -3540,19 +3525,12 @@ fn parse_rook_build_initialize_response<'a>(
 fn spawn_rook(
     root: &Path,
     session_dir: &Path,
-    rook_bin: Option<&str>,
+    runtime: &rook_runtime::RookRuntimeResolution,
     mode: RookMode,
     operation_id: &str,
 ) -> Result<std::process::Child, IpcError> {
-    let mut command = if let Some(path) = rook_bin.filter(|path| path.ends_with(".mjs")) {
-        let mut command = Command::new("node");
-        command.arg(path);
-        command
-    } else if let Some(path) = rook_bin {
-        Command::new(path)
-    } else {
-        Command::new("rook")
-    };
+    let mut command = Command::new(&runtime.node_bin);
+    command.arg(&runtime.rook_entry);
     command.args(["--stdio", "--cwd"]).arg(root);
     if mode == RookMode::Build {
         command.args(["--mode", "build"]);
@@ -3566,7 +3544,7 @@ fn spawn_rook(
         .map_err(|_| {
             terminal_error(
                 "rook_unavailable",
-                "Install Rook or set LAPLACE_ROOK_BIN to its executable path.",
+                "Rook could not be started from Laplace's runtime. Reinstall or repair Laplace.",
                 operation_id,
             )
         })
@@ -4522,7 +4500,7 @@ fn execute_check(
     let _ = err_thread.join();
     let mut output = output
         .lock()
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .map(|bytes| redact::redact_secrets(&String::from_utf8_lossy(&bytes)))
         .unwrap_or_default();
     if truncated.load(Ordering::Relaxed) != 0 {
         output.push_str("\n[output truncated at 1 MiB]");
@@ -5623,16 +5601,24 @@ mod rook_start_tests {
 
     #[test]
     fn missing_rook_executable_returns_actionable_error() {
+        let runtime = rook_runtime::RookRuntimeResolution {
+            node_bin: PathBuf::from("/laplace-test/missing-node"),
+            rook_entry: PathBuf::from("/laplace-test/missing-rook.mjs"),
+            source: "bundled".to_owned(),
+            rook_version: None,
+            node_version: None,
+        };
         let error = spawn_rook(
             Path::new("/tmp"),
             Path::new("/tmp/laplace-test-rook-sessions"),
-            Some("/laplace-test/missing-rook"),
+            &runtime,
             RookMode::Ask,
             "rook-test-op",
         )
         .unwrap_err();
         assert_eq!(error.code, "rook_unavailable");
-        assert!(error.message.contains("Install Rook"));
+        assert!(error.message.contains("Reinstall or repair Laplace"));
+        assert!(!error.message.contains("LAPLACE_ROOK_BIN"));
         assert_eq!(error.operation_id, "rook-test-op");
     }
 
@@ -5969,7 +5955,8 @@ pub fn run() {
             capabilities::inspect_skill_source,
             capabilities::update_mcp_server_config,
             capabilities::acknowledge_workspace_capabilities,
-            capabilities::record_capability_activity
+            capabilities::record_capability_activity,
+            rook_runtime::get_runtime_diagnostics
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Laplace desktop application");

@@ -5,6 +5,7 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/resources/rook-runtime/
 experiments/**/node_modules/
 experiments/**/dist/
 experiments/**/target/

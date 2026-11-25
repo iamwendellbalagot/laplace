@@ -207,6 +207,20 @@ function serviceFixture(overrides: Partial<AppService> = {}) {
       recentActivity: [],
     })),
     recordCapabilityActivity: vi.fn(async () => undefined),
+    getRuntimeDiagnostics: vi.fn(async () => ({
+      appVersion: "0.1.0",
+      os: "macos",
+      arch: "aarch64",
+      buildProfile: "development",
+      schemaVersion: 8,
+      expectedSchemaVersion: 8,
+      backupCount: 0,
+      rookSource: "dev_checkout",
+      rookVersion: null,
+      nodeVersion: null,
+      rookError: null,
+      networkPolicy: "No telemetry.",
+    })),
     listRunConfigs: vi.fn(async () => ({
       layout: {
         packageManager: null,

@@ -43,6 +43,7 @@ import {
 } from "./features/context/ContextLensScreen";
 import { BehaviorComparisonPanel } from "./features/compare/BehaviorComparisonPanel";
 import { ToolsScreen } from "./features/tools/ToolsScreen";
+import { RuntimeDiagnosticsPanel } from "./features/settings/RuntimeDiagnosticsPanel";
 import { LinkedStackOutput, RunPanel } from "./features/runs/RunPanel";
 import {
   formatFailureContextExcerpt,
@@ -5479,6 +5480,7 @@ function SettingsScreen(props: ScreenContentProps) {
             Appearance
           </a>
           <a href="#layout">Layout</a>
+          <a href="#runtime">Runtime</a>
           <a href="#native-check">Native connection</a>
           {props.rookDevSettings?.enabled && <a href="#developer">Developer</a>}
         </nav>
@@ -5681,6 +5683,23 @@ function SettingsScreen(props: ScreenContentProps) {
                 {preferences.inspectorWidth} px
               </span>
             </PreferenceRow>
+          </section>
+
+          <section
+            className="settings-group"
+            id="runtime"
+            aria-labelledby="runtime-title"
+          >
+            <h2 id="runtime-title">Runtime &amp; diagnostics</h2>
+            <p>
+              Which Rook runtime Laplace launches, database schema and backup
+              status, and outbound network behavior. Copied diagnostics contain
+              no credentials.
+            </p>
+            <RuntimeDiagnosticsPanel
+              service={props.service}
+              browserPreview={props.browserPreview}
+            />
           </section>
 
           <section

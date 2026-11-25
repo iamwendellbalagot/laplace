@@ -1,6 +1,6 @@
 # 16 — Cross-platform release qualification
 
-Status: Not started  
+Status: Partially complete (code, tests, docs, CI template done; signing, cross-OS runs, clean-machine and benchmark gates open — see docs/release-qualification.md)
 Depends on: [15](15-skills-mcp.md), or explicitly documented reduced-beta scope after step 12  
 Next: beta feedback and scoped follow-up roadmap
 

@@ -1,0 +1,45 @@
+name: Release matrix
+
+# Builds self-contained installers. Signing/notarization/updater secrets are NOT configured here;
+# unsigned artifacts are for beta qualification only. See docs/release-qualification.md.
+on:
+  workflow_dispatch:
+    inputs:
+      rook_version:
+        description: Exact published rook-agent version to bundle (e.g. 0.1.7)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: Bundle (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-13, windows-2022, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+          run_install: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri icon src-tauri/icons/icon.png
+      - run: node scripts/stage-rook-runtime.mjs --rook-version ${{ inputs.rook_version }}
+      - run: pnpm tauri:bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: laplace-${{ matrix.os }}
+          path: src-tauri/target/release/bundle/**

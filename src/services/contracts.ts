@@ -807,3 +807,18 @@ export interface McpServerUpdateInput {
   args?: string[];
   url?: string;
 }
+
+export interface RuntimeDiagnostics {
+  appVersion: string;
+  os: string;
+  arch: string;
+  buildProfile: "development" | "release" | string;
+  schemaVersion: number;
+  expectedSchemaVersion: number;
+  backupCount: number;
+  rookSource: "bundled" | "dev_checkout" | string;
+  rookVersion: string | null;
+  nodeVersion: string | null;
+  rookError: string | null;
+  networkPolicy: string;
+}

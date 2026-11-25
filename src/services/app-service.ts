@@ -62,6 +62,7 @@ import {
   type CapabilitiesSnapshot,
   type SkillInspectResult,
   type McpServerUpdateInput,
+  type RuntimeDiagnostics,
 } from "./contracts";
 
 export interface AppService {
@@ -331,6 +332,7 @@ export interface AppService {
     choice: RookPermissionChoice,
   ): Promise<void>;
   getCapabilitiesSnapshot(projectId: string): Promise<CapabilitiesSnapshot>;
+  getRuntimeDiagnostics(): Promise<RuntimeDiagnostics>;
   inspectSkillSource(
     projectId: string,
     name: string,
@@ -1614,6 +1616,20 @@ export class TauriAppService implements AppService {
     };
     try {
       await invoke<void>("delete_context_pinned_link", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+    };
+    try {
+      return await invoke<RuntimeDiagnostics>("get_runtime_diagnostics", {
+        request,
+      });
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

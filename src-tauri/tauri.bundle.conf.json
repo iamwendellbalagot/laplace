@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": ["resources/rook-runtime/**/*"],
+    "category": "DeveloperTool",
+    "shortDescription": "A local-first desktop workspace for software changes",
+    "icon": ["icons/icon.png"]
+  }
+}
