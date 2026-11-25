@@ -9,15 +9,19 @@ interface MonacoLike {
   };
 }
 
-let registered = false;
+const registeredInstances = new WeakSet<object>();
 
-/** Register custom terminal-matched Monaco themes once per runtime. */
+export function monacoThemeFor(theme: "dark" | "light"): string {
+  return theme === "dark" ? LAPLACE_MONACO_DARK : LAPLACE_MONACO_LIGHT;
+}
+
+/** Register custom terminal-matched Monaco themes once per monaco instance. */
 export function registerLaplaceMonacoThemes(
   monaco: MonacoLike,
   force = false,
 ): void {
-  if (registered && !force) return;
-  registered = true;
+  if (!force && registeredInstances.has(monaco)) return;
+  registeredInstances.add(monaco);
 
   monaco.editor.defineTheme(LAPLACE_MONACO_DARK, {
     base: "vs-dark",

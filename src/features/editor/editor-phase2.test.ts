@@ -8,6 +8,7 @@ import { extractProposedCodeBlock, spliceLines } from "./InlineCommandBar";
 import {
   LAPLACE_MONACO_DARK,
   LAPLACE_MONACO_LIGHT,
+  monacoThemeFor,
   registerLaplaceMonacoThemes,
 } from "./monaco-theme";
 
@@ -84,7 +85,10 @@ describe("monaco terminal themes", () => {
         },
       },
     };
-    registerLaplaceMonacoThemes(fakeMonaco, true);
+    registerLaplaceMonacoThemes(fakeMonaco);
+    registerLaplaceMonacoThemes(fakeMonaco);
+    expect(monacoThemeFor("dark")).toBe(LAPLACE_MONACO_DARK);
+    expect(monacoThemeFor("light")).toBe(LAPLACE_MONACO_LIGHT);
     expect(defined[LAPLACE_MONACO_DARK]?.base).toBe("vs-dark");
     expect(defined[LAPLACE_MONACO_DARK]?.colors["editor.background"]).toBe(
       "#0b0e12",

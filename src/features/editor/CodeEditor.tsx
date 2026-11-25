@@ -1,17 +1,17 @@
 import { useEffect, useRef } from "react";
-import Editor, { type OnMount } from "@monaco-editor/react";
+import Editor, { loader, type OnMount } from "@monaco-editor/react";
+import * as monacoApi from "monaco-editor";
 import { Uri, type editor as MonacoEditor } from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/language/typescript/ts.worker?worker";
 import type { AppService } from "../../services/app-service";
 import type { EditorDiagnostic } from "../../services/contracts";
 import type { GutterLineMarker } from "./git-gutter";
-import {
-  LAPLACE_MONACO_DARK,
-  LAPLACE_MONACO_LIGHT,
-  registerLaplaceMonacoThemes,
-} from "./monaco-theme";
+import { monacoThemeFor, registerLaplaceMonacoThemes } from "./monaco-theme";
 import { hydrateWorkspaceTypeScript } from "./ts-project-hydration";
+
+loader.config({ monaco: monacoApi });
+registerLaplaceMonacoThemes(monacoApi);
 
 self.MonacoEnvironment = {
   getWorker(_moduleId, label) {
@@ -163,17 +163,26 @@ export function CodeEditor({
     editor.focus();
   }, [revealTarget?.nonce, revealTarget?.line, revealTarget?.column]);
 
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    registerLaplaceMonacoThemes(monaco);
+    monaco.editor.setTheme(monacoThemeFor(theme));
+  }, [theme]);
+
   return (
     <Editor
       path={Uri.file(path.replaceAll("\\", "/")).toString()}
       language={languageFor(path)}
       value={value}
-      theme={theme === "dark" ? LAPLACE_MONACO_DARK : LAPLACE_MONACO_LIGHT}
+      theme={monacoThemeFor(theme)}
       beforeMount={registerLaplaceMonacoThemes}
       onChange={(next) => onChange(next ?? "")}
       onMount={(editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+        registerLaplaceMonacoThemes(monaco);
+        monaco.editor.setTheme(monacoThemeFor(theme));
         if (!decorationsRef.current) {
           decorationsRef.current = editor.createDecorationsCollection();
         }

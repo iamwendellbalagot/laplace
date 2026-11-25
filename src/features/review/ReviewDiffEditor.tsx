@@ -1,11 +1,14 @@
 import { useEffect, useRef } from "react";
-import { DiffEditor } from "@monaco-editor/react";
+import { DiffEditor, loader } from "@monaco-editor/react";
+import * as monacoApi from "monaco-editor";
 import type { editor } from "monaco-editor";
 import {
-  LAPLACE_MONACO_DARK,
-  LAPLACE_MONACO_LIGHT,
+  monacoThemeFor,
   registerLaplaceMonacoThemes,
 } from "../editor/monaco-theme";
+
+loader.config({ monaco: monacoApi });
+registerLaplaceMonacoThemes(monacoApi);
 
 function languageFor(path: string): string {
   const extension = path.split(".").at(-1)?.toLowerCase();
@@ -56,6 +59,14 @@ export function ReviewDiffEditor({
   const diffEditorRef = useRef<editor.IStandaloneDiffEditor | undefined>(
     undefined,
   );
+  const monacoRef = useRef<typeof monacoApi | undefined>(undefined);
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    registerLaplaceMonacoThemes(monaco);
+    monaco.editor.setTheme(monacoThemeFor(theme));
+  }, [theme]);
 
   useEffect(() => {
     if (!revealLine || revealLine < 1) return;
@@ -68,6 +79,7 @@ export function ReviewDiffEditor({
       listenerRef.current?.dispose();
       listenerRef.current = undefined;
       diffEditorRef.current = undefined;
+      monacoRef.current = undefined;
     };
   }, []);
 
@@ -76,10 +88,13 @@ export function ReviewDiffEditor({
       original={original}
       modified={modified}
       language={languageFor(path)}
-      theme={theme === "dark" ? LAPLACE_MONACO_DARK : LAPLACE_MONACO_LIGHT}
+      theme={monacoThemeFor(theme)}
       beforeMount={registerLaplaceMonacoThemes}
-      onMount={(diffEditor: editor.IStandaloneDiffEditor) => {
+      onMount={(diffEditor: editor.IStandaloneDiffEditor, monaco) => {
         diffEditorRef.current = diffEditor;
+        monacoRef.current = monaco as typeof monacoApi;
+        registerLaplaceMonacoThemes(monaco);
+        monaco.editor.setTheme(monacoThemeFor(theme));
         listenerRef.current?.dispose();
         const modifiedEditor = diffEditor.getModifiedEditor();
         listenerRef.current = modifiedEditor.onDidChangeModelContent(() => {
