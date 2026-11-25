@@ -388,6 +388,13 @@ export interface RookContextChip {
   content: string;
   sourceSnapshot?: string;
 }
+export interface ExecutionEnvironment {
+  os: string;
+  arch: string;
+  cwd: string;
+  programVersion: string | null;
+}
+
 export interface ExecutionRecord {
   id: string;
   projectId: string;
@@ -401,6 +408,68 @@ export interface ExecutionRecord {
   output: string;
   startedAt: number;
   finishedAt: number | null;
+  environment?: ExecutionEnvironment | null;
+}
+
+export interface NormalizationRules {
+  stripAnsi: boolean;
+  stripTimestamps: boolean;
+  stripDurations: boolean;
+  trimTrailingWhitespace: boolean;
+}
+
+export type ComparisonOutcome =
+  | "equal"
+  | "different"
+  | "regressed"
+  | "fixed"
+  | "baseline_failed"
+  | "missing_artifact"
+  | "inconclusive";
+
+export interface ComparisonWarning {
+  code: string;
+  message: string;
+}
+
+export interface ComparisonDiffLine {
+  kind: "context" | "removed" | "added" | string;
+  baselineLine: number | null;
+  candidateLine: number | null;
+  text: string;
+}
+
+export interface ComparisonRunSummary {
+  executionId: string;
+  present: boolean;
+  command: string;
+  sourceDigest: string;
+  status: string;
+  exitCode: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  environment: ExecutionEnvironment | null;
+}
+
+export interface BehaviorComparisonRecord {
+  id: string;
+  projectId: string;
+  changeId: string | null;
+  label: string;
+  baselineExecutionId: string;
+  candidateExecutionId: string;
+  baseline: ComparisonRunSummary;
+  candidate: ComparisonRunSummary;
+  normalization: NormalizationRules;
+  outcome: ComparisonOutcome;
+  outputsEqual: boolean;
+  warnings: ComparisonWarning[];
+  sharedServices: string[];
+  diffLines: ComparisonDiffLine[];
+  diffTruncated: boolean;
+  observedScope: string;
+  notCheckedScope: string;
+  createdAt: number;
 }
 
 export type RookMode = "ask" | "build";

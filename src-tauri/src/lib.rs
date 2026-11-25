@@ -22,6 +22,7 @@ use sqlx::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
+mod compare;
 mod context;
 mod review;
 mod runs;
@@ -230,6 +231,8 @@ struct ExecutionRecord {
     output: String,
     started_at: i64,
     finished_at: Option<i64>,
+    #[serde(default)]
+    environment: Option<compare::ExecutionEnvironment>,
 }
 
 #[derive(Default)]
@@ -2965,7 +2968,7 @@ async fn list_executions(
         ));
     }
     let pool = open_domain_database(&app, &db).await?;
-    let rows = sqlx::query("SELECT id, project_id, change_id, command_json, source_digest, status, exit_code, output, started_at, finished_at FROM executions WHERE project_id = ? ORDER BY started_at DESC LIMIT 200").bind(&request.project_id).fetch_all(&pool).await.map_err(|_| terminal_error("check_list_failed", "Verification records could not be loaded.", &request.operation_id))?;
+    let rows = sqlx::query("SELECT id, project_id, change_id, command_json, source_digest, status, exit_code, output, started_at, finished_at, environment_json FROM executions WHERE project_id = ? ORDER BY started_at DESC LIMIT 200").bind(&request.project_id).fetch_all(&pool).await.map_err(|_| terminal_error("check_list_failed", "Verification records could not be loaded.", &request.operation_id))?;
     let mut executions = Vec::new();
     for row in &rows {
         let mut record = parse_execution_row(row, &request.operation_id)?;
@@ -4536,6 +4539,10 @@ fn execute_check(
     } else {
         ExecutionStatus::Failed
     };
+    let environment = Some(compare::ExecutionEnvironment::capture(
+        root,
+        &request.program,
+    ));
     Ok(ExecutionRecord {
         id: crypto_operation_id(),
         project_id: request.project_id,
@@ -4550,6 +4557,7 @@ fn execute_check(
         output,
         started_at,
         finished_at: Some(now_ms()),
+        environment,
     })
 }
 
@@ -4576,7 +4584,11 @@ async fn persist_execution(pool: &SqlitePool, record: &ExecutionRecord) -> Resul
             "check",
         )
     })?;
-    sqlx::query("INSERT INTO executions (id, project_id, change_id, command_json, source_digest, status, exit_code, output, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(&record.id).bind(&record.project_id).bind(&record.change_id).bind(command).bind(&record.source_digest).bind(serde_json::to_string(&record.status).unwrap_or_default().trim_matches('"')).bind(record.exit_code).bind(&record.output).bind(record.started_at).bind(record.finished_at).execute(&mut *tx).await.map_err(|_| terminal_error("check_record_failed", "The verification result could not be recorded.", "check"))?;
+    let environment_json = record
+        .environment
+        .as_ref()
+        .and_then(|env| serde_json::to_string(env).ok());
+    sqlx::query("INSERT INTO executions (id, project_id, change_id, command_json, source_digest, status, exit_code, output, started_at, finished_at, environment_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(&record.id).bind(&record.project_id).bind(&record.change_id).bind(command).bind(&record.source_digest).bind(serde_json::to_string(&record.status).unwrap_or_default().trim_matches('"')).bind(record.exit_code).bind(&record.output).bind(record.started_at).bind(record.finished_at).bind(environment_json).execute(&mut *tx).await.map_err(|_| terminal_error("check_record_failed", "The verification result could not be recorded.", "check"))?;
     for (relative, digest) in &record.file_digests {
         sqlx::query("INSERT INTO source_files (execution_id, path, digest) VALUES (?, ?, ?)")
             .bind(&record.id)
@@ -4646,6 +4658,11 @@ fn parse_execution_row(
             operation_id,
         )
     })?;
+    let environment = row
+        .try_get::<Option<String>, _>("environment_json")
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<compare::ExecutionEnvironment>(&raw).ok());
     Ok(ExecutionRecord {
         id,
         project_id: row.try_get("project_id").unwrap_or_default(),
@@ -4660,6 +4677,7 @@ fn parse_execution_row(
         output: row.try_get("output").unwrap_or_default(),
         started_at: row.try_get("started_at").unwrap_or_default(),
         finished_at: row.try_get("finished_at").ok(),
+        environment,
     })
 }
 
@@ -5931,6 +5949,9 @@ pub fn run() {
             create_candidate_worktree,
             run_check,
             list_executions,
+            compare::compare_executions,
+            compare::list_behavior_comparisons,
+            compare::delete_behavior_comparison,
             list_project_recipes,
             run_project_recipe,
             cancel_check,

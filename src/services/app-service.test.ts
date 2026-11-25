@@ -856,4 +856,66 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("compares, lists, and deletes behavior comparisons", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ id: "cmp-1", outcome: "equal" })
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(undefined);
+    const service = new TauriAppService();
+
+    await service.compareExecutions("/work/project", "e1", "e2", {
+      normalization: {
+        stripAnsi: true,
+        stripTimestamps: true,
+        stripDurations: false,
+        trimTrailingWhitespace: false,
+      },
+    });
+    await service.listBehaviorComparisons("/work/project");
+    await service.deleteBehaviorComparison("/work/project", "cmp-1");
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "compare_executions", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        baselineExecutionId: "e1",
+        candidateExecutionId: "e2",
+        changeId: null,
+        label: null,
+        normalization: {
+          stripAnsi: true,
+          stripTimestamps: true,
+          stripDurations: false,
+          trimTrailingWhitespace: false,
+        },
+        persist: true,
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      2,
+      "list_behavior_comparisons",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          untrackedPath: null,
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      3,
+      "delete_behavior_comparison",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          comparisonId: "cmp-1",
+        },
+      },
+    );
+  });
 });

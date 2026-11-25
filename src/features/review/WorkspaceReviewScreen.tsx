@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { AppService } from "../../services/app-service";
 import type {
+  BehaviorComparisonRecord,
   ExecutionRecord,
   GitDiffPair,
   ProjectRecipeSummary,
@@ -17,6 +18,11 @@ import type {
   UiPreferences,
   WorkspaceReviewSnapshot,
 } from "../../services/contracts";
+import {
+  comparisonOutcomeLabel,
+  comparisonOutcomeTone,
+  formatComparisonMarkdown,
+} from "../compare/comparison-helpers";
 
 const ReviewDiffEditor = lazy(() =>
   import("./ReviewDiffEditor").then((module) => ({
@@ -101,6 +107,9 @@ export function WorkspaceReviewScreen({
   const [commitMessage, setCommitMessage] = useState("");
   const [allowUnverified, setAllowUnverified] = useState(false);
   const [actionPending, setActionPending] = useState(false);
+  const [comparisons, setComparisons] = useState<BehaviorComparisonRecord[]>(
+    [],
+  );
 
   useEffect(() => {
     setDiffBaseline(initialBaseline);
@@ -142,7 +151,11 @@ export function WorkspaceReviewScreen({
 
   useEffect(() => {
     void loadReview();
-  }, [loadReview, syncVersion]);
+    void service
+      .listBehaviorComparisons(project.id)
+      .then(setComparisons)
+      .catch(() => setComparisons([]));
+  }, [loadReview, project.id, service, syncVersion]);
 
   const visibleFiles = useMemo(() => {
     const all = snapshot?.changedFiles ?? [];
@@ -396,6 +409,11 @@ export function WorkspaceReviewScreen({
               `- [${c.resolved ? "x" : " "}] \`${c.filePath}${c.lineNumber ? `:${c.lineNumber}` : ""}\`: ${c.body}`,
           )
         : ["- None"]),
+      "",
+      "## Behavior comparisons",
+      ...(comparisons.length > 0
+        ? comparisons.slice(0, 5).map(formatComparisonMarkdown)
+        : ["- None recorded"]),
     ];
     if (navigator.clipboard?.writeText) {
       void navigator.clipboard.writeText(`${lines.join("\n")}\n`).then(
@@ -815,6 +833,21 @@ export function WorkspaceReviewScreen({
                   </span>
                 </div>
               ))}
+              {comparisons.length > 0 && (
+                <div className="review-comparison-strip">
+                  <span className="eyebrow">Behavior comparisons</span>
+                  {comparisons.slice(0, 3).map((cmp) => (
+                    <div className="review-check-row" key={cmp.id}>
+                      <span title={cmp.observedScope}>{cmp.label}</span>
+                      <span
+                        className={`verify-status-pill verify-status-${comparisonOutcomeTone(cmp.outcome)}`}
+                      >
+                        {comparisonOutcomeLabel(cmp.outcome)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
 
             <section className="review-aside-card">

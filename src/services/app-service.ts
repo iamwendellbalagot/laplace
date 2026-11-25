@@ -32,6 +32,8 @@ import {
   type ChangeStatus,
   type WorktreeRecord,
   type ExecutionRecord,
+  type BehaviorComparisonRecord,
+  type NormalizationRules,
   type ProjectRecipeSummary,
   type ChangeReviewSnapshot,
   type WorkspaceReviewSnapshot,
@@ -254,6 +256,24 @@ export interface AppService {
     changeId?: string,
   ): Promise<ExecutionRecord>;
   listExecutions(projectId: string): Promise<ExecutionRecord[]>;
+  compareExecutions(
+    projectId: string,
+    baselineExecutionId: string,
+    candidateExecutionId: string,
+    options?: {
+      changeId?: string;
+      label?: string;
+      normalization?: NormalizationRules;
+      persist?: boolean;
+    },
+  ): Promise<BehaviorComparisonRecord>;
+  listBehaviorComparisons(
+    projectId: string,
+  ): Promise<BehaviorComparisonRecord[]>;
+  deleteBehaviorComparison(
+    projectId: string,
+    comparisonId: string,
+  ): Promise<void>;
   listProjectRecipes(projectId: string): Promise<ProjectRecipeSummary[]>;
   runProjectRecipe(
     projectId: string,
@@ -775,6 +795,72 @@ export class TauriAppService implements AppService {
         untrackedPath: null,
       },
     });
+  }
+
+  async compareExecutions(
+    projectId: string,
+    baselineExecutionId: string,
+    candidateExecutionId: string,
+    options?: {
+      changeId?: string;
+      label?: string;
+      normalization?: NormalizationRules;
+      persist?: boolean;
+    },
+  ): Promise<BehaviorComparisonRecord> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      baselineExecutionId,
+      candidateExecutionId,
+      changeId: options?.changeId ?? null,
+      label: options?.label ?? null,
+      normalization: options?.normalization ?? {
+        stripAnsi: true,
+        stripTimestamps: false,
+        stripDurations: false,
+        trimTrailingWhitespace: false,
+      },
+      persist: options?.persist ?? true,
+    };
+    try {
+      return await invoke<BehaviorComparisonRecord>("compare_executions", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async listBehaviorComparisons(
+    projectId: string,
+  ): Promise<BehaviorComparisonRecord[]> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      untrackedPath: null,
+    };
+    try {
+      return await invoke<BehaviorComparisonRecord[]>(
+        "list_behavior_comparisons",
+        { request },
+      );
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async deleteBehaviorComparison(
+    projectId: string,
+    comparisonId: string,
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      comparisonId,
+    };
+    try {
+      await invoke<void>("delete_behavior_comparison", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async listProjectRecipes(projectId: string): Promise<ProjectRecipeSummary[]> {

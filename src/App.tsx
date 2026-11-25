@@ -41,6 +41,7 @@ import {
   ContextLensScreen,
   type ReturnSourceAnchor,
 } from "./features/context/ContextLensScreen";
+import { BehaviorComparisonPanel } from "./features/compare/BehaviorComparisonPanel";
 import { LinkedStackOutput, RunPanel } from "./features/runs/RunPanel";
 import {
   formatFailureContextExcerpt,
@@ -2766,6 +2767,9 @@ function VerifyScreen({
   >("all");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
+  const [compareCandidateId, setCompareCandidateId] = useState<string>();
+  const [highlightedExecutionId, setHighlightedExecutionId] =
+    useState<string>();
 
   const checks = executions.filter(
     (record) => record.projectId === activeProject?.id,
@@ -3026,6 +3030,18 @@ function VerifyScreen({
               {error}
             </p>
           )}
+          <BehaviorComparisonPanel
+            service={service}
+            projectId={activeProject.id}
+            checks={checks}
+            changeId={verifyChangeId || undefined}
+            requestedCandidateId={compareCandidateId}
+            onJumpToExecution={(executionId) => {
+              setHighlightedExecutionId(executionId);
+              const el = document.getElementById(`execution-${executionId}`);
+              el?.scrollIntoView({ behavior: "auto", block: "center" });
+            }}
+          />
           <div className="execution-list">
             {filteredChecks.map((check) => {
               const linkedChange = check.changeId
@@ -3036,7 +3052,15 @@ function VerifyScreen({
                   ? Math.max(0, check.finishedAt - check.startedAt)
                   : null;
               return (
-                <article key={check.id}>
+                <article
+                  key={check.id}
+                  id={`execution-${check.id}`}
+                  className={
+                    highlightedExecutionId === check.id
+                      ? "is-highlighted-execution"
+                      : undefined
+                  }
+                >
                   <div>
                     <div className="verify-record-header">
                       <span
@@ -3044,6 +3068,15 @@ function VerifyScreen({
                       >
                         {executionStatusLabel(check.status)}
                       </span>
+                      {checks.length >= 2 && (
+                        <button
+                          type="button"
+                          className="button button-quiet"
+                          onClick={() => setCompareCandidateId(check.id)}
+                        >
+                          Compare with previous
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="button button-quiet"
