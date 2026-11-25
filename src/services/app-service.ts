@@ -33,6 +33,10 @@ import {
   type WorktreeRecord,
   type ExecutionRecord,
   type ProjectRecipeSummary,
+  type ChangeReviewSnapshot,
+  type GitDiffPair,
+  type ReviewComment,
+  type IntegrationAttempt,
   type RookInitResponse,
   type RookMode,
   type RookEvent,
@@ -95,6 +99,48 @@ export interface AppService {
     changeId: string,
     objective: string,
   ): Promise<ChangeRecord>;
+  getChangeReview(
+    projectId: string,
+    changeId: string,
+  ): Promise<ChangeReviewSnapshot>;
+  readGitFileDiffPair(
+    projectId: string,
+    relativePath: string,
+  ): Promise<GitDiffPair>;
+  addReviewComment(
+    projectId: string,
+    changeId: string,
+    filePath: string,
+    body: string,
+    lineNumber?: number,
+  ): Promise<ReviewComment>;
+  toggleReviewCommentResolved(
+    projectId: string,
+    commentId: string,
+    resolved: boolean,
+  ): Promise<ReviewComment>;
+  approveChangeReview(
+    projectId: string,
+    changeId: string,
+    expectedSourceDigest: string,
+    overrideReason?: string,
+  ): Promise<ChangeReviewSnapshot>;
+  requestChangeRevision(
+    projectId: string,
+    changeId: string,
+    note?: string,
+  ): Promise<ChangeReviewSnapshot>;
+  prepareChangeIntegration(
+    projectId: string,
+    changeId: string,
+    selectedPaths: string[],
+    commitMessage: string,
+  ): Promise<IntegrationAttempt>;
+  executeChangeIntegration(
+    projectId: string,
+    changeId: string,
+    attemptId: string,
+  ): Promise<IntegrationAttempt>;
   createCandidateWorktree(
     projectId: string,
     changeId: string,
@@ -310,6 +356,158 @@ export class TauriAppService implements AppService {
         status: null,
       },
     });
+  }
+
+  async getChangeReview(
+    projectId: string,
+    changeId: string,
+  ): Promise<ChangeReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+    };
+    try {
+      return await invoke<ChangeReviewSnapshot>("get_change_review", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async readGitFileDiffPair(
+    projectId: string,
+    relativePath: string,
+  ): Promise<GitDiffPair> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+    };
+    try {
+      return await invoke<GitDiffPair>("read_git_file_diff_pair", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async addReviewComment(
+    projectId: string,
+    changeId: string,
+    filePath: string,
+    body: string,
+    lineNumber?: number,
+  ): Promise<ReviewComment> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+      filePath,
+      lineNumber: lineNumber ?? null,
+      body,
+    };
+    try {
+      return await invoke<ReviewComment>("add_review_comment", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async toggleReviewCommentResolved(
+    projectId: string,
+    commentId: string,
+    resolved: boolean,
+  ): Promise<ReviewComment> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      commentId,
+      resolved,
+    };
+    try {
+      return await invoke<ReviewComment>("toggle_review_comment_resolved", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async approveChangeReview(
+    projectId: string,
+    changeId: string,
+    expectedSourceDigest: string,
+    overrideReason?: string,
+  ): Promise<ChangeReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+      expectedSourceDigest,
+      overrideReason: overrideReason ?? null,
+    };
+    try {
+      return await invoke<ChangeReviewSnapshot>("approve_change_review", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async requestChangeRevision(
+    projectId: string,
+    changeId: string,
+    note?: string,
+  ): Promise<ChangeReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+      note: note ?? null,
+    };
+    try {
+      return await invoke<ChangeReviewSnapshot>("request_change_revision", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async prepareChangeIntegration(
+    projectId: string,
+    changeId: string,
+    selectedPaths: string[],
+    commitMessage: string,
+  ): Promise<IntegrationAttempt> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+      selectedPaths,
+      commitMessage,
+    };
+    try {
+      return await invoke<IntegrationAttempt>("prepare_change_integration", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async executeChangeIntegration(
+    projectId: string,
+    changeId: string,
+    attemptId: string,
+  ): Promise<IntegrationAttempt> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changeId,
+      attemptId,
+    };
+    try {
+      return await invoke<IntegrationAttempt>("execute_change_integration", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async createCandidateWorktree(

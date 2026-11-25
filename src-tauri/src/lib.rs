@@ -22,6 +22,8 @@ use sqlx::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
+mod review;
+
 const IPC_SCHEMA_VERSION: u16 = 1;
 const EVENT_NAME: &str = "app-event";
 static EVENT_SEQUENCE: AtomicU32 = AtomicU32::new(1);
@@ -5840,6 +5842,14 @@ pub fn run() {
             create_change,
             update_change,
             reopen_change_review,
+            review::get_change_review,
+            review::read_git_file_diff_pair,
+            review::add_review_comment,
+            review::toggle_review_comment_resolved,
+            review::approve_change_review,
+            review::request_change_revision,
+            review::prepare_change_integration,
+            review::execute_change_integration,
             git_status,
             git_diff,
             create_candidate_worktree,

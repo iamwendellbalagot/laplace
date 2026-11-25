@@ -49,6 +49,81 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("routes Change review, approval, and guarded integration commands over native IPC", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({
+        change: {
+          id: "ch-1",
+          projectId: "/work/project",
+          objective: "Ship review",
+          status: "in_review",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        branch: "main",
+        headRevision: "abc123",
+        sourceDigest: "def456",
+        changedFiles: [],
+        gitOperationInProgress: false,
+        hasFreshPassingCheck: true,
+        approvalValid: false,
+        approvalStaleReason: null,
+        comments: [],
+        latestDecision: null,
+        latestAttempt: null,
+      })
+      .mockResolvedValueOnce({
+        id: "int-1",
+        changeId: "ch-1",
+        projectId: "/work/project",
+        baseHead: "abc123",
+        approvedSourceDigest: "def456",
+        commitMessage: "Ship review",
+        selectedPaths: ["src/App.tsx"],
+        status: "prepared",
+        commitSha: null,
+        errorDetail: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    const service = new TauriAppService();
+
+    await expect(
+      service.getChangeReview("/work/project", "ch-1"),
+    ).resolves.toMatchObject({ sourceDigest: "def456" });
+    await expect(
+      service.prepareChangeIntegration(
+        "/work/project",
+        "ch-1",
+        ["src/App.tsx"],
+        "Ship review",
+      ),
+    ).resolves.toMatchObject({ status: "prepared" });
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_change_review", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        changeId: "ch-1",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      2,
+      "prepare_change_integration",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          changeId: "ch-1",
+          selectedPaths: ["src/App.tsx"],
+          commitMessage: "Ship review",
+        },
+      },
+    );
+  });
+
   it("lists and runs project recipes with optional change linkage", async () => {
     mocks.invoke
       .mockResolvedValueOnce([

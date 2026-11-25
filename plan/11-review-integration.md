@@ -1,6 +1,6 @@
 # 11 — Editable review and guarded integration
 
-Status: Not started  
+Status: Core editable review and guarded direct-in-repo integration implemented (migration 0004, `src-tauri/src/review.rs`, editable Monaco `DiffEditor`, persistent comments, snapshot-bound approvals, two-step guarded `git commit --only`, and crash reconciliation); manual macOS end-to-end smoke remains open
 Depends on: [10](10-verification-evidence.md)  
 Next: [12 — Daily workflow](12-daily-workflow.md)
 
@@ -10,19 +10,19 @@ Review the actual candidate, revise it directly, inspect evidence, and integrate
 
 ## Tasks
 
-- [ ] Implement Change review with real file list/diffs, objective, criteria, risks/unknowns, and source-linked summary.
-- [ ] Use Monaco diff with candidate editing or direct open-in-editor and preserved review position.
-- [ ] Add file/line comments, revision requests, and links back to Rook with precise source context.
-- [ ] Bind approvals to candidate snapshot and invalidate them on edits; make stale checks visible beside decisions.
-- [ ] Define check requirements and explicit override reasons; never silently imply unrun checks passed.
-- [ ] Start with one documented squash strategy into a clean checked-out destination.
-- [ ] Record destination baseline, approved candidate, and exact proposed integrated tree.
-- [ ] Prepare/review integration result separately; reverify and reapprove when the proposed tree differs from the reviewed/tested state.
-- [ ] Coordinate app editing and Git operations; recheck destination branch/index/worktree before applying.
-- [ ] Stop on changed target, conflicts, active mutation, or failed preconditions. Provide resolution/retry, not destructive reset.
-- [ ] Persist integration intent/progress/outcome and Git commit identity for partial-failure recovery.
-- [ ] Handle hooks/signing/identity/credential requirements explicitly; do not silently bypass them.
-- [ ] Preserve dirty/unintegrated worktrees and offer explicit cleanup only when safe.
+- [x] Implement Change review with real file list/diffs, objective, verification freshness, and source-linked summary (adapted for direct-in-repo editing).
+- [x] Use Monaco DiffEditor with inline working-tree editing, save, and direct open-in-editor.
+- [x] Add durable file/line comments, revision requests, and handoff back to Rook with precise file/line context.
+- [x] Bind approvals to source snapshot (`source_digest` + `HEAD`) and invalidate them automatically on edits; make stale checks visible beside decisions.
+- [x] Define check requirements and explicit override reasons; never silently imply unrun checks passed.
+- [x] Implement guarded direct-in-repo integration (`git commit --only -- <selected_paths>`) into the checked-out branch while preserving unselected edits.
+- [x] Record base HEAD, approved source digest, and exact selected file paths in SQLite (`integration_attempts`).
+- [x] Prepare and confirm integration separately; reverify live `HEAD` and `source_digest` before committing.
+- [x] Coordinate app editing and Git operations; block approval/integration while Rook Build is active or Monaco tabs have unsaved edits.
+- [x] Stop on changed target (`destination_branch_advanced`), active merge/rebase (`git_operation_in_progress`), active mutation, or failed hooks without destructive reset.
+- [x] Persist integration intent/progress/outcome and Git commit SHA for partial-failure recovery (`committing` reconciliation against real Git state).
+- [x] Handle hooks/signing/identity/credential requirements explicitly; never bypass with `--no-verify`.
+- [x] Preserve unselected/unintegrated edits safely (no worktree cleanup needed under direct-in-repo workflow).
 
 ## UI reference
 

@@ -32,6 +32,7 @@ import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
 import { RookPermissionCard } from "./features/rook/RookPermissionCard";
+import { ChangeReviewScreen } from "./features/review/ChangeReviewScreen";
 import {
   applyExternalReload,
   dismissExternalChangeKeepingEdits,
@@ -205,6 +206,7 @@ export function App({ service, browserPreview = false }: AppProps) {
     [],
   );
   const [verifyChangeId, setVerifyChangeId] = useState<string>("");
+  const [reviewChangeId, setReviewChangeId] = useState<string | null>(null);
 
   useEffect(() => {
     if (browserPreview) return;
@@ -360,6 +362,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         await service.listProjectRecipes(project.id).catch(() => []),
       );
       setVerifyChangeId("");
+      setReviewChangeId(null);
       setProjectEntries(listing.entries);
       setProjectEntriesTruncated(listing.truncated);
       setProjectDirectory("");
@@ -1359,6 +1362,26 @@ export function App({ service, browserPreview = false }: AppProps) {
             projectRecipes={projectRecipes}
             verifyChangeId={verifyChangeId}
             onVerifyChangeIdChange={setVerifyChangeId}
+            reviewChangeId={reviewChangeId}
+            onOpenReviewChange={setReviewChangeId}
+            onOpenReviewFileInEditor={(relativePath) => {
+              navigate("editor");
+              void openProjectFile(relativePath);
+            }}
+            onSendRevisionToRook={(prompt) => {
+              setRookDraft(prompt);
+              if (activeProject) {
+                rookDraftByProject.current[activeProject.id] = prompt;
+              }
+              navigate("rook");
+            }}
+            onRefreshChangeDomain={async () => {
+              if (!activeProject) return;
+              setChanges(
+                await service.listChanges(activeProject.id).catch(() => []),
+              );
+              await syncWorkspaceFromDisk(activeProject.id);
+            }}
             onOpenVerifyForChange={(changeId) => {
               setVerifyChangeId(changeId);
               navigate("verify");
@@ -1604,6 +1627,11 @@ interface ScreenContentProps {
   projectRecipes?: ProjectRecipeSummary[];
   verifyChangeId?: string;
   onVerifyChangeIdChange?: (changeId: string) => void;
+  reviewChangeId?: string | null;
+  onOpenReviewChange?: (changeId: string | null) => void;
+  onOpenReviewFileInEditor?: (relativePath: string) => void;
+  onSendRevisionToRook?: (prompt: string) => void;
+  onRefreshChangeDomain?: () => Promise<void>;
   onOpenVerifyForChange?: (changeId: string) => void;
   onTrustWorkspace?: () => Promise<void>;
   onRunCheck?: (
@@ -1696,7 +1724,39 @@ function ScreenContent(props: ScreenContentProps) {
   if (page === "settings") return <SettingsScreen {...props} />;
   if (page === "editor") return <EditorScreen {...props} />;
   if (page === "home") return <HomeScreen {...props} />;
-  if (page === "changes") return <ChangesScreen {...props} />;
+  if (page === "changes") {
+    if (props.reviewChangeId && props.activeProject && !props.browserPreview) {
+      const dirtyProjectDocs = props.documents.filter(
+        (doc) =>
+          doc.projectId === props.activeProject?.id &&
+          doc.content !== doc.savedContent,
+      );
+      return (
+        <ChangeReviewScreen
+          service={props.service}
+          project={props.activeProject}
+          changeId={props.reviewChangeId}
+          preferences={props.preferences}
+          executions={props.executions ?? []}
+          dirtyCount={dirtyProjectDocs.length}
+          savingFiles={props.savingFiles}
+          onSaveAllDirty={() => props.onSaveDocuments(dirtyProjectDocs)}
+          onBack={() => props.onOpenReviewChange?.(null)}
+          onOpenInEditor={(path) => props.onOpenReviewFileInEditor?.(path)}
+          onOpenVerify={(id) => props.onOpenVerifyForChange?.(id)}
+          onSendRevisionToRook={(prompt) =>
+            props.onSendRevisionToRook?.(prompt)
+          }
+          onChangeUpdated={() =>
+            props.onRefreshChangeDomain
+              ? props.onRefreshChangeDomain()
+              : Promise.resolve()
+          }
+        />
+      );
+    }
+    return <ChangesScreen {...props} />;
+  }
   if (page === "verify") return <VerifyScreen {...props} />;
   if (page === "rook")
     return (
@@ -1786,6 +1846,7 @@ function ChangesScreen({
   onCreateChange,
   onUpdateChange,
   onReopenChange,
+  onOpenReviewChange,
   onOpenVerifyForChange,
   browserPreview,
 }: ScreenContentProps) {
@@ -1935,6 +1996,13 @@ function ChangesScreen({
                             >
                               {summary.label}
                             </span>
+                            <button
+                              type="button"
+                              className="button button-primary"
+                              onClick={() => onOpenReviewChange?.(change.id)}
+                            >
+                              Review
+                            </button>
                             <button
                               type="button"
                               className="button button-quiet"

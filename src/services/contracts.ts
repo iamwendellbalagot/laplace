@@ -212,6 +212,64 @@ export interface ProjectRecipeSummary {
   args: string[];
   cwd: string | null;
 }
+
+export interface ReviewComment {
+  id: string;
+  changeId: string;
+  filePath: string;
+  lineNumber: number | null;
+  body: string;
+  resolved: boolean;
+  createdAt: number;
+}
+
+export interface ReviewDecision {
+  id: string;
+  changeId: string;
+  sourceDigest: string;
+  headRevision: string;
+  decision: "approved" | "revision_requested";
+  overrideReason: string | null;
+  createdAt: number;
+}
+
+export interface IntegrationAttempt {
+  id: string;
+  changeId: string;
+  projectId: string;
+  baseHead: string;
+  approvedSourceDigest: string;
+  commitMessage: string;
+  selectedPaths: string[];
+  status: "prepared" | "committing" | "succeeded" | "failed" | "aborted";
+  commitSha: string | null;
+  errorDetail: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface GitDiffPair {
+  path: string;
+  status: string;
+  kind: ProjectFileReadKind;
+  original: string | null;
+  modified: string | null;
+}
+
+export interface ChangeReviewSnapshot {
+  change: ChangeRecord;
+  branch: string | null;
+  headRevision: string;
+  sourceDigest: string;
+  changedFiles: GitFileStatus[];
+  gitOperationInProgress: boolean;
+  hasFreshPassingCheck: boolean;
+  approvalValid: boolean;
+  approvalStaleReason: string | null;
+  comments: ReviewComment[];
+  latestDecision: ReviewDecision | null;
+  latestAttempt: IntegrationAttempt | null;
+}
 export interface ExecutionRecord {
   id: string;
   projectId: string;
