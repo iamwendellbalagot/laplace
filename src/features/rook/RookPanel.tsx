@@ -558,421 +558,16 @@ export function RookPanel({
             )}
           </div>
 
-          <div className="rook-chat-actions">
-            <div
-              className="rook-mode-toggle"
-              role="group"
-              aria-label="Rook mode"
-            >
-              <button
-                type="button"
-                aria-pressed={rookMode === "ask"}
-                className={rookMode === "ask" ? "is-active" : ""}
-                disabled={rookPending || Boolean(runId)}
-                onClick={() => onRookModeChange("ask")}
+          <div className="rook-docked-topbar-right">
+            {variant === "docked" && rookMode === "build" && (
+              <span
+                className="rook-build-badge"
+                title={sandboxSummary(rookSandbox)}
               >
-                Ask
-              </button>
-              <button
-                type="button"
-                aria-pressed={rookMode === "build"}
-                className={rookMode === "build" ? "is-active" : ""}
-                disabled={rookPending || Boolean(runId)}
-                onClick={() => onRookModeChange("build")}
-              >
+                <span className="rook-build-badge-dot" aria-hidden="true" />
                 Build
-              </button>
-            </div>
-
-            {providerControlsAvailable && (
-              <Dialog.Root
-                open={modelPickerOpen}
-                onOpenChange={(open) => {
-                  if (!open && activeLogin) {
-                    void service
-                      .cancelRookLogin(session!, activeLogin)
-                      .catch((failure) =>
-                        setError(
-                          errorMessage(failure, "Sign-in cancellation failed."),
-                        ),
-                      );
-                    setActiveLogin(undefined);
-                    setActiveLoginProvider(undefined);
-                    setAuthPrompt(undefined);
-                    setAuthValue("");
-                  }
-                  setModelPickerOpen(open);
-                  if (open) {
-                    setSearch("");
-                    setSetupModel(undefined);
-                  } else setSetupModel(undefined);
-                }}
-              >
-                <Dialog.Trigger asChild>
-                  <button
-                    className="rook-model-trigger"
-                    type="button"
-                    disabled={!session}
-                    title={currentModel?.name ?? "Choose a model"}
-                  >
-                    <span>{currentModel?.name ?? "Choose model"}</span>
-                    <span aria-hidden="true">⌄</span>
-                  </button>
-                </Dialog.Trigger>
-                <Dialog.Portal>
-                  <Dialog.Overlay className="palette-overlay" />
-                  <Dialog.Content className="rook-model-dialog">
-                    <header className="rook-model-heading">
-                      <span className="rook-model-icon" aria-hidden="true">
-                        ◇
-                      </span>
-                      <div>
-                        <Dialog.Title>Select Model</Dialog.Title>
-                        <Dialog.Description>
-                          Choose the model to use in this workspace.
-                        </Dialog.Description>
-                      </div>
-                      <Dialog.Close asChild>
-                        <button
-                          className="rook-model-close"
-                          type="button"
-                          aria-label="Close"
-                        >
-                          ×
-                        </button>
-                      </Dialog.Close>
-                    </header>
-                    <label className="rook-model-search">
-                      <span aria-hidden="true">⌕</span>
-                      <input
-                        ref={searchInput}
-                        aria-label="Search models"
-                        placeholder="Search models…"
-                        value={search}
-                        onChange={(event) =>
-                          setSearch(event.currentTarget.value)
-                        }
-                      />
-                      <kbd>⌘K</kbd>
-                    </label>
-                    <div className="rook-model-list">
-                      {modelGroups.map(
-                        ({
-                          provider: providerId,
-                          name,
-                          models: groupModels,
-                        }) => (
-                          <div className="rook-model-group" key={providerId}>
-                            <h3>{name}</h3>
-                            {groupModels.map((model) => {
-                              const provider = providers.find(
-                                (item) => item.id === model.provider,
-                              );
-                              const selected =
-                                currentModel?.provider === model.provider &&
-                                currentModel.id === model.id;
-                              return (
-                                <button
-                                  key={`${model.provider}/${model.id}`}
-                                  type="button"
-                                  className={selected ? "is-selected" : ""}
-                                  disabled={pending}
-                                  onClick={() => {
-                                    if (
-                                      model.configured === false ||
-                                      !provider?.configured
-                                    ) {
-                                      setSetupModel(model);
-                                      return;
-                                    }
-                                    setPending(true);
-                                    void service
-                                      .selectRookModel(session!, model)
-                                      .then((confirmed) => {
-                                        setCurrentModel(confirmed);
-                                        setError(undefined);
-                                        setModelPickerOpen(false);
-                                      })
-                                      .catch((failure) =>
-                                        setError(
-                                          errorMessage(
-                                            failure,
-                                            "Model selection failed.",
-                                          ),
-                                        ),
-                                      )
-                                      .finally(() => setPending(false));
-                                  }}
-                                >
-                                  <span>{model.name}</span>
-                                  {selected ? (
-                                    <span aria-label="Selected">✓</span>
-                                  ) : model.configured === false ||
-                                    !provider?.configured ? (
-                                    <span>Set up</span>
-                                  ) : null}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ),
-                      )}
-                      {!models.length && (
-                        <p>
-                          No models are available. Configure a provider to get
-                          started.
-                        </p>
-                      )}
-                    </div>
-                  </Dialog.Content>
-                  {setupModel && (
-                    <Dialog.Root
-                      open
-                      onOpenChange={(open) => {
-                        if (!open) {
-                          if (activeLogin) {
-                            void service
-                              .cancelRookLogin(session!, activeLogin)
-                              .catch((failure) =>
-                                setError(
-                                  errorMessage(
-                                    failure,
-                                    "Sign-in cancellation failed.",
-                                  ),
-                                ),
-                              );
-                            setActiveLogin(undefined);
-                            setActiveLoginProvider(undefined);
-                            setAuthPrompt(undefined);
-                            setAuthValue("");
-                          }
-                          setSetupModel(undefined);
-                        }
-                      }}
-                    >
-                      <Dialog.Portal>
-                        <Dialog.Overlay className="palette-overlay rook-setup-overlay" />
-                        <Dialog.Content className="rook-model-dialog rook-setup-dialog">
-                          <header className="rook-model-heading">
-                            <span
-                              className="rook-model-icon"
-                              aria-hidden="true"
-                            >
-                              ◇
-                            </span>
-                            <div>
-                              <Dialog.Title>
-                                Set up{" "}
-                                {providers.find(
-                                  (item) => item.id === setupModel.provider,
-                                )?.name ?? setupModel.provider}
-                              </Dialog.Title>
-                              <Dialog.Description>
-                                Sign in to use {setupModel.name}.
-                              </Dialog.Description>
-                            </div>
-                          </header>
-                          <p>
-                            {providers.find(
-                              (item) => item.id === setupModel.provider,
-                            )?.missingEnvironmentVariables?.length
-                              ? ` Set ${providers.find((item) => item.id === setupModel.provider)?.missingEnvironmentVariables?.join(", ")} in your environment first.`
-                              : providers.find(
-                                    (item) => item.id === setupModel.provider,
-                                  )?.authMethods.length
-                                ? " Choose a sign-in method below."
-                                : " This provider has no interactive sign-in method. Configure its credentials in your environment, then reconnect."}
-                          </p>
-                          {providers
-                            .find((item) => item.id === setupModel.provider)
-                            ?.authMethods.map((method) => (
-                              <button
-                                key={method.type}
-                                className="button button-quiet"
-                                type="button"
-                                disabled={Boolean(activeLogin)}
-                                onClick={() => {
-                                  const loginId = crypto
-                                    .randomUUID()
-                                    .replaceAll("-", "");
-                                  setActiveLogin(loginId);
-                                  setActiveLoginProvider(setupModel.provider);
-                                  setAuthEvent(undefined);
-                                  void service
-                                    .loginRookProvider(
-                                      session!,
-                                      loginId,
-                                      setupModel.provider,
-                                      method.type,
-                                    )
-                                    .then(async (result) => {
-                                      setProviders(result.providers);
-                                      setModels(result.models);
-                                      setCurrentModel(result.currentModel);
-                                      if (
-                                        result.providers.find(
-                                          (provider) =>
-                                            provider.id === setupModel.provider,
-                                        )?.configured
-                                      ) {
-                                        const selected =
-                                          await service.selectRookModel(
-                                            session!,
-                                            setupModel,
-                                          );
-                                        setCurrentModel(selected);
-                                        setSetupModel(undefined);
-                                        setModelPickerOpen(false);
-                                      }
-                                    })
-                                    .catch((failure) =>
-                                      setError(
-                                        errorMessage(
-                                          failure,
-                                          "Sign-in failed.",
-                                        ),
-                                      ),
-                                    )
-                                    .finally(() => {
-                                      setActiveLogin(undefined);
-                                      setActiveLoginProvider(undefined);
-                                      setAuthPrompt(undefined);
-                                    });
-                                }}
-                              >
-                                {method.loginLabel ?? method.name}
-                              </button>
-                            ))}
-                          {activeLogin && (
-                            <div className="rook-auth-status" role="status">
-                              <span>Sign-in in progress</span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void service
-                                    .cancelRookLogin(session!, activeLogin)
-                                    .catch((failure) =>
-                                      setError(
-                                        errorMessage(
-                                          failure,
-                                          "Sign-in cancellation failed.",
-                                        ),
-                                      ),
-                                    )
-                                    .finally(() => {
-                                      setActiveLogin(undefined);
-                                      setActiveLoginProvider(undefined);
-                                      setAuthPrompt(undefined);
-                                      setAuthValue("");
-                                    })
-                                }
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          )}
-                          {authEvent && (
-                            <p className="rook-auth-event" aria-live="polite">
-                              {authEvent.type === "device_code" ? (
-                                <>
-                                  Open {authEvent.verificationUri} and enter{" "}
-                                  <strong>{authEvent.userCode}</strong>
-                                </>
-                              ) : (
-                                (authEvent.message ??
-                                authEvent.instructions ??
-                                authEvent.url)
-                              )}
-                            </p>
-                          )}
-                          {authPrompt && (
-                            <form
-                              className="rook-auth-prompt"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                void service
-                                  .respondRookAuthPrompt(
-                                    session!,
-                                    authPrompt.id,
-                                    authValue,
-                                  )
-                                  .then(() => {
-                                    setAuthPrompt(undefined);
-                                    setAuthValue("");
-                                  })
-                                  .catch((failure) =>
-                                    setError(
-                                      errorMessage(
-                                        failure,
-                                        "Sign-in response failed.",
-                                      ),
-                                    ),
-                                  );
-                              }}
-                            >
-                              <label htmlFor="rook-auth-input">
-                                {authPrompt.prompt.message}
-                              </label>
-                              {authPrompt.prompt.type === "select" ? (
-                                <select
-                                  id="rook-auth-input"
-                                  value={authValue}
-                                  onChange={(event) =>
-                                    setAuthValue(event.currentTarget.value)
-                                  }
-                                >
-                                  <option value="">Choose…</option>
-                                  {authPrompt.prompt.options?.map((option) => (
-                                    <option key={option.id} value={option.id}>
-                                      {option.label}
-                                      {option.description
-                                        ? ` — ${option.description}`
-                                        : ""}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <input
-                                  id="rook-auth-input"
-                                  placeholder={authPrompt.prompt.placeholder}
-                                  type={
-                                    authPrompt.prompt.type === "secret"
-                                      ? "password"
-                                      : "text"
-                                  }
-                                  autoComplete="off"
-                                  value={authValue}
-                                  onChange={(event) =>
-                                    setAuthValue(event.currentTarget.value)
-                                  }
-                                />
-                              )}
-                              <button
-                                className="button button-primary"
-                                disabled={!authValue}
-                              >
-                                Continue
-                              </button>
-                            </form>
-                          )}
-                          <div className="rook-setup-actions">
-                            <button
-                              className="button button-quiet"
-                              type="button"
-                              disabled={Boolean(activeLogin)}
-                              onClick={() => setSetupModel(undefined)}
-                            >
-                              Back to models
-                            </button>
-                          </div>
-                        </Dialog.Content>
-                      </Dialog.Portal>
-                    </Dialog.Root>
-                  )}
-                </Dialog.Portal>
-              </Dialog.Root>
+              </span>
             )}
-
             {onToggleExpand && (
               <button
                 type="button"
@@ -994,12 +589,6 @@ export function RookPanel({
             )}
           </div>
         </header>
-
-        {variant === "docked" && rookMode === "build" && (
-          <div className="rook-docked-sandbox">
-            <span>{sandboxSummary(rookSandbox)}</span>
-          </div>
-        )}
 
         {rookPending && !session && (
           <p className="rook-status-note" role="status">
@@ -1058,7 +647,9 @@ export function RookPanel({
         >
           {messages.length === 0 && (
             <div className="rook-welcome">
-              <span aria-hidden="true">✳</span>
+              <span className="rook-welcome-emblem" aria-hidden="true">
+                ✳
+              </span>
               <h3>
                 {rookMode === "build"
                   ? "What would you like to build?"
@@ -1066,9 +657,39 @@ export function RookPanel({
               </h3>
               <p>
                 {rookMode === "build"
-                  ? "Edit files directly with instant pre-turn undo."
-                  : "Ask about code, callers, or how this project works."}
+                  ? "Edits files directly with instant pre-turn undo."
+                  : "Read-only exploration with cited files and line links."}
               </p>
+              <div
+                className="rook-welcome-starters"
+                aria-label="Suggested prompts"
+              >
+                {(rookMode === "build"
+                  ? [
+                      "Fix diagnostics in the active file",
+                      "Add focused unit tests",
+                      "Refactor cleanly with minimal diff",
+                    ]
+                  : [
+                      "Explain the active file",
+                      "Trace callers & data flow",
+                      "Summarize uncommitted changes",
+                    ]
+                ).map((starter) => (
+                  <button
+                    key={starter}
+                    type="button"
+                    className="rook-starter-chip"
+                    onClick={() => {
+                      setPrompt(starter);
+                      onRookDraftSave(starter);
+                      promptRef.current?.focus();
+                    }}
+                  >
+                    {starter}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {messages.length > 0 &&
@@ -1242,198 +863,657 @@ export function RookPanel({
           />
         )}
 
-        <form
-          className="rook-composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submitPrompt(runId ? "steer" : undefined);
-          }}
-        >
-          {rookContextChips.length > 0 && (
-            <div className="rook-context-chips" aria-label="Attached context">
-              {rookContextChips.map((chip) => {
-                const liveDoc = chip.filePath
-                  ? documents.find(
-                      (doc) =>
-                        doc.projectId === activeProject.id &&
-                        doc.path === chip.filePath,
-                    )
-                  : undefined;
-                const isStale = Boolean(
-                  liveDoc &&
-                    chip.sourceSnapshot !== undefined &&
-                    liveDoc.content !== chip.sourceSnapshot,
-                );
-                return (
-                  <span
-                    key={chip.id}
-                    className={`rook-context-chip${isStale ? " is-stale" : ""}`}
-                  >
-                    <span>{chip.label}</span>
-                    {isStale && (
-                      <small title="Attached file was edited after attaching">
-                        stale
-                      </small>
-                    )}
-                    <button
-                      type="button"
-                      aria-label={`Remove ${chip.label}`}
-                      onClick={() => removeContextChip(chip.id)}
+        <div className="rook-composer-dock-wrap">
+          <form
+            className="rook-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitPrompt(runId ? "steer" : undefined);
+            }}
+          >
+            {rookContextChips.length > 0 && (
+              <div className="rook-context-chips" aria-label="Attached context">
+                {rookContextChips.map((chip) => {
+                  const liveDoc = chip.filePath
+                    ? documents.find(
+                        (doc) =>
+                          doc.projectId === activeProject.id &&
+                          doc.path === chip.filePath,
+                      )
+                    : undefined;
+                  const isStale = Boolean(
+                    liveDoc &&
+                      chip.sourceSnapshot !== undefined &&
+                      liveDoc.content !== chip.sourceSnapshot,
+                  );
+                  return (
+                    <span
+                      key={chip.id}
+                      className={`rook-context-chip${isStale ? " is-stale" : ""}`}
                     >
-                      ×
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          )}
-
-          {(rookCancelling || rookQueuedSteering) && (
-            <div className="rook-steering-status" role="status">
-              <span>
-                {rookQueuedSteering
-                  ? rookQueuedSteering.mode === "steer"
-                    ? "Steering received — stopping current run before applying…"
-                    : "Follow-up queued — will send when current run settles…"
-                  : "Cancelling current run…"}
-              </span>
-              {rookQueuedSteering && (
-                <button
-                  type="button"
-                  className="button button-quiet"
-                  onClick={() => setQueuedSteering(null)}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          )}
-
-          {prompt.trim() && !session && !rookPending && !rookStartupError && (
-            <button
-              className="rook-draft-action"
-              type="button"
-              onClick={onRookStart}
-            >
-              Connect to send your draft
-            </button>
-          )}
-
-          <div className="rook-composer-row">
-            <textarea
-              ref={promptRef}
-              id="rook-prompt"
-              rows={1}
-              aria-label={
-                rookMode === "build"
-                  ? "Instruct Rook Build for this project"
-                  : "Ask about this project"
-              }
-              value={prompt}
-              onChange={(event) => {
-                setPrompt(event.target.value);
-                onRookDraftSave(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (
-                  event.key === "Enter" &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
-                ) {
-                  event.preventDefault();
-                  submitPrompt(runId ? "steer" : undefined);
-                }
-              }}
-              maxLength={64000}
-              placeholder={
-                runId
-                  ? "Steer or queue next… (Enter)"
-                  : rookMode === "build"
-                    ? "Describe changes to build… (⌘L to focus)"
-                    : "Ask about this codebase… (⌘L to focus)"
-              }
-            />
-            {session && runId ? (
-              <div className="rook-composer-run-actions">
-                {prompt.trim() && (
-                  <>
-                    <button
-                      type="button"
-                      className="button button-quiet"
-                      title="Wait for current run to finish, then send"
-                      onClick={() => submitPrompt("queue")}
-                    >
-                      Queue
-                    </button>
-                    <button
-                      type="button"
-                      className="button button-primary"
-                      title="Cancel current run and apply steering note"
-                      onClick={() => submitPrompt("steer")}
-                    >
-                      Stop &amp; steer
-                    </button>
-                  </>
-                )}
-                <button
-                  className="rook-send-button rook-stop-button"
-                  type="button"
-                  aria-label="Stop Rook"
-                  title={rookCancelling ? "Cancelling…" : "Stop"}
-                  disabled={rookCancelling}
-                  onClick={() => {
-                    setCancelling(true);
-                    void service.cancelRookAsk(session, runId).catch(() => {
-                      setCancelling(false);
-                    });
-                  }}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 16 16"
-                    fill="currentColor"
-                    aria-hidden="true"
-                  >
-                    <rect x="3" y="3" width="10" height="10" rx="2" />
-                  </svg>
-                </button>
+                      <span>{chip.label}</span>
+                      {isStale && (
+                        <small title="Attached file was edited after attaching">
+                          stale
+                        </small>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${chip.label}`}
+                        onClick={() => removeContextChip(chip.id)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
               </div>
-            ) : (
+            )}
+
+            {(rookCancelling || rookQueuedSteering) && (
+              <div className="rook-steering-status" role="status">
+                <span>
+                  {rookQueuedSteering
+                    ? rookQueuedSteering.mode === "steer"
+                      ? "Steering received — stopping current run before applying…"
+                      : "Follow-up queued — will send when current run settles…"
+                    : "Cancelling current run…"}
+                </span>
+                {rookQueuedSteering && (
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    onClick={() => setQueuedSteering(null)}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
+
+            {prompt.trim() && !session && !rookPending && !rookStartupError && (
               <button
-                className="rook-send-button"
-                type="submit"
-                aria-label={
-                  rookMode === "build"
-                    ? "Send to Rook Build"
-                    : "Send to Rook Ask"
-                }
-                title="Send (Enter)"
-                disabled={
-                  !session ||
-                  (!currentModel && providerControlsAvailable) ||
-                  !selectedModelAvailable ||
-                  !prompt.trim()
-                }
+                className="rook-draft-action"
+                type="button"
+                onClick={onRookStart}
               >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M8 13V3" />
-                  <path d="M3.75 7.25 8 3l4.25 4.25" />
-                </svg>
+                Connect to send your draft
               </button>
             )}
+
+            <div className="rook-composer-row">
+              <textarea
+                ref={promptRef}
+                id="rook-prompt"
+                rows={2}
+                aria-label={
+                  rookMode === "build"
+                    ? "Instruct Rook Build for this project"
+                    : "Ask about this project"
+                }
+                value={prompt}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  onRookDraftSave(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    submitPrompt(runId ? "steer" : undefined);
+                  }
+                }}
+                maxLength={64000}
+                placeholder={
+                  runId
+                    ? "Steer or queue next… (Enter)"
+                    : rookMode === "build"
+                      ? "Describe changes to build… (⌘L)"
+                      : "Ask about this codebase… (⌘L)"
+                }
+              />
+            </div>
+
+            <div className="rook-composer-toolbar">
+              <div className="rook-composer-controls">
+                <div
+                  className="rook-mode-toggle"
+                  role="group"
+                  aria-label="Rook mode"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={rookMode === "ask"}
+                    className={rookMode === "ask" ? "is-active" : ""}
+                    disabled={rookPending || Boolean(runId)}
+                    onClick={() => onRookModeChange("ask")}
+                  >
+                    Ask
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={rookMode === "build"}
+                    className={rookMode === "build" ? "is-active" : ""}
+                    disabled={rookPending || Boolean(runId)}
+                    onClick={() => onRookModeChange("build")}
+                  >
+                    Build
+                  </button>
+                </div>
+
+                {providerControlsAvailable && (
+                  <Dialog.Root
+                    open={modelPickerOpen}
+                    onOpenChange={(open) => {
+                      if (!open && activeLogin) {
+                        void service
+                          .cancelRookLogin(session!, activeLogin)
+                          .catch((failure) =>
+                            setError(
+                              errorMessage(
+                                failure,
+                                "Sign-in cancellation failed.",
+                              ),
+                            ),
+                          );
+                        setActiveLogin(undefined);
+                        setActiveLoginProvider(undefined);
+                        setAuthPrompt(undefined);
+                        setAuthValue("");
+                      }
+                      setModelPickerOpen(open);
+                      if (open) {
+                        setSearch("");
+                        setSetupModel(undefined);
+                      } else setSetupModel(undefined);
+                    }}
+                  >
+                    <Dialog.Trigger asChild>
+                      <button
+                        className="rook-model-trigger"
+                        type="button"
+                        disabled={!session}
+                        title={currentModel?.name ?? "Choose a model"}
+                      >
+                        <span>{currentModel?.name ?? "Choose model"}</span>
+                        <span aria-hidden="true">⌄</span>
+                      </button>
+                    </Dialog.Trigger>
+                    <Dialog.Portal>
+                      <Dialog.Overlay className="palette-overlay" />
+                      <Dialog.Content className="rook-model-dialog">
+                        <header className="rook-model-heading">
+                          <span className="rook-model-icon" aria-hidden="true">
+                            ◇
+                          </span>
+                          <div>
+                            <Dialog.Title>Select Model</Dialog.Title>
+                            <Dialog.Description>
+                              Choose the model to use in this workspace.
+                            </Dialog.Description>
+                          </div>
+                          <Dialog.Close asChild>
+                            <button
+                              className="rook-model-close"
+                              type="button"
+                              aria-label="Close"
+                            >
+                              ×
+                            </button>
+                          </Dialog.Close>
+                        </header>
+                        <label className="rook-model-search">
+                          <span aria-hidden="true">⌕</span>
+                          <input
+                            ref={searchInput}
+                            aria-label="Search models"
+                            placeholder="Search models…"
+                            value={search}
+                            onChange={(event) =>
+                              setSearch(event.currentTarget.value)
+                            }
+                          />
+                          <kbd>⌘K</kbd>
+                        </label>
+                        <div className="rook-model-list">
+                          {modelGroups.map(
+                            ({
+                              provider: providerId,
+                              name,
+                              models: groupModels,
+                            }) => (
+                              <div
+                                className="rook-model-group"
+                                key={providerId}
+                              >
+                                <h3>{name}</h3>
+                                {groupModels.map((model) => {
+                                  const provider = providers.find(
+                                    (item) => item.id === model.provider,
+                                  );
+                                  const selected =
+                                    currentModel?.provider === model.provider &&
+                                    currentModel.id === model.id;
+                                  return (
+                                    <button
+                                      key={`${model.provider}/${model.id}`}
+                                      type="button"
+                                      className={selected ? "is-selected" : ""}
+                                      disabled={pending}
+                                      onClick={() => {
+                                        if (
+                                          model.configured === false ||
+                                          !provider?.configured
+                                        ) {
+                                          setSetupModel(model);
+                                          return;
+                                        }
+                                        setPending(true);
+                                        void service
+                                          .selectRookModel(session!, model)
+                                          .then((confirmed) => {
+                                            setCurrentModel(confirmed);
+                                            setError(undefined);
+                                            setModelPickerOpen(false);
+                                          })
+                                          .catch((failure) =>
+                                            setError(
+                                              errorMessage(
+                                                failure,
+                                                "Model selection failed.",
+                                              ),
+                                            ),
+                                          )
+                                          .finally(() => setPending(false));
+                                      }}
+                                    >
+                                      <span>{model.name}</span>
+                                      {selected ? (
+                                        <span aria-label="Selected">✓</span>
+                                      ) : model.configured === false ||
+                                        !provider?.configured ? (
+                                        <span>Set up</span>
+                                      ) : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ),
+                          )}
+                          {!models.length && (
+                            <p>
+                              No models are available. Configure a provider to
+                              get started.
+                            </p>
+                          )}
+                        </div>
+                      </Dialog.Content>
+                      {setupModel && (
+                        <Dialog.Root
+                          open
+                          onOpenChange={(open) => {
+                            if (!open) {
+                              if (activeLogin) {
+                                void service
+                                  .cancelRookLogin(session!, activeLogin)
+                                  .catch((failure) =>
+                                    setError(
+                                      errorMessage(
+                                        failure,
+                                        "Sign-in cancellation failed.",
+                                      ),
+                                    ),
+                                  );
+                                setActiveLogin(undefined);
+                                setActiveLoginProvider(undefined);
+                                setAuthPrompt(undefined);
+                                setAuthValue("");
+                              }
+                              setSetupModel(undefined);
+                            }
+                          }}
+                        >
+                          <Dialog.Portal>
+                            <Dialog.Overlay className="palette-overlay rook-setup-overlay" />
+                            <Dialog.Content className="rook-model-dialog rook-setup-dialog">
+                              <header className="rook-model-heading">
+                                <span
+                                  className="rook-model-icon"
+                                  aria-hidden="true"
+                                >
+                                  ◇
+                                </span>
+                                <div>
+                                  <Dialog.Title>
+                                    Set up{" "}
+                                    {providers.find(
+                                      (item) => item.id === setupModel.provider,
+                                    )?.name ?? setupModel.provider}
+                                  </Dialog.Title>
+                                  <Dialog.Description>
+                                    Sign in to use {setupModel.name}.
+                                  </Dialog.Description>
+                                </div>
+                              </header>
+                              <p>
+                                {providers.find(
+                                  (item) => item.id === setupModel.provider,
+                                )?.missingEnvironmentVariables?.length
+                                  ? ` Set ${providers.find((item) => item.id === setupModel.provider)?.missingEnvironmentVariables?.join(", ")} in your environment first.`
+                                  : providers.find(
+                                        (item) =>
+                                          item.id === setupModel.provider,
+                                      )?.authMethods.length
+                                    ? " Choose a sign-in method below."
+                                    : " This provider has no interactive sign-in method. Configure its credentials in your environment, then reconnect."}
+                              </p>
+                              {providers
+                                .find((item) => item.id === setupModel.provider)
+                                ?.authMethods.map((method) => (
+                                  <button
+                                    key={method.type}
+                                    className="button button-quiet"
+                                    type="button"
+                                    disabled={Boolean(activeLogin)}
+                                    onClick={() => {
+                                      const loginId = crypto
+                                        .randomUUID()
+                                        .replaceAll("-", "");
+                                      setActiveLogin(loginId);
+                                      setActiveLoginProvider(
+                                        setupModel.provider,
+                                      );
+                                      setAuthEvent(undefined);
+                                      void service
+                                        .loginRookProvider(
+                                          session!,
+                                          loginId,
+                                          setupModel.provider,
+                                          method.type,
+                                        )
+                                        .then(async (result) => {
+                                          setProviders(result.providers);
+                                          setModels(result.models);
+                                          setCurrentModel(result.currentModel);
+                                          if (
+                                            result.providers.find(
+                                              (provider) =>
+                                                provider.id ===
+                                                setupModel.provider,
+                                            )?.configured
+                                          ) {
+                                            const selected =
+                                              await service.selectRookModel(
+                                                session!,
+                                                setupModel,
+                                              );
+                                            setCurrentModel(selected);
+                                            setSetupModel(undefined);
+                                            setModelPickerOpen(false);
+                                          }
+                                        })
+                                        .catch((failure) =>
+                                          setError(
+                                            errorMessage(
+                                              failure,
+                                              "Sign-in failed.",
+                                            ),
+                                          ),
+                                        )
+                                        .finally(() => {
+                                          setActiveLogin(undefined);
+                                          setActiveLoginProvider(undefined);
+                                          setAuthPrompt(undefined);
+                                        });
+                                    }}
+                                  >
+                                    {method.loginLabel ?? method.name}
+                                  </button>
+                                ))}
+                              {activeLogin && (
+                                <div className="rook-auth-status" role="status">
+                                  <span>Sign-in in progress</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void service
+                                        .cancelRookLogin(session!, activeLogin)
+                                        .catch((failure) =>
+                                          setError(
+                                            errorMessage(
+                                              failure,
+                                              "Sign-in cancellation failed.",
+                                            ),
+                                          ),
+                                        )
+                                        .finally(() => {
+                                          setActiveLogin(undefined);
+                                          setActiveLoginProvider(undefined);
+                                          setAuthPrompt(undefined);
+                                          setAuthValue("");
+                                        })
+                                    }
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              )}
+                              {authEvent && (
+                                <p
+                                  className="rook-auth-event"
+                                  aria-live="polite"
+                                >
+                                  {authEvent.type === "device_code" ? (
+                                    <>
+                                      Open {authEvent.verificationUri} and enter{" "}
+                                      <strong>{authEvent.userCode}</strong>
+                                    </>
+                                  ) : (
+                                    (authEvent.message ??
+                                    authEvent.instructions ??
+                                    authEvent.url)
+                                  )}
+                                </p>
+                              )}
+                              {authPrompt && (
+                                <form
+                                  className="rook-auth-prompt"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void service
+                                      .respondRookAuthPrompt(
+                                        session!,
+                                        authPrompt.id,
+                                        authValue,
+                                      )
+                                      .then(() => {
+                                        setAuthPrompt(undefined);
+                                        setAuthValue("");
+                                      })
+                                      .catch((failure) =>
+                                        setError(
+                                          errorMessage(
+                                            failure,
+                                            "Sign-in response failed.",
+                                          ),
+                                        ),
+                                      );
+                                  }}
+                                >
+                                  <label htmlFor="rook-auth-input">
+                                    {authPrompt.prompt.message}
+                                  </label>
+                                  {authPrompt.prompt.type === "select" ? (
+                                    <select
+                                      id="rook-auth-input"
+                                      value={authValue}
+                                      onChange={(event) =>
+                                        setAuthValue(event.currentTarget.value)
+                                      }
+                                    >
+                                      <option value="">Choose…</option>
+                                      {authPrompt.prompt.options?.map(
+                                        (option) => (
+                                          <option
+                                            key={option.id}
+                                            value={option.id}
+                                          >
+                                            {option.label}
+                                            {option.description
+                                              ? ` — ${option.description}`
+                                              : ""}
+                                          </option>
+                                        ),
+                                      )}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      id="rook-auth-input"
+                                      placeholder={
+                                        authPrompt.prompt.placeholder
+                                      }
+                                      type={
+                                        authPrompt.prompt.type === "secret"
+                                          ? "password"
+                                          : "text"
+                                      }
+                                      autoComplete="off"
+                                      value={authValue}
+                                      onChange={(event) =>
+                                        setAuthValue(event.currentTarget.value)
+                                      }
+                                    />
+                                  )}
+                                  <button
+                                    className="button button-primary"
+                                    disabled={!authValue}
+                                  >
+                                    Continue
+                                  </button>
+                                </form>
+                              )}
+                              <div className="rook-setup-actions">
+                                <button
+                                  className="button button-quiet"
+                                  type="button"
+                                  disabled={Boolean(activeLogin)}
+                                  onClick={() => setSetupModel(undefined)}
+                                >
+                                  Back to models
+                                </button>
+                              </div>
+                            </Dialog.Content>
+                          </Dialog.Portal>
+                        </Dialog.Root>
+                      )}
+                    </Dialog.Portal>
+                  </Dialog.Root>
+                )}
+              </div>
+
+              <div className="rook-composer-actions">
+                {session && runId ? (
+                  <div className="rook-composer-run-actions">
+                    {prompt.trim() && (
+                      <>
+                        <button
+                          type="button"
+                          className="button button-quiet"
+                          title="Wait for current run to finish, then send"
+                          onClick={() => submitPrompt("queue")}
+                        >
+                          Queue
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-primary"
+                          title="Cancel current run and apply steering note"
+                          onClick={() => submitPrompt("steer")}
+                        >
+                          Stop &amp; steer
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="rook-send-button rook-stop-button"
+                      type="button"
+                      aria-label="Stop Rook"
+                      title={rookCancelling ? "Cancelling…" : "Stop"}
+                      disabled={rookCancelling}
+                      onClick={() => {
+                        setCancelling(true);
+                        void service.cancelRookAsk(session, runId).catch(() => {
+                          setCancelling(false);
+                        });
+                      }}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 16 16"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      >
+                        <rect x="3" y="3" width="10" height="10" rx="2" />
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="rook-send-button"
+                    type="submit"
+                    aria-label={
+                      rookMode === "build"
+                        ? "Send to Rook Build"
+                        : "Send to Rook Ask"
+                    }
+                    title="Send (Enter)"
+                    disabled={
+                      !session ||
+                      (!currentModel && providerControlsAvailable) ||
+                      !selectedModelAvailable ||
+                      !prompt.trim()
+                    }
+                  >
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M8 13V3" />
+                      <path d="M3.75 7.25 8 3l4.25 4.25" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+          </form>
+
+          <div className="rook-composer-footer">
+            <span
+              className="rook-sandbox-meta"
+              title={
+                rookMode === "build"
+                  ? sandboxSummary(rookSandbox)
+                  : "Read-only Ask mode"
+              }
+            >
+              {rookMode === "build"
+                ? sandboxSummary(rookSandbox)
+                : "Read-only · cites workspace"}
+            </span>
+            <span className="rook-shortcut-hint">⇧↵ newline</span>
           </div>
-        </form>
+        </div>
 
         {!providerControlsAvailable && session && (
           <p className="rook-version-note" role="status">

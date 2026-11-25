@@ -226,10 +226,10 @@ kbd,
 .toolbar-right {
   display: flex;
   min-width: 0;
-  flex: 0 1 250px;
+  flex: 0 1 auto;
   align-items: center;
   justify-content: flex-end;
-  gap: 15px;
+  gap: 12px;
 }
 .preview-badge {
   padding: 5px 8px;
@@ -1323,8 +1323,7 @@ kbd,
 .rook-chat-topbar,
 .rook-chat-actions,
 .rook-provider-heading,
-.rook-provider-row,
-.rook-composer > div:last-child {
+.rook-provider-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1352,22 +1351,29 @@ kbd,
   display: inline-flex;
   padding: 2px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--shell);
+  flex: 0 0 auto;
 }
 .rook-mode-toggle button {
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 24px;
+  padding: 0 9px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  font: 500 12px var(--sans);
+  font: 500 11px var(--sans);
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 .rook-mode-toggle button.is-active {
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--text);
+}
+.rook-mode-toggle button[aria-pressed="true"]:last-child {
+  color: var(--brass-light);
 }
 .rook-mode-toggle button:disabled {
   opacity: 0.55;
@@ -1379,16 +1385,16 @@ kbd,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 12px;
+  margin: 10px 10px 0;
   padding: 12px 14px;
   border: 1px solid var(--brass);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface);
 }
 .rook-trust-banner p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .rook-trust-banner-actions {
   display: flex;
@@ -1396,16 +1402,37 @@ kbd,
   gap: 8px;
 }
 .rook-model-trigger {
-  display: flex;
-  min-height: 38px;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 180px;
+  min-height: 26px;
   align-items: center;
-  gap: 18px;
-  padding: 0 12px;
+  gap: 6px;
+  padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface);
-  color: var(--text);
+  color: var(--text-secondary);
+  font: 11px var(--sans);
   cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.rook-model-trigger:hover:not(:disabled) {
+  border-color: var(--dim);
+  color: var(--text);
+}
+.rook-model-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rook-model-trigger > span:last-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
 }
 .rook-conversation {
   display: flex;
@@ -1442,9 +1469,8 @@ kbd,
   justify-items: center;
   text-align: center;
 }
-.rook-welcome > span {
+.rook-welcome .rook-welcome-emblem {
   color: var(--brass);
-  font-size: 29px;
 }
 .rook-welcome h3 {
   margin: 10px 0 4px;
@@ -1460,8 +1486,9 @@ kbd,
 }
 .rook-message strong {
   color: var(--brass);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
+  letter-spacing: 0.01em;
 }
 .rook-message p {
   margin: 6px 0;
@@ -1480,26 +1507,35 @@ kbd,
 .rook-tool-activity {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   margin: 8px 0;
   color: var(--muted);
   font-size: 11px;
+  min-width: 0;
 }
 .rook-tool-activity > span:first-child {
+  flex: 0 0 auto;
   color: var(--brass);
-  font-size: 14px;
+  font-size: 12px;
 }
 .rook-tool-activity > span:nth-child(2) {
+  flex: 0 0 auto;
   color: var(--text-secondary);
+  font-weight: 500;
   text-transform: capitalize;
 }
 .rook-tool-activity > span:nth-child(3) {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .rook-tool-activity > span:last-child {
+  flex: 0 0 auto;
   margin-left: auto;
+  font: 10px var(--mono);
+  color: var(--dim);
 }
 .rook-tool-error > span:first-child,
 .rook-tool-error > span:last-child {
@@ -1520,11 +1556,11 @@ kbd,
   flex-direction: column;
   gap: 6px;
   margin: 8px auto 0;
-  padding: 10px 10px 10px 14px;
+  padding: 10px 12px 8px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 12%);
   transition: border-color 140ms ease;
 }
 .rook-composer:focus-within {
@@ -1533,32 +1569,32 @@ kbd,
 .rook-composer-row {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 .rook-composer textarea {
   flex: 1;
   min-width: 0;
-  min-height: 36px;
+  min-height: 44px;
   max-height: 180px;
   field-sizing: content;
   overflow-y: auto;
   resize: none;
-  padding: 6px 0;
+  padding: 4px 0;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--text);
-  font: 13.5px/1.55 var(--sans);
+  font: 13.5px/1.52 var(--sans);
 }
 .rook-send-button {
   display: grid;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--brass);
   color: var(--canvas);
   cursor: pointer;
@@ -2294,10 +2330,15 @@ kbd,
 }
 .editor-inspector {
   display: flex;
-  width: var(--inspector-width-live, var(--inspector-width));
+  width: clamp(
+    220px,
+    var(--inspector-width-live, var(--inspector-width)),
+    48vw
+  );
   min-width: 220px;
-  max-width: 560px;
-  flex: 0 0 var(--inspector-width-live, var(--inspector-width));
+  max-width: min(560px, 52vw);
+  flex: 0 0
+    clamp(220px, var(--inspector-width-live, var(--inspector-width)), 48vw);
   flex-direction: column;
   min-height: 0;
   border-left: 1px solid var(--border);
@@ -2743,6 +2784,9 @@ kbd,
     top: 0;
     right: 0;
     bottom: 0;
+    width: min(380px, calc(100vw - 56px)) !important;
+    max-width: calc(100vw - 56px);
+    flex-basis: auto;
     box-shadow: -14px 0 35px rgb(0 0 0 / 18%);
   }
   .project-explorer {
@@ -4645,8 +4689,12 @@ kbd,
   }
 }
 
+.workspace-right-panel {
+  container-type: inline-size;
+  container-name: rook-dock;
+}
 .workspace-right-panel .inspector-heading {
-  padding: 0 10px 0 6px;
+  padding: 0 10px 0 8px;
 }
 .inspector-tabs-inline {
   border-bottom: 0;
@@ -4668,7 +4716,11 @@ kbd,
 }
 .rook-panel-docked {
   flex-direction: column;
-  padding: 0 10px 10px;
+  padding: 0;
+  background: var(--shell);
+}
+.rook-panel-docked .rook-chat {
+  padding: 0;
 }
 .rook-panel-expanded {
   flex-direction: row;
@@ -4676,45 +4728,260 @@ kbd,
   gap: 18px;
 }
 .rook-panel-docked .rook-chat-topbar {
-  padding: 8px 0;
-  gap: 8px;
-}
-.rook-panel-docked .rook-composer {
-  padding-top: 8px;
+  min-height: 36px;
+  padding: 5px 10px;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface);
 }
 .rook-panel-docked .rook-conversation {
   gap: 12px;
-  padding-right: 2px;
+  padding: 12px 10px 14px;
 }
 .rook-docked-controls {
   display: flex;
+  flex: 1;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 .rook-session-select {
-  max-width: 140px;
-  height: 26px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  height: 25px;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--surface-raised);
   color: var(--text-secondary);
   font: 11px var(--mono);
+  text-overflow: ellipsis;
 }
-.rook-docked-sandbox {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border-soft);
+.rook-session-select:hover:not(:disabled) {
+  border-color: var(--dim);
+  color: var(--text);
+}
+.rook-docked-topbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.rook-build-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--border));
+  border-radius: 999px;
+  background: var(--brass-tint);
+  color: var(--brass-light);
+  font: 10px var(--mono);
+  letter-spacing: 0.02em;
+}
+.rook-build-badge-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--brass);
+}
+.rook-panel-docked .rook-chat-topbar .icon-button {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.rook-panel-docked .rook-welcome {
+  align-content: center;
+  justify-items: start;
+  text-align: left;
+  padding: 16px 6px;
+}
+.rook-welcome-emblem {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--brass) 35%, var(--border));
+  border-radius: 8px;
+  background: var(--brass-tint);
+  color: var(--brass);
+  font-size: 15px;
+}
+.rook-panel-docked .rook-welcome h3 {
+  margin: 10px 0 3px;
+  font-size: 19px;
+  line-height: 1.25;
+}
+.rook-panel-docked .rook-welcome p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.rook-welcome-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+  width: 100%;
+}
+.rook-panel-expanded .rook-welcome-starters {
+  justify-content: center;
+  max-width: 520px;
+}
+.rook-starter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: 11px/1.3 var(--sans);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+.rook-starter-chip::before {
+  content: "↗";
+  color: var(--brass);
+  font-size: 10px;
+}
+.rook-starter-chip:hover {
+  border-color: color-mix(in srgb, var(--brass) 55%, var(--border));
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.rook-panel-docked .rook-message-user {
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+.rook-panel-docked .rook-message-assistant {
+  padding: 2px;
+}
+.rook-panel-docked .rook-message p {
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.rook-panel-docked .rook-tool-activity {
+  padding: 5px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface);
+  gap: 6px;
+  margin: 5px 0;
+}
+.rook-composer-dock-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+.rook-panel-docked .rook-composer-dock-wrap {
+  padding: 8px 10px 8px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+.rook-panel-docked .rook-composer {
+  width: 100%;
+  margin: 0;
+  padding: 8px 9px 6px;
+  border-radius: 9px;
+  background: var(--canvas);
+  box-shadow: none;
+  gap: 6px;
+}
+.rook-panel-docked .rook-composer textarea {
+  min-height: 44px;
+  max-height: 150px;
+  padding: 2px 0;
+  font: 12.5px/1.48 var(--sans);
+}
+.rook-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-soft);
+}
+.rook-composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.rook-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+.rook-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 5px;
+  padding: 0 2px;
   color: var(--muted);
   font: 10px var(--mono);
+}
+.rook-panel-expanded .rook-composer-footer {
+  width: min(740px, 100%);
+  margin: 6px auto 0;
+}
+.rook-sandbox-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rook-shortcut-hint {
+  flex: 0 0 auto;
+  color: var(--dim);
 }
 .rook-panel-empty {
   padding: 18px;
 }
 .rook-status-note {
-  margin: 8px 0;
+  margin: 8px 10px;
   color: var(--muted);
   font: 11px var(--mono);
+}
+@container rook-dock (max-width: 310px) {
+  .rook-panel-docked .rook-conversation {
+    padding: 10px 8px 12px;
+  }
+  .rook-panel-docked .rook-composer-dock-wrap {
+    padding: 6px 8px;
+  }
+  .rook-composer-toolbar {
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+  .rook-shortcut-hint {
+    display: none;
+  }
+  .rook-build-badge {
+    display: none;
+  }
+  .rook-turn-diff-strip {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* Rook Markdown + File Citations + Per-Turn Undo */

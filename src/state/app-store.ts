@@ -7,7 +7,7 @@ export const DEFAULT_PREFERENCES: UiPreferences = {
   editorFontSize: 12,
   navigationCollapsed: false,
   inspectorCollapsed: false,
-  inspectorWidth: 340,
+  inspectorWidth: 360,
 };
 
 export type PageId =
