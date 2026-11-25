@@ -335,7 +335,7 @@ export function WorkspaceScreen({
   onActiveEditorPaneChange,
   onToggleSplit,
   onSelectSplitDocument,
-  onOpenQuickOpen,
+  onOpenQuickOpen: _onOpenQuickOpen,
   revealTarget,
   editorSelection,
   onEditorSelectionChange,
@@ -950,51 +950,6 @@ export function WorkspaceScreen({
                 ))}
               </div>
               <div className="editor-top-actions">
-                <button
-                  className="editor-save-button"
-                  type="button"
-                  disabled={
-                    savingFiles ||
-                    !activeDocument ||
-                    activeDocument.content === activeDocument.savedContent
-                  }
-                  onClick={() =>
-                    activeDocument && onSaveDocuments([activeDocument])
-                  }
-                >
-                  Save
-                </button>
-                <button
-                  className="editor-save-button"
-                  type="button"
-                  disabled={
-                    savingFiles ||
-                    !projectDocuments.some(
-                      (document) => document.content !== document.savedContent,
-                    )
-                  }
-                  onClick={() => onSaveDocuments(projectDocuments)}
-                >
-                  {savingFiles ? "Saving…" : "Save all"}
-                </button>
-                {!browserPreview && activeProject && (
-                  <button
-                    className="editor-save-button"
-                    type="button"
-                    title="Quick Open file (⌘P / Ctrl+P)"
-                    onClick={onOpenQuickOpen}
-                  >
-                    Quick open
-                  </button>
-                )}
-                <button
-                  className={`editor-save-button${splitDocument ? " is-active" : ""}`}
-                  type="button"
-                  title="Toggle split editor (⌘\ / Ctrl+\)"
-                  onClick={onToggleSplit}
-                >
-                  {splitDocument ? "Close split" : "Split"}
-                </button>
                 {!browserPreview && activeProject && focusedDocument && (
                   <button
                     className="editor-save-button"
@@ -1041,15 +996,6 @@ export function WorkspaceScreen({
             <>
               <span className="eyebrow">Source workspace</span>
               <div className="editor-top-actions">
-                {!browserPreview && activeProject && (
-                  <button
-                    className="editor-save-button"
-                    type="button"
-                    onClick={onOpenQuickOpen}
-                  >
-                    Quick open (⌘P)
-                  </button>
-                )}
                 <span className="status-pill">
                   {activeProject
                     ? activeProject.isGitRepository
