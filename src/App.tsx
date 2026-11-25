@@ -29,6 +29,13 @@ import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
 import { RookPermissionCard } from "./features/rook/RookPermissionCard";
+import {
+  applyExternalReload,
+  dismissExternalChangeKeepingEdits,
+  isMutatingRookTool,
+  reconcileDocumentWithDisk,
+  type SyncableDocument,
+} from "./features/editor/workspace-sync";
 
 type RookChatTool = {
   id: string;
@@ -118,13 +125,7 @@ interface PaletteCommand {
   run: () => void;
 }
 
-interface EditorDocument {
-  key: string;
-  projectId: string;
-  path: string;
-  content: string;
-  savedContent: string;
-}
+type EditorDocument = SyncableDocument;
 
 export function App({ service, browserPreview = false }: AppProps) {
   const page = useAppStore((state) => state.page);
@@ -180,6 +181,17 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [documents, setDocuments] = useState<EditorDocument[]>([]);
   const [activeDocumentKey, setActiveDocumentKey] = useState<string>();
   const [savingFiles, setSavingFiles] = useState(false);
+  const [workspaceSyncVersion, setWorkspaceSyncVersion] = useState(0);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number>();
+  const documentsRef = useRef<EditorDocument[]>(documents);
+  const projectDirectoryRef = useRef(projectDirectory);
+  const rookModeRef = useRef<RookMode>(rookMode);
+  const rookToolNamesRef = useRef(new Map<string, string>());
+  const syncInFlightRef = useRef(false);
+  const syncQueuedRef = useRef(false);
+  documentsRef.current = documents;
+  projectDirectoryRef.current = projectDirectory;
+  rookModeRef.current = rookMode;
   const [changes, setChanges] = useState<ChangeRecord[]>([]);
   const [changeFilter, setChangeFilter] = useState<ChangeStatus | "all">("all");
   const [candidateWorktrees, setCandidateWorktrees] = useState<
@@ -513,6 +525,113 @@ export function App({ service, browserPreview = false }: AppProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject?.id, browserPreview, rookSession, rookStartupPending]);
 
+  async function syncWorkspaceFromDisk(projectId: string) {
+    if (browserPreview || !projectId) return;
+    if (syncInFlightRef.current) {
+      syncQueuedRef.current = true;
+      return;
+    }
+    syncInFlightRef.current = true;
+    try {
+      const openDocs = documentsRef.current.filter(
+        (document) => document.projectId === projectId,
+      );
+      const reads = await Promise.all(
+        openDocs.map(async (document) => {
+          try {
+            const file = await service.readProjectFile(
+              projectId,
+              document.path,
+            );
+            return {
+              key: document.key,
+              outcome: { ok: true as const, file },
+            };
+          } catch (error) {
+            const code =
+              error instanceof AppServiceError ? error.code : undefined;
+            const deleted =
+              code === "file_missing" ||
+              code === "path_not_found" ||
+              (error instanceof Error &&
+                /not found|no such file|no longer exists/i.test(error.message));
+            return {
+              key: document.key,
+              outcome: { ok: false as const, deleted },
+            };
+          }
+        }),
+      );
+      if (reads.length > 0) {
+        const byKey = new Map(reads.map((entry) => [entry.key, entry.outcome]));
+        let reloadedAny = false;
+        const now = Date.now();
+        setDocuments((current) =>
+          current.map((document) => {
+            const outcome = byKey.get(document.key);
+            if (!outcome) return document;
+            const reconciled = reconcileDocumentWithDisk(
+              document,
+              outcome,
+              now,
+            );
+            if (reconciled.status === "reloaded") reloadedAny = true;
+            return reconciled.document;
+          }),
+        );
+        if (reloadedAny) setLastSyncedAt(now);
+      }
+      const listing = await service
+        .listProjectEntries(projectId, projectDirectoryRef.current)
+        .catch(() => undefined);
+      if (listing && rookProjectId.current === projectId) {
+        setProjectEntries(listing.entries);
+        setProjectEntriesTruncated(listing.truncated);
+      }
+      setWorkspaceSyncVersion((version) => version + 1);
+    } finally {
+      syncInFlightRef.current = false;
+      if (syncQueuedRef.current) {
+        syncQueuedRef.current = false;
+        void syncWorkspaceFromDisk(projectId);
+      }
+    }
+  }
+
+  function reloadDocumentFromDisk(key: string) {
+    setDocuments((current) =>
+      current.map((document) =>
+        document.key === key ? applyExternalReload(document) : document,
+      ),
+    );
+  }
+
+  function keepDocumentEdits(key: string) {
+    setDocuments((current) =>
+      current.map((document) =>
+        document.key === key
+          ? dismissExternalChangeKeepingEdits(document)
+          : document,
+      ),
+    );
+  }
+
+  useEffect(() => {
+    if (!activeProject || browserPreview) return;
+    if (page === "editor") {
+      void syncWorkspaceFromDisk(activeProject.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id, browserPreview, page]);
+
+  useEffect(() => {
+    if (!activeProject || browserPreview) return;
+    const onFocus = () => void syncWorkspaceFromDisk(activeProject.id);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject?.id, browserPreview]);
+
   useEffect(() => {
     if (!rookSession || browserPreview) return;
     let unlisten: (() => void) | undefined;
@@ -557,6 +676,7 @@ export function App({ service, browserPreview = false }: AppProps) {
           typeof agentEvent.name === "string" &&
           typeof agentEvent.summary === "string"
         ) {
+          rookToolNamesRef.current.set(agentEvent.id, agentEvent.name);
           setRookMessages((items) =>
             updateRookAssistant(items, runId, (message) => ({
               ...message,
@@ -578,6 +698,8 @@ export function App({ service, browserPreview = false }: AppProps) {
           typeof agentEvent.id === "string" &&
           (agentEvent.status === "ok" || agentEvent.status === "error")
         ) {
+          const toolName = rookToolNamesRef.current.get(agentEvent.id);
+          rookToolNamesRef.current.delete(agentEvent.id);
           setRookMessages((items) =>
             updateRookAssistant(items, runId, (message) => ({
               ...message,
@@ -588,6 +710,14 @@ export function App({ service, browserPreview = false }: AppProps) {
               ),
             })),
           );
+          if (
+            rookModeRef.current === "build" &&
+            toolName &&
+            isMutatingRookTool(toolName) &&
+            rookProjectId.current
+          ) {
+            void syncWorkspaceFromDisk(rookProjectId.current);
+          }
         } else if (
           agentEvent?.type === "text_delta" &&
           typeof agentEvent.text === "string"
@@ -629,6 +759,9 @@ export function App({ service, browserPreview = false }: AppProps) {
             );
           }
           setRookRunId(undefined);
+          if (rookModeRef.current === "build" && rookProjectId.current) {
+            void syncWorkspaceFromDisk(rookProjectId.current);
+          }
           if (rookSessionStorage)
             void service
               .listRookSessions(rookSession)
@@ -644,6 +777,7 @@ export function App({ service, browserPreview = false }: AppProps) {
       disposed = true;
       unlisten?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [browserPreview, rookSession, rookSessionStorage, service]);
 
   async function openProjectDirectory(relativePath: string) {
@@ -746,11 +880,14 @@ export function App({ service, browserPreview = false }: AppProps) {
     setSavingFiles(true);
     setProjectError(undefined);
     try {
+      let savedAny = false;
       for (const document of items) {
         if (document.content !== document.savedContent) {
           await saveDocument(document);
+          savedAny = true;
         }
       }
+      if (savedAny) setWorkspaceSyncVersion((version) => version + 1);
     } catch (error) {
       setProjectError(
         error instanceof Error ? error.message : "The file could not be saved.",
@@ -1180,8 +1317,12 @@ export function App({ service, browserPreview = false }: AppProps) {
             }}
             onUpdateDocument={updateDocument}
             onSaveDocuments={(items) => void saveDocuments(items)}
+            onReloadDocument={reloadDocumentFromDisk}
+            onKeepDocumentEdits={keepDocumentEdits}
             onCloseDocument={closeDocument}
             savingFiles={savingFiles}
+            workspaceSyncVersion={workspaceSyncVersion}
+            lastSyncedAt={lastSyncedAt}
             browserPreview={browserPreview}
             changes={changes}
             changeFilter={changeFilter}
@@ -1482,8 +1623,12 @@ interface ScreenContentProps {
   onSelectDocument: (key: string) => void;
   onUpdateDocument: (key: string, content: string) => void;
   onSaveDocuments: (documents: EditorDocument[]) => void;
+  onReloadDocument: (key: string) => void;
+  onKeepDocumentEdits: (key: string) => void;
   onCloseDocument: (document: EditorDocument) => void;
   savingFiles: boolean;
+  workspaceSyncVersion: number;
+  lastSyncedAt?: number;
   browserPreview: boolean;
 }
 
@@ -1907,6 +2052,9 @@ function RookScreen({
   const [search, setSearch] = useState("");
   const [sessionSearch, setSessionSearch] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [setupModel, setSetupModel] = useState<RookModel>();
   const [authPrompt, setAuthPrompt] = useState<{
@@ -1941,6 +2089,71 @@ function RookScreen({
   const selectedModelAvailable = Boolean(currentModel);
 
   useEffect(() => setError(conversationError), [conversationError]);
+  useEffect(() => {
+    shouldAutoScrollRef.current = true;
+    setShowJumpToLatest(false);
+    const element = conversationRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [activeSessionId, session]);
+  useEffect(() => {
+    if (!shouldAutoScrollRef.current) return;
+    const element = conversationRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [messages, runId]);
+
+  function scrollToLatest() {
+    shouldAutoScrollRef.current = true;
+    setShowJumpToLatest(false);
+    const element = conversationRef.current;
+    if (element) {
+      element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    }
+  }
+
+  function handleConversationScroll() {
+    const element = conversationRef.current;
+    if (!element) return;
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    const nearBottom = distanceFromBottom < 72;
+    shouldAutoScrollRef.current = nearBottom;
+    setShowJumpToLatest(!nearBottom);
+  }
+
+  function submitPrompt() {
+    const text = prompt.trim();
+    if (!text) return;
+    if (
+      currentModel &&
+      providers.find((provider) => provider.id === currentModel.provider)
+        ?.configured === false
+    ) {
+      setSetupModel(currentModel);
+      setModelPickerOpen(true);
+      setError("Sign in to the selected model before sending.");
+      return;
+    }
+    if (
+      !session ||
+      (!currentModel && providerControlsAvailable) ||
+      !selectedModelAvailable
+    ) {
+      setError("Choose an available model before sending.");
+      return;
+    }
+    shouldAutoScrollRef.current = true;
+    setShowJumpToLatest(false);
+    setMessages((items) => [...items, { role: "user", text }]);
+    setPrompt("");
+    setError(undefined);
+    void service.promptRookAsk(session, text).catch((failure) => {
+      setMessages((items) =>
+        items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
+      );
+      setPrompt(text);
+      setError(errorMessage(failure, "Your message could not be sent."));
+    });
+  }
   useEffect(() => {
     if (!modelPickerOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2621,7 +2834,12 @@ function RookScreen({
             </div>
           </div>
         )}
-        <div className="rook-conversation" aria-live="polite">
+        <div
+          className="rook-conversation"
+          aria-live="polite"
+          ref={conversationRef}
+          onScroll={handleConversationScroll}
+        >
           {messages.length === 0 && (
             <div className="rook-welcome">
               <span aria-hidden="true">✳</span>
@@ -2690,6 +2908,15 @@ function RookScreen({
               );
             })}
         </div>
+        {showJumpToLatest && messages.length > 0 && (
+          <button
+            className="rook-scroll-latest"
+            type="button"
+            onClick={scrollToLatest}
+          >
+            ↓ Latest
+          </button>
+        )}
         {session && permission && (
           <RookPermissionCard
             request={permission.request}
@@ -2705,39 +2932,7 @@ function RookScreen({
           className="rook-composer"
           onSubmit={(event) => {
             event.preventDefault();
-            const text = prompt.trim();
-            if (!text) return;
-            if (
-              currentModel &&
-              providers.find(
-                (provider) => provider.id === currentModel.provider,
-              )?.configured === false
-            ) {
-              setSetupModel(currentModel);
-              setModelPickerOpen(true);
-              setError("Sign in to the selected model before sending.");
-              return;
-            }
-            if (
-              !session ||
-              (!currentModel && providerControlsAvailable) ||
-              !selectedModelAvailable
-            ) {
-              setError("Choose an available model before sending.");
-              return;
-            }
-            setMessages((items) => [...items, { role: "user", text }]);
-            setPrompt("");
-            setError(undefined);
-            void service.promptRookAsk(session, text).catch((failure) => {
-              setMessages((items) =>
-                items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
-              );
-              setPrompt(text);
-              setError(
-                errorMessage(failure, "Your message could not be sent."),
-              );
-            });
+            submitPrompt();
           }}
         >
           {prompt.trim() && !session && !rookPending && !rookError && (
@@ -2749,47 +2944,90 @@ function RookScreen({
               Connect to send your draft
             </button>
           )}
-          <textarea
-            id="rook-prompt"
-            aria-label={
-              rookMode === "build"
-                ? "Instruct Rook Build for this project"
-                : "Ask about this project"
-            }
-            value={prompt}
-            onChange={(event) => {
-              setPrompt(event.target.value);
-              onRookDraftSave(event.target.value);
-            }}
-            maxLength={64000}
-            placeholder={
-              rookMode === "build"
-                ? "Describe changes to make in this repository…"
-                : "Message Rook…"
-            }
-            disabled={Boolean(runId)}
-          />
-          {session && runId ? (
-            <button
-              className="button button-quiet"
-              type="button"
-              onClick={() => void service.cancelRookAsk(session, runId)}
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              className="button button-primary"
-              disabled={
-                !session ||
-                (!currentModel && providerControlsAvailable) ||
-                !selectedModelAvailable ||
-                !prompt.trim()
+          <div className="rook-composer-row">
+            <textarea
+              id="rook-prompt"
+              rows={1}
+              aria-label={
+                rookMode === "build"
+                  ? "Instruct Rook Build for this project"
+                  : "Ask about this project"
               }
-            >
-              {rookMode === "build" ? "Build" : "Ask"}
-            </button>
-          )}
+              value={prompt}
+              onChange={(event) => {
+                setPrompt(event.target.value);
+                onRookDraftSave(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  if (!runId) submitPrompt();
+                }
+              }}
+              maxLength={64000}
+              placeholder={
+                rookMode === "build"
+                  ? "Describe changes to make in this repository… (Enter to send)"
+                  : "Message Rook… (Enter to send)"
+              }
+              disabled={Boolean(runId)}
+            />
+            {session && runId ? (
+              <button
+                className="rook-send-button rook-stop-button"
+                type="button"
+                aria-label="Stop Rook"
+                title="Stop"
+                onClick={() => void service.cancelRookAsk(session, runId)}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="3" width="10" height="10" rx="2" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                className="rook-send-button"
+                type="submit"
+                aria-label={
+                  rookMode === "build"
+                    ? "Send to Rook Build"
+                    : "Send to Rook Ask"
+                }
+                title="Send (Enter)"
+                disabled={
+                  !session ||
+                  (!currentModel && providerControlsAvailable) ||
+                  !selectedModelAvailable ||
+                  !prompt.trim()
+                }
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M8 13V3" />
+                  <path d="M3.75 7.25 8 3l4.25 4.25" />
+                </svg>
+              </button>
+            )}
+          </div>
         </form>
         {!providerControlsAvailable && session && (
           <p className="rook-version-note" role="status">
@@ -2937,8 +3175,12 @@ function EditorScreen(props: ScreenContentProps) {
     onSelectDocument,
     onUpdateDocument,
     onSaveDocuments,
+    onReloadDocument,
+    onKeepDocumentEdits,
     onCloseDocument,
     savingFiles,
+    workspaceSyncVersion,
+    lastSyncedAt,
     browserPreview,
   } = props;
   const [draftWidth, setDraftWidth] = useState(preferences.inspectorWidth);
@@ -3080,6 +3322,16 @@ function EditorScreen(props: ScreenContentProps) {
                     }}
                   >
                     {document.path.split(/[\\/]/).at(-1)}
+                    {document.externalChange && (
+                      <span
+                        className="editor-tab-conflict"
+                        aria-label="changed on disk"
+                        title="Changed on disk"
+                      >
+                        {" "}
+                        ↻
+                      </span>
+                    )}
                     {document.content !== document.savedContent && (
                       <span aria-label="unsaved changes"> ●</span>
                     )}
@@ -3140,6 +3392,41 @@ function EditorScreen(props: ScreenContentProps) {
             className="code-editor"
             aria-label={`Editing ${activeDocument.path}`}
           >
+            {activeDocument.externalChange && (
+              <div
+                className="editor-external-banner"
+                role="status"
+                aria-label="External file change"
+              >
+                <p>
+                  {activeDocument.externalChange.kind === "deleted"
+                    ? "This file was removed on disk."
+                    : activeDocument.externalChange.kind === "unreadable"
+                      ? "This file changed on disk and is no longer a supported UTF-8 text file."
+                      : "This file changed on disk while you have unsaved edits."}
+                </p>
+                <div className="editor-external-banner-actions">
+                  {activeDocument.externalChange.kind === "modified" && (
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      onClick={() => onReloadDocument(activeDocument.key)}
+                    >
+                      Reload from disk
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    onClick={() => onKeepDocumentEdits(activeDocument.key)}
+                  >
+                    {activeDocument.externalChange.kind === "deleted"
+                      ? "Keep open"
+                      : "Keep mine"}
+                  </button>
+                </div>
+              </div>
+            )}
             <Suspense
               fallback={<p className="editor-loading">Loading editor…</p>}
             >
@@ -3231,9 +3518,13 @@ function EditorScreen(props: ScreenContentProps) {
           </span>
           <span>
             {activeDocument
-              ? activeDocument.content !== activeDocument.savedContent
-                ? "Unsaved changes"
-                : "Saved"
+              ? activeDocument.externalChange
+                ? "Changed on disk"
+                : activeDocument.content !== activeDocument.savedContent
+                  ? "Unsaved changes"
+                  : lastSyncedAt
+                    ? `Synced · ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                    : "Saved"
               : selectedFilePath
                 ? "Not editable"
                 : "Ready to edit"}
@@ -3243,6 +3534,7 @@ function EditorScreen(props: ScreenContentProps) {
           <WorkspaceTools
             service={service}
             projectId={activeProject.id}
+            syncVersion={workspaceSyncVersion}
             browserPreview={browserPreview}
           />
         )}
@@ -3349,10 +3641,12 @@ function EditorScreen(props: ScreenContentProps) {
 function WorkspaceTools({
   service,
   projectId,
+  syncVersion,
   browserPreview,
 }: {
   service: AppService;
   projectId: string;
+  syncVersion: number;
   browserPreview: boolean;
 }) {
   const [tab, setTab] = useState<"terminal" | "git">("terminal");
@@ -3445,6 +3739,7 @@ function WorkspaceTools({
           service={service}
           projectId={projectId}
           status={gitStatus}
+          syncVersion={syncVersion}
           onStatus={setGitStatus}
         />
       )}

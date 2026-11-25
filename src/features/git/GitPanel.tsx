@@ -6,11 +6,13 @@ export function GitPanel({
   service,
   projectId,
   status: initialStatus,
+  syncVersion = 0,
   onStatus,
 }: {
   service: AppService;
   projectId: string;
   status?: GitStatus;
+  syncVersion?: number;
   onStatus: (status: GitStatus) => void;
 }) {
   const status = initialStatus;
@@ -33,7 +35,7 @@ export function GitPanel({
   }, [onStatus, projectId, service]);
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, syncVersion]);
   return (
     <section className="git-panel" aria-label="Git changes">
       <header>
