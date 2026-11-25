@@ -5429,8 +5429,27 @@ kbd,
   background: var(--surface);
 }
 .rook-panel-docked .rook-conversation {
-  gap: 12px;
-  padding: 12px 10px 14px;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 45%, transparent);
+  --scrollbar-track: transparent;
+  gap: 14px;
+  padding: 12px 10px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+@supports not (scrollbar-color: auto) {
+  .rook-panel-docked .rook-conversation {
+    scrollbar-width: auto;
+  }
+  .rook-panel-docked .rook-conversation::-webkit-scrollbar {
+    width: 8px;
+  }
+  .rook-panel-docked .rook-conversation::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+  }
+  .rook-panel-docked .rook-conversation::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
 }
 .rook-docked-controls {
   display: flex;
@@ -5489,10 +5508,41 @@ kbd,
   font-size: 13px;
 }
 .rook-panel-docked .rook-welcome {
-  align-content: center;
-  justify-items: start;
+  align-content: start;
+  justify-items: stretch;
   text-align: left;
-  padding: 16px 6px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--shell) 68%, transparent);
+}
+.rook-cli-welcome-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 6px;
+  font: 600 11px/1.3 var(--mono);
+  letter-spacing: 0.03em;
+}
+.rook-cli-welcome-sigil {
+  color: var(--brass);
+  flex: 0 0 auto;
+}
+.rook-cli-welcome-title {
+  color: var(--text);
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+.rook-cli-welcome-project {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-weight: 400;
 }
 .rook-welcome-emblem {
   display: inline-grid;
@@ -5505,15 +5555,10 @@ kbd,
   color: var(--brass);
   font-size: 15px;
 }
-.rook-panel-docked .rook-welcome h3 {
-  margin: 10px 0 3px;
-  font-size: 19px;
-  line-height: 1.25;
-}
 .rook-panel-docked .rook-welcome p {
   margin: 0;
-  font-size: 11.5px;
-  line-height: 1.45;
+  color: var(--muted);
+  font: 11px/1.45 var(--mono);
 }
 .rook-welcome-starters {
   display: flex;
@@ -5521,6 +5566,13 @@ kbd,
   gap: 6px;
   margin-top: 12px;
   width: 100%;
+}
+.rook-panel-docked .rook-welcome-starters {
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
 }
 .rook-panel-expanded .rook-welcome-starters {
   justify-content: center;
@@ -5554,25 +5606,266 @@ kbd,
   background: var(--surface-raised);
   color: var(--text);
 }
+.rook-panel-docked .rook-starter-chip {
+  width: 100%;
+  gap: 7px;
+  padding: 4px 6px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 11px/1.35 var(--mono);
+}
+.rook-panel-docked .rook-starter-chip::before {
+  content: "›";
+  color: var(--brass);
+  font-size: 12px;
+  font-weight: 600;
+}
+.rook-panel-docked .rook-starter-chip:hover {
+  border-left-color: var(--brass);
+  background: color-mix(in srgb, var(--surface-raised) 65%, transparent);
+  color: var(--text);
+}
+.rook-panel-docked .rook-cli-user,
+.rook-panel-docked .rook-cli-assistant {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  column-gap: 7px;
+  align-items: start;
+  width: 100%;
+  margin: 0;
+}
+.rook-cli-sigil {
+  font: 600 11.5px/1.52 var(--mono);
+  color: var(--brass);
+  user-select: none;
+  text-align: center;
+}
+.rook-panel-docked .rook-cli-assistant > .rook-cli-sigil {
+  color: var(--cyan);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.rook-cli-turn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.rook-cli-turn-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rook-cli-flag {
+  color: var(--brass-light);
+  font: 10px/1.3 var(--mono);
+}
+.rook-cli-flag.is-danger {
+  color: var(--red);
+}
 .rook-panel-docked .rook-message-user {
-  padding: 9px 11px;
-  border-radius: 8px;
-  background: var(--surface-raised);
+  padding: 7px 9px;
+  border: 0;
+  border-left: 2px solid var(--brass);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface-raised) 52%, transparent);
+}
+.rook-panel-docked .rook-message-user .rook-markdown,
+.rook-panel-docked .rook-message-user .rook-markdown p {
+  font: 12px/1.5 var(--mono);
+  color: var(--text);
 }
 .rook-panel-docked .rook-message-assistant {
-  padding: 2px;
+  padding: 2px 2px 4px;
 }
 .rook-panel-docked .rook-message p {
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.56;
+}
+.rook-panel-docked .rook-tool-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 1px 0 3px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
 }
 .rook-panel-docked .rook-tool-activity {
-  padding: 5px 8px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  background: var(--surface);
+  margin: 0;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
   gap: 6px;
-  margin: 5px 0;
+  font: 11px/1.4 var(--mono);
+}
+.rook-panel-docked .rook-tool-activity:hover {
+  background: color-mix(in srgb, var(--surface-raised) 45%, transparent);
+}
+.rook-panel-docked .rook-tool-activity > span:first-child {
+  width: 11px;
+  text-align: center;
+  font-size: 11px;
+}
+.rook-panel-docked .rook-tool-ok > span:first-child {
+  color: var(--green);
+}
+.rook-panel-docked .rook-tool-running > span:first-child {
+  color: var(--brass);
+  animation: rook-cli-pulse 1.1s ease-in-out infinite;
+}
+.rook-panel-docked .rook-tool-error > span:first-child,
+.rook-panel-docked .rook-tool-error > span:last-child {
+  color: var(--red);
+}
+.rook-panel-docked .rook-tool-activity > span:nth-child(2) {
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: none;
+}
+.rook-panel-docked .rook-tool-activity > span:nth-child(3) {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.rook-panel-docked .rook-tool-activity > span:last-child {
+  font: 10px var(--mono);
+  color: var(--dim);
+}
+.rook-panel-docked .rook-tool-running > span:last-child {
+  color: var(--brass);
+}
+.rook-panel-docked .rook-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  color: var(--muted) !important;
+  font: 11.5px/1.45 var(--mono) !important;
+  font-style: normal;
+}
+.rook-panel-docked .rook-thinking::after {
+  content: "▌";
+  color: var(--brass);
+  animation: rook-cli-pulse 0.9s steps(2, start) infinite;
+}
+.rook-panel-docked .rook-incomplete {
+  margin: 2px 0;
+  font: 11px/1.4 var(--mono) !important;
+  color: var(--red) !important;
+}
+.rook-panel-docked .rook-markdown {
+  gap: 7px;
+}
+.rook-panel-docked .rook-markdown h3,
+.rook-panel-docked .rook-markdown h4,
+.rook-panel-docked .rook-markdown h5 {
+  margin: 4px 0 0;
+  font: 600 12px/1.4 var(--mono);
+  color: var(--text);
+}
+.rook-panel-docked .rook-markdown h3::before {
+  content: "# ";
+  color: var(--brass);
+}
+.rook-panel-docked .rook-markdown h4::before {
+  content: "## ";
+  color: var(--brass);
+}
+.rook-panel-docked .rook-markdown h5::before {
+  content: "### ";
+  color: var(--dim);
+}
+.rook-panel-docked .rook-markdown ul,
+.rook-panel-docked .rook-markdown ol {
+  padding-left: 16px;
+  gap: 3px;
+}
+.rook-panel-docked .rook-markdown blockquote {
+  padding: 2px 8px;
+  border-left: 2px solid var(--dim);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rook-panel-docked .rook-inline-code {
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface-raised) 85%, transparent);
+  font: 11px var(--mono);
+}
+.rook-panel-docked .rook-file-pill {
+  gap: 3px;
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px dotted color-mix(in srgb, var(--cyan) 55%, transparent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--cyan) 9%, transparent);
+  color: var(--cyan);
+  font: 11px var(--mono);
+}
+.rook-panel-docked .rook-file-pill:hover {
+  background: color-mix(in srgb, var(--cyan) 18%, transparent);
+}
+.rook-panel-docked .rook-code-block {
+  border-radius: 4px;
+  border-color: var(--border-soft);
+}
+.rook-panel-docked .rook-code-block-head {
+  padding: 3px 8px;
+}
+.rook-panel-docked .rook-code-block pre {
+  padding: 7px 9px;
+  font: 11px/1.48 var(--mono);
+}
+.rook-panel-docked .rook-turn-diff-strip,
+.rook-panel-docked .rook-verify-strip {
+  margin-top: 2px;
+  padding: 4px 0 4px 9px;
+  border: 0;
+  border-left: 2px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  gap: 6px;
+}
+.rook-panel-docked .rook-turn-diff-strip {
+  border-left-color: color-mix(in srgb, var(--brass) 55%, var(--border));
+}
+.rook-panel-docked .rook-message-actions {
+  margin-top: 2px;
+  padding-left: 9px;
+  border-left: 2px solid var(--border-soft);
+}
+.rook-panel-docked .rook-turn-diff-strip .button,
+.rook-panel-docked .rook-verify-strip .button,
+.rook-panel-docked .rook-message-actions .button {
+  min-height: 22px;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font: 10.5px var(--mono);
+}
+.rook-panel-docked .rook-scroll-latest {
+  font: 10.5px var(--mono);
+  padding: 4px 10px;
+}
+@keyframes rook-cli-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rook-panel-docked .rook-tool-running > span:first-child,
+  .rook-panel-docked .rook-thinking::after {
+    animation: none;
+  }
 }
 .rook-composer-dock-wrap {
   flex: 0 0 auto;
@@ -5684,6 +5977,9 @@ kbd,
   .rook-turn-diff-strip {
     flex-direction: column;
     align-items: flex-start;
+  }
+  .rook-panel-docked .rook-tool-ok > span:last-child {
+    display: none;
   }
 }
 

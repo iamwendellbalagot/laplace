@@ -872,14 +872,30 @@ export function RookPanel({
         >
           {messages.length === 0 && (
             <div className="rook-welcome">
-              <span className="rook-welcome-emblem" aria-hidden="true">
-                ✳
-              </span>
-              <h3>
-                {rookMode === "build"
-                  ? "What would you like to build?"
-                  : "What would you like to know?"}
-              </h3>
+              {variant === "docked" ? (
+                <div className="rook-cli-welcome-head">
+                  <span className="rook-cli-welcome-sigil" aria-hidden="true">
+                    ◆
+                  </span>
+                  <span className="rook-cli-welcome-title">
+                    ROOK CLI · {rookMode}
+                  </span>
+                  <span className="rook-cli-welcome-project">
+                    {activeProject.name}
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <span className="rook-welcome-emblem" aria-hidden="true">
+                    ✳
+                  </span>
+                  <h3>
+                    {rookMode === "build"
+                      ? "What would you like to build?"
+                      : "What would you like to know?"}
+                  </h3>
+                </>
+              )}
               <p>
                 {rookMode === "build"
                   ? "Edits files directly with instant pre-turn undo."
@@ -929,50 +945,86 @@ export function RookPanel({
               const isSettledAssistant =
                 message.role === "assistant" && message.runId !== runId;
               const touchedFiles = message.touchedFiles ?? [];
+              const hasFlags = Boolean(
+                message.steered || message.cancelled || message.turnUndone,
+              );
 
-              return (
-                <article
-                  className={`rook-message rook-message-${message.role}`}
-                  key={`${index}-${message.role}`}
-                >
-                  <div className="rook-message-head">
-                    <strong>{message.role === "user" ? "You" : "Rook"}</strong>
-                    {message.steered && (
-                      <span className="status-pill">Steered · applied</span>
-                    )}
-                    {message.cancelled && (
-                      <span className="verify-status-pill verify-status-cancelled">
-                        Cancelled
-                      </span>
-                    )}
-                    {message.turnUndone && (
-                      <span className="status-pill">Turn undone</span>
-                    )}
-                  </div>
+              const turnFlags = hasFlags ? (
+                <div className="rook-cli-turn-flags">
+                  {message.steered && (
+                    <span className="rook-cli-flag">[steered]</span>
+                  )}
+                  {message.cancelled && (
+                    <span className="rook-cli-flag is-danger">[cancelled]</span>
+                  )}
+                  {message.turnUndone && (
+                    <span className="rook-cli-flag">[undone]</span>
+                  )}
+                </div>
+              ) : null;
 
-                  {message.tools?.map((tool) => (
-                    <div
-                      className={`rook-tool-activity rook-tool-${tool.status}`}
-                      key={tool.id}
-                    >
-                      <span aria-hidden="true">
-                        {tool.status === "running"
-                          ? "◌"
-                          : tool.status === "ok"
-                            ? "✓"
-                            : "!"}
-                      </span>
-                      <span>{(tool.name ?? "tool").replaceAll("_", " ")}</span>
-                      <span>{tool.summary ?? ""}</span>
-                      <span>
-                        {tool.status === "running"
-                          ? "Checking"
-                          : tool.status === "ok"
-                            ? "Done"
-                            : "Failed"}
-                      </span>
+              const turnContent = (
+                <>
+                  {variant === "docked" ? (
+                    turnFlags
+                  ) : (
+                    <div className="rook-message-head">
+                      <strong>
+                        {message.role === "user" ? "You" : "Rook"}
+                      </strong>
+                      {message.steered && (
+                        <span className="status-pill">Steered · applied</span>
+                      )}
+                      {message.cancelled && (
+                        <span className="verify-status-pill verify-status-cancelled">
+                          Cancelled
+                        </span>
+                      )}
+                      {message.turnUndone && (
+                        <span className="status-pill">Turn undone</span>
+                      )}
                     </div>
-                  ))}
+                  )}
+
+                  {message.tools && message.tools.length > 0 && (
+                    <div className="rook-tool-trace">
+                      {message.tools.map((tool) => (
+                        <div
+                          className={`rook-tool-activity rook-tool-${tool.status}`}
+                          key={tool.id}
+                        >
+                          <span aria-hidden="true">
+                            {tool.status === "running"
+                              ? "◌"
+                              : tool.status === "ok"
+                                ? "✓"
+                                : variant === "docked"
+                                  ? "✗"
+                                  : "!"}
+                          </span>
+                          <span>
+                            {variant === "docked"
+                              ? (tool.name ?? "tool")
+                              : (tool.name ?? "tool").replaceAll("_", " ")}
+                          </span>
+                          <span>{tool.summary ?? ""}</span>
+                          <span>
+                            {variant === "docked"
+                              ? tool.status === "running"
+                                ? "…"
+                                : tool.status === "ok"
+                                  ? "ok"
+                                  : "err"
+                              : tool.status === "running"
+                                ? "Checking"
+                                : tool.status === "ok"
+                                  ? "Done"
+                                  : "Failed"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {message.text ? (
                     <RookMarkdown
@@ -992,7 +1044,9 @@ export function RookPanel({
 
                   {message.role === "assistant" && message.incomplete && (
                     <p className="rook-incomplete" role="status">
-                      Rook stopped before providing a final answer.
+                      {variant === "docked"
+                        ? "[!] Rook stopped before providing a final answer."
+                        : "Rook stopped before providing a final answer."}
                     </p>
                   )}
 
@@ -1172,6 +1226,31 @@ export function RookPanel({
                         </button>
                       </div>
                     )}
+                </>
+              );
+
+              return (
+                <article
+                  className={
+                    variant === "docked"
+                      ? `rook-message rook-message-${message.role} rook-cli-${message.role}`
+                      : `rook-message rook-message-${message.role}`
+                  }
+                  key={`${index}-${message.role}`}
+                >
+                  {variant === "docked" ? (
+                    <>
+                      <span className="rook-cli-sigil" aria-hidden="true">
+                        {message.role === "user" ? "❯" : "✦"}
+                      </span>
+                      <span className="sr-only">
+                        {message.role === "user" ? "You" : "Rook"}
+                      </span>
+                      <div className="rook-cli-turn-body">{turnContent}</div>
+                    </>
+                  ) : (
+                    turnContent
+                  )}
                 </article>
               );
             })}
