@@ -2768,6 +2768,31 @@ export function App({ service, browserPreview = false }: AppProps) {
         data-tauri-drag-region
       >
         <div className="system-titlebar-left" data-tauri-drag-region>
+          <Dialog.Root open={paletteOpen} onOpenChange={setPaletteOpen}>
+            <Dialog.Trigger asChild>
+              <button
+                className="system-search-trigger"
+                type="button"
+                title={`Search files, symbols, commands (${platformShortcut})`}
+              >
+                <span className="system-search-leading">
+                  <span className="search-glyph" aria-hidden="true">
+                    ⌕
+                  </span>
+                  <span className="command-placeholder">Search</span>
+                </span>
+                <kbd>{platformShortcut}</kbd>
+              </button>
+            </Dialog.Trigger>
+            <CommandPalette
+              commands={commands}
+              loadingExtras={paletteLoadingExtras}
+              onRun={(command, options) => {
+                command.run(options);
+                setPaletteOpen(false);
+              }}
+            />
+          </Dialog.Root>
           <button
             type="button"
             className={`toolbar-icon-button system-home-button${page === "home" ? " is-active" : ""}`}
@@ -2792,32 +2817,6 @@ export function App({ service, browserPreview = false }: AppProps) {
               />
             </svg>
           </button>
-        </div>
-
-        <div className="system-titlebar-center" data-tauri-drag-region>
-          <Dialog.Root open={paletteOpen} onOpenChange={setPaletteOpen}>
-            <Dialog.Trigger asChild>
-              <button
-                className="system-search-trigger"
-                type="button"
-                title={`Search files, symbols, commands (${platformShortcut})`}
-              >
-                <span className="search-glyph" aria-hidden="true">
-                  ⌕
-                </span>
-                <span className="command-placeholder">Search</span>
-                <kbd>{platformShortcut}</kbd>
-              </button>
-            </Dialog.Trigger>
-            <CommandPalette
-              commands={commands}
-              loadingExtras={paletteLoadingExtras}
-              onRun={(command, options) => {
-                command.run(options);
-                setPaletteOpen(false);
-              }}
-            />
-          </Dialog.Root>
         </div>
 
         <div className="system-titlebar-right" data-tauri-drag-region>
