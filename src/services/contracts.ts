@@ -294,6 +294,73 @@ export interface WorkspaceReviewSnapshot {
   lastCommitSha: string | null;
 }
 
+export type ImpactRole =
+  | "ui"
+  | "state"
+  | "api_service"
+  | "backend"
+  | "tests"
+  | "config_docs"
+  | string;
+
+export interface ImpactedCaller {
+  filePath: string;
+  line: number | null;
+  provenance: "observed" | "inferred" | string;
+  evidence: string;
+  alsoChanged: boolean;
+}
+
+export interface ImpactedTest {
+  filePath: string;
+  provenance: "observed" | "inferred" | string;
+  evidence: string;
+  alsoChanged: boolean;
+}
+
+export interface StaleContextNote {
+  filePath: string;
+  summary: string;
+  updatedAt: number;
+}
+
+export interface ImpactFileAnalysis {
+  path: string;
+  role: ImpactRole;
+  summary: string;
+  directCallers: ImpactedCaller[];
+  relatedTests: ImpactedTest[];
+  staleNote: StaleContextNote | null;
+}
+
+export interface ImpactWarning {
+  kind: string;
+  severity: "high" | "medium" | "info" | string;
+  message: string;
+  paths: string[];
+}
+
+export interface RecommendedCheck {
+  id: string;
+  label: string;
+  program: string;
+  args: string[];
+  recipeName: string | null;
+  reason: string;
+  latestStatus: ExecutionStatus | null;
+  latestExecutionId: string | null;
+  isFresh: boolean;
+}
+
+export interface WorkspaceImpactReport {
+  projectId: string;
+  sourceDigest: string;
+  changedFilesCount: number;
+  files: ImpactFileAnalysis[];
+  warnings: ImpactWarning[];
+  recommendedChecks: RecommendedCheck[];
+}
+
 export interface WorkspaceLayoutInfo {
   packageManager: "pnpm" | "npm" | "yarn" | null;
   layout:

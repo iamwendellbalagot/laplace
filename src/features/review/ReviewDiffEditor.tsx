@@ -32,6 +32,7 @@ export function ReviewDiffEditor({
   fontSize,
   sideBySide,
   readOnly,
+  revealLine,
   onChange,
 }: {
   path: string;
@@ -41,16 +42,27 @@ export function ReviewDiffEditor({
   fontSize: number;
   sideBySide: boolean;
   readOnly: boolean;
+  revealLine?: number;
   onChange: (value: string) => void;
 }) {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const listenerRef = useRef<{ dispose(): void } | undefined>(undefined);
+  const diffEditorRef = useRef<editor.IStandaloneDiffEditor | undefined>(
+    undefined,
+  );
+
+  useEffect(() => {
+    if (!revealLine || revealLine < 1) return;
+    const mod = diffEditorRef.current?.getModifiedEditor();
+    mod?.revealLineInCenter(revealLine);
+  }, [revealLine, path]);
 
   useEffect(() => {
     return () => {
       listenerRef.current?.dispose();
       listenerRef.current = undefined;
+      diffEditorRef.current = undefined;
     };
   }, []);
 
@@ -61,11 +73,15 @@ export function ReviewDiffEditor({
       language={languageFor(path)}
       theme={theme === "dark" ? "vs-dark" : "vs"}
       onMount={(diffEditor: editor.IStandaloneDiffEditor) => {
+        diffEditorRef.current = diffEditor;
         listenerRef.current?.dispose();
         const modifiedEditor = diffEditor.getModifiedEditor();
         listenerRef.current = modifiedEditor.onDidChangeModelContent(() => {
           onChangeRef.current(modifiedEditor.getValue());
         });
+        if (revealLine && revealLine >= 1) {
+          modifiedEditor.revealLineInCenter(revealLine);
+        }
       }}
       options={{
         automaticLayout: true,

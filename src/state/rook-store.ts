@@ -28,6 +28,14 @@ export type RookChatMessage = {
   incomplete?: boolean;
   cancelled?: boolean;
   steered?: boolean;
+  planOnly?: boolean;
+  planOriginalPrompt?: string;
+  planOriginalContext?: string;
+};
+
+export type PendingPlanTurn = {
+  prompt: string;
+  context: string;
 };
 
 export type QueuedSteering = {
@@ -41,6 +49,9 @@ interface RookStoreState {
   mode: RookMode;
   sandbox: RookSandboxStatus | null;
   trustPromptPending: boolean;
+  planFirst: boolean;
+  autoVerifyAfterBuild: boolean;
+  pendingPlanTurn: PendingPlanTurn | null;
   providers: RookProvider[];
   providerControlsAvailable: boolean;
   models: RookModel[];
@@ -63,6 +74,9 @@ interface RookStoreState {
   setMode: (mode: RookMode) => void;
   setSandbox: (sandbox: RookSandboxStatus | null) => void;
   setTrustPromptPending: (pending: boolean) => void;
+  setPlanFirst: (enabled: boolean) => void;
+  setAutoVerifyAfterBuild: (enabled: boolean) => void;
+  setPendingPlanTurn: (plan: PendingPlanTurn | null) => void;
   setProviders: (
     update: RookProvider[] | ((prev: RookProvider[]) => RookProvider[]),
   ) => void;
@@ -99,6 +113,9 @@ export const useRookStore = create<RookStoreState>((set) => ({
   mode: "ask",
   sandbox: null,
   trustPromptPending: false,
+  planFirst: false,
+  autoVerifyAfterBuild: false,
+  pendingPlanTurn: null,
   providers: [],
   providerControlsAvailable: false,
   models: [],
@@ -117,6 +134,10 @@ export const useRookStore = create<RookStoreState>((set) => ({
   setMode: (mode) => set({ mode }),
   setSandbox: (sandbox) => set({ sandbox }),
   setTrustPromptPending: (trustPromptPending) => set({ trustPromptPending }),
+  setPlanFirst: (planFirst) => set({ planFirst }),
+  setAutoVerifyAfterBuild: (autoVerifyAfterBuild) =>
+    set({ autoVerifyAfterBuild }),
+  setPendingPlanTurn: (pendingPlanTurn) => set({ pendingPlanTurn }),
   setProviders: (update) =>
     set((state) => ({
       providers:
@@ -185,5 +206,6 @@ export const useRookStore = create<RookStoreState>((set) => ({
       cancelling: false,
       queuedSteering: null,
       permissionPending: false,
+      pendingPlanTurn: null,
     }),
 }));

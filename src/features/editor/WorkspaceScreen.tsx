@@ -599,6 +599,10 @@ export function WorkspaceScreen({
             setRookExpanded(false);
             onOpenWorkspaceReview(paths, baseline);
           }}
+          onOpenVerify={() => {
+            setRookExpanded(false);
+            setBottomDrawerTab("verify");
+          }}
           onUndoTurn={onUndoRookTurn}
           onToggleExpand={() => setRookExpanded(false)}
         />

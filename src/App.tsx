@@ -908,6 +908,10 @@ export function App({ service, browserPreview = false }: AppProps) {
                   : m,
               );
             }
+            const pendingPlan = store.pendingPlanTurn;
+            if (pendingPlan) {
+              store.setPendingPlanTurn(null);
+            }
             return [
               ...items,
               {
@@ -918,6 +922,9 @@ export function App({ service, browserPreview = false }: AppProps) {
                 tools: [],
                 touchedFiles: [],
                 activeTextStart: 0,
+                planOnly: Boolean(pendingPlan),
+                planOriginalPrompt: pendingPlan?.prompt,
+                planOriginalContext: pendingPlan?.context,
               },
             ];
           });
@@ -1025,6 +1032,34 @@ export function App({ service, browserPreview = false }: AppProps) {
           store.setRunId(undefined);
           if (rookModeRef.current === "build" && rookProjectId.current) {
             const projectId = rookProjectId.current;
+            const settledMessage = useRookStore
+              .getState()
+              .messages.find(
+                (msg) => msg.role === "assistant" && msg.runId === runId,
+              );
+            const isPlanOnlyTurn = Boolean(settledMessage?.planOnly);
+            const runAutoVerify = (hasTouchedFiles: boolean) => {
+              if (
+                !hasTouchedFiles ||
+                isPlanOnlyTurn ||
+                wasCancelled ||
+                !useRookStore.getState().autoVerifyAfterBuild ||
+                !useWorkspaceStore.getState().workspaceTrusted
+              ) {
+                return;
+              }
+              const recipes = useWorkspaceStore.getState().projectRecipes;
+              if (recipes.length === 0) return;
+              void service
+                .runProjectRecipe(projectId, recipes[0].name)
+                .then((execution) => {
+                  useWorkspaceStore
+                    .getState()
+                    .setExecutions((items) => [execution, ...items]);
+                  void refreshWorkspacePulse(projectId);
+                })
+                .catch(() => undefined);
+            };
             void syncWorkspaceFromDisk(projectId);
             if (activeProject?.isGitRepository) {
               void service
@@ -1041,8 +1076,18 @@ export function App({ service, browserPreview = false }: AppProps) {
                       ),
                     }));
                   }
+                  const totalTouched =
+                    (settledMessage?.touchedFiles?.length ?? 0) +
+                    review.changedSinceCheckpoint.length;
+                  runAutoVerify(totalTouched > 0);
                 })
-                .catch(() => undefined);
+                .catch(() =>
+                  runAutoVerify(
+                    (settledMessage?.touchedFiles?.length ?? 0) > 0,
+                  ),
+                );
+            } else {
+              runAutoVerify((settledMessage?.touchedFiles?.length ?? 0) > 0);
             }
           }
           const queued = store.queuedSteering;
@@ -1914,12 +1959,32 @@ export function App({ service, browserPreview = false }: AppProps) {
             setExecutions((items) => [execution, ...items]);
             void refreshWorkspacePulse(activeProject.id);
           }}
+          onRunQuickCheck={async (program, args) => {
+            const execution = await service.runCheck(
+              activeProject.id,
+              program,
+              args,
+            );
+            setExecutions((items) => [execution, ...items]);
+            void refreshWorkspacePulse(activeProject.id);
+          }}
           onSendNotesToRook={(prompt) => {
             useRookStore.getState().setDraft(prompt);
             rookDraftByProject.current[activeProject.id] = prompt;
             focusDockedRook();
             if (workspaceTrusted && rookMode !== "build") {
               void switchRookMode("build");
+            }
+          }}
+          onAskRookWithContext={(chip, promptText, mode = "ask") => {
+            useRookStore.getState().addContextChip(chip);
+            useRookStore.getState().setDraft(promptText);
+            rookDraftByProject.current[activeProject.id] = promptText;
+            focusDockedRook();
+            if (mode === "build" && workspaceTrusted && rookMode !== "build") {
+              void switchRookMode("build");
+            } else if (mode === "ask" && rookMode !== "ask") {
+              void switchRookMode("ask");
             }
           }}
           onWorkspaceMutated={async () => {

@@ -757,7 +757,12 @@ describe("TauriAppService", () => {
       })
       .mockResolvedValueOnce({ reviewId: "ws-rev-123" })
       .mockResolvedValueOnce({ reviewId: "ws-rev-123" })
-      .mockResolvedValueOnce({ id: "int-1", status: "succeeded" });
+      .mockResolvedValueOnce({ id: "int-1", status: "succeeded" })
+      .mockResolvedValueOnce({ reviewId: "ws-rev-123" })
+      .mockResolvedValueOnce({
+        projectId: "/work/project",
+        changedFilesCount: 1,
+      });
     const service = new TauriAppService();
 
     await service.getWorkspaceReview("/work/project");
@@ -774,6 +779,15 @@ describe("TauriAppService", () => {
       "dig",
       false,
     );
+    await service.revertWorkspaceHunk("/work/project", "src/a.ts", {
+      baseline: "head",
+      oldStart: 2,
+      oldCount: 1,
+      newStart: 2,
+      newCount: 1,
+      expectedModified: "line 1\nline TWO\n",
+    });
+    await service.getWorkspaceImpactReport("/work/project", ["src/a.ts"]);
 
     expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_workspace_review", {
       request: {

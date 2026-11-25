@@ -11,11 +11,15 @@ import type {
   BehaviorComparisonRecord,
   ExecutionRecord,
   GitDiffPair,
+  ImpactFileAnalysis,
   ProjectRecipeSummary,
   ProjectSummary,
   RevertTarget,
   ReviewDiffBaseline,
+  RookContextChip,
+  RookMode,
   UiPreferences,
+  WorkspaceImpactReport,
   WorkspaceReviewSnapshot,
 } from "../../services/contracts";
 import {
@@ -23,6 +27,7 @@ import {
   comparisonOutcomeTone,
   formatComparisonMarkdown,
 } from "../compare/comparison-helpers";
+import { computeDiffHunks, impactRoleLabel, type DiffHunk } from "./diff-hunks";
 
 const ReviewDiffEditor = lazy(() =>
   import("./ReviewDiffEditor").then((module) => ({
@@ -66,7 +71,9 @@ export function WorkspaceReviewScreen({
   onOpenInEditor,
   onOpenVerify,
   onRunQuickRecipe,
+  onRunQuickCheck,
   onSendNotesToRook,
+  onAskRookWithContext,
   onWorkspaceMutated,
 }: {
   service: AppService;
@@ -84,10 +91,20 @@ export function WorkspaceReviewScreen({
   onOpenInEditor: (relativePath: string) => void;
   onOpenVerify: () => void;
   onRunQuickRecipe?: (recipeName: string) => Promise<void>;
+  onRunQuickCheck?: (program: string, args: string[]) => Promise<void>;
   onSendNotesToRook: (prompt: string) => void;
+  onAskRookWithContext?: (
+    chip: RookContextChip,
+    promptText: string,
+    mode?: RookMode,
+  ) => void;
   onWorkspaceMutated: () => Promise<void>;
 }) {
   const [snapshot, setSnapshot] = useState<WorkspaceReviewSnapshot>();
+  const [impactReport, setImpactReport] = useState<WorkspaceImpactReport>();
+  const [groupByRole, setGroupByRole] = useState(true);
+  const [activeHunkIndex, setActiveHunkIndex] = useState(0);
+  const [revealModifiedLine, setRevealModifiedLine] = useState<number>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [statusMessage, setStatusMessage] = useState<string>();
@@ -141,6 +158,14 @@ export function WorkspaceReviewScreen({
       );
       if (diffBaseline === "last_review" && !next.lastCheckpointDigest) {
         setDiffBaseline("head");
+      }
+      if (next.changedFiles.length > 0 && service.getWorkspaceImpactReport) {
+        void service
+          .getWorkspaceImpactReport(project.id)
+          .then(setImpactReport)
+          .catch(() => setImpactReport(undefined));
+      } else {
+        setImpactReport(undefined);
       }
     } catch (failure) {
       setError(errorText(failure, "Working-tree review could not be loaded."));
@@ -205,6 +230,86 @@ export function WorkspaceReviewScreen({
       cancelled = true;
     };
   }, [diffBaseline, project.id, selectedFile, service, snapshot?.sourceDigest]);
+
+  const hunks = useMemo<DiffHunk[]>(() => {
+    if (
+      diffPair?.kind !== "text" ||
+      diffPair.original === undefined ||
+      diffPair.original === null
+    ) {
+      return [];
+    }
+    return computeDiffHunks(
+      diffPair.original,
+      editedContent ?? diffPair.modified ?? "",
+    );
+  }, [diffPair, editedContent]);
+
+  useEffect(() => {
+    setActiveHunkIndex(0);
+    setRevealModifiedLine(undefined);
+  }, [selectedFile, diffBaseline]);
+
+  useEffect(() => {
+    if (hunks.length === 0) {
+      setActiveHunkIndex(0);
+    } else if (activeHunkIndex >= hunks.length) {
+      setActiveHunkIndex(hunks.length - 1);
+    }
+  }, [activeHunkIndex, hunks.length]);
+
+  const activeHunk = hunks[activeHunkIndex];
+
+  async function handleRevertHunk(hunk: DiffHunk) {
+    if (!selectedFile || !diffPair || inlineDirty) return;
+    if (
+      !window.confirm(
+        `Revert hunk ${hunk.header} in "${selectedFile}" back to ${diffBaseline === "last_review" ? "checkpoint" : "HEAD"}?`,
+      )
+    ) {
+      return;
+    }
+    setActionPending(true);
+    setError(undefined);
+    setStatusMessage(undefined);
+    try {
+      const next = await service.revertWorkspaceHunk(project.id, selectedFile, {
+        baseline: diffBaseline,
+        oldStart: hunk.oldStart,
+        oldCount: hunk.oldCount,
+        newStart: hunk.newStart,
+        newCount: hunk.newCount,
+        expectedModified: diffPair.modified ?? "",
+      });
+      setSnapshot(next);
+      setStatusMessage(`Reverted hunk ${hunk.header} in ${selectedFile}.`);
+      await onWorkspaceMutated();
+      await loadReview();
+    } catch (failure) {
+      setError(errorText(failure, `Could not revert hunk in ${selectedFile}.`));
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  function handleAskRookAboutHunk(hunk: DiffHunk) {
+    if (!selectedFile || !onAskRookWithContext) return;
+    const startLine = Math.max(1, hunk.newStart || hunk.oldStart || 1);
+    const endLine = startLine + Math.max(0, hunk.newCount - 1);
+    onAskRookWithContext(
+      {
+        id: `hunk:${selectedFile}:${hunk.header}`,
+        kind: "selection",
+        label: `${selectedFile}:${startLine}`,
+        filePath: selectedFile,
+        startLine,
+        endLine,
+        content: `${selectedFile} ${hunk.header}\n${hunk.snippet}`,
+      },
+      `Explain why this hunk (${selectedFile}:${startLine}) was changed and whether callers or tests could break.`,
+      "ask",
+    );
+  }
 
   const inlineDirty =
     diffPair?.kind === "text" &&
@@ -423,6 +528,50 @@ export function WorkspaceReviewScreen({
     }
   }
 
+  const fileAnalysisByPath = useMemo(() => {
+    const map = new Map<string, ImpactFileAnalysis>();
+    for (const entry of impactReport?.files ?? []) {
+      map.set(entry.path, entry);
+    }
+    return map;
+  }, [impactReport]);
+
+  const activeFileImpact = selectedFile
+    ? fileAnalysisByPath.get(selectedFile)
+    : undefined;
+
+  const groupedVisibleFiles = useMemo(() => {
+    if (!groupByRole || !impactReport || impactReport.files.length === 0) {
+      return [{ role: "all", label: "Changed files", files: visibleFiles }];
+    }
+    const order = [
+      "backend",
+      "api_service",
+      "state",
+      "ui",
+      "tests",
+      "config_docs",
+    ];
+    const buckets = new Map<string, typeof visibleFiles>();
+    for (const file of visibleFiles) {
+      const role = fileAnalysisByPath.get(file.path)?.role ?? "ui";
+      const list = buckets.get(role) ?? [];
+      list.push(file);
+      buckets.set(role, list);
+    }
+    return [...buckets.entries()]
+      .sort(([a], [b]) => {
+        const ia = order.indexOf(a);
+        const ib = order.indexOf(b);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      })
+      .map(([role, files]) => ({
+        role,
+        label: impactRoleLabel(role),
+        files,
+      }));
+  }, [fileAnalysisByPath, groupByRole, impactReport, visibleFiles]);
+
   const projectChecks = useMemo(
     () => executions.filter((item) => item.projectId === project.id),
     [executions, project.id],
@@ -464,6 +613,15 @@ export function WorkspaceReviewScreen({
               )}
             </div>
             <div className="review-inline-actions">
+              {impactReport && impactReport.files.length > 0 && (
+                <button
+                  type="button"
+                  className={`button button-quiet${groupByRole ? " is-active" : ""}`}
+                  onClick={() => setGroupByRole((v) => !v)}
+                >
+                  {groupByRole ? "Grouped by role" : "Flat file list"}
+                </button>
+              )}
               {snapshot?.lastCheckpointDigest && (
                 <div
                   className="review-baseline-toggle"
@@ -570,39 +728,55 @@ export function WorkspaceReviewScreen({
                   role="list"
                   aria-label="Changed files"
                 >
-                  {visibleFiles.map((file) => {
-                    const checked = selectedPaths.includes(file.path);
-                    const active = selectedFile === file.path;
-                    return (
-                      <div
-                        key={file.path}
-                        className={`review-file-chip${active ? " is-active" : ""}`}
-                        role="listitem"
-                      >
-                        <input
-                          type="checkbox"
-                          aria-label={`Include ${file.path} in commit`}
-                          checked={checked}
-                          onChange={(event) =>
-                            setSelectedPaths((current) =>
-                              event.target.checked
-                                ? [...new Set([...current, file.path])]
-                                : current.filter((item) => item !== file.path),
-                            )
-                          }
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFile(file.path)}
-                        >
-                          <span className="review-file-badge">
-                            {fileBadge(file.indexStatus, file.worktreeStatus)}
-                          </span>
-                          <span>{file.path}</span>
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {groupedVisibleFiles.map((group) => (
+                    <div className="review-role-group" key={group.role}>
+                      {groupedVisibleFiles.length > 1 && (
+                        <span className="review-role-heading">
+                          {group.label} ({group.files.length})
+                        </span>
+                      )}
+                      {group.files.map((file) => {
+                        const checked = selectedPaths.includes(file.path);
+                        const active = selectedFile === file.path;
+                        const fileImpact = fileAnalysisByPath.get(file.path);
+                        return (
+                          <div
+                            key={file.path}
+                            className={`review-file-chip${active ? " is-active" : ""}`}
+                            role="listitem"
+                            title={fileImpact?.summary}
+                          >
+                            <input
+                              type="checkbox"
+                              aria-label={`Include ${file.path} in commit`}
+                              checked={checked}
+                              onChange={(event) =>
+                                setSelectedPaths((current) =>
+                                  event.target.checked
+                                    ? [...new Set([...current, file.path])]
+                                    : current.filter(
+                                        (item) => item !== file.path,
+                                      ),
+                                )
+                              }
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFile(file.path)}
+                            >
+                              <span className="review-file-badge">
+                                {fileBadge(
+                                  file.indexStatus,
+                                  file.worktreeStatus,
+                                )}
+                              </span>
+                              <span>{file.path}</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
                 <div className="review-diff-controls">
                   <button
@@ -659,6 +833,99 @@ export function WorkspaceReviewScreen({
                   )}
                 </div>
               </div>
+              {diffPair?.kind === "text" && hunks.length > 0 && activeHunk && (
+                <div
+                  className="review-hunk-bar"
+                  role="region"
+                  aria-label="Hunk controls"
+                >
+                  <div className="review-hunk-meta">
+                    <strong>
+                      Hunk {activeHunkIndex + 1} of {hunks.length}
+                    </strong>
+                    <code>{activeHunk.header}</code>
+                  </div>
+                  <div className="review-hunk-actions">
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      disabled={activeHunkIndex <= 0}
+                      title="Previous hunk"
+                      onClick={() => {
+                        const prev = Math.max(0, activeHunkIndex - 1);
+                        setActiveHunkIndex(prev);
+                        setRevealModifiedLine(
+                          Math.max(
+                            1,
+                            hunks[prev].newStart || hunks[prev].oldStart,
+                          ),
+                        );
+                      }}
+                    >
+                      ↑ Prev
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      disabled={activeHunkIndex >= hunks.length - 1}
+                      title="Next hunk"
+                      onClick={() => {
+                        const next = Math.min(
+                          hunks.length - 1,
+                          activeHunkIndex + 1,
+                        );
+                        setActiveHunkIndex(next);
+                        setRevealModifiedLine(
+                          Math.max(
+                            1,
+                            hunks[next].newStart || hunks[next].oldStart,
+                          ),
+                        );
+                      }}
+                    >
+                      ↓ Next
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      disabled={actionPending || inlineDirty}
+                      title={
+                        inlineDirty
+                          ? "Save or discard inline diff edits first"
+                          : "Revert only this hunk"
+                      }
+                      onClick={() => void handleRevertHunk(activeHunk)}
+                    >
+                      Revert hunk
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-quiet"
+                      onClick={() =>
+                        setCommentLine(
+                          String(
+                            Math.max(
+                              1,
+                              activeHunk.newStart || activeHunk.oldStart || 1,
+                            ),
+                          ),
+                        )
+                      }
+                    >
+                      Note line
+                    </button>
+                    {onAskRookWithContext && (
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        onClick={() => handleAskRookAboutHunk(activeHunk)}
+                      >
+                        Ask Rook why ↗
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="review-diff-surface">
                 {diffLoading ? (
                   <p className="editor-loading">Loading diff…</p>
@@ -676,6 +943,7 @@ export function WorkspaceReviewScreen({
                       fontSize={preferences.editorFontSize}
                       sideBySide={sideBySide}
                       readOnly={diffPair.status === "deleted"}
+                      revealLine={revealModifiedLine}
                       onChange={setEditedContent}
                     />
                   </Suspense>
@@ -783,6 +1051,161 @@ export function WorkspaceReviewScreen({
 
         {snapshot && (
           <aside className="review-aside" aria-label="Verify and commit">
+            {impactReport && (
+              <section
+                className="review-aside-card review-impact-card"
+                aria-label="Blast radius"
+              >
+                <div className="review-section-head">
+                  <span className="eyebrow">Blast radius</span>
+                  {activeFileImpact && (
+                    <span className="status-pill">
+                      {impactRoleLabel(activeFileImpact.role)}
+                    </span>
+                  )}
+                </div>
+                {impactReport.warnings.length > 0 && (
+                  <ul className="review-warning-list">
+                    {impactReport.warnings.map((warning) => (
+                      <li
+                        key={warning.kind}
+                        className={`review-warning-item is-${warning.severity}`}
+                      >
+                        <p>{warning.message}</p>
+                        {warning.paths.length > 0 && (
+                          <div className="review-warning-paths">
+                            {warning.paths.slice(0, 4).map((p) => (
+                              <button
+                                key={p}
+                                type="button"
+                                className="review-inline-link"
+                                onClick={() => onOpenInEditor(p)}
+                              >
+                                {p}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {activeFileImpact ? (
+                  <div className="review-impact-details">
+                    {activeFileImpact.staleNote && (
+                      <div className="review-stale-note-box" role="status">
+                        <strong>Stale context note</strong>
+                        <p>{activeFileImpact.staleNote.summary}</p>
+                      </div>
+                    )}
+                    <div className="review-impact-group">
+                      <small>
+                        Direct callers ({activeFileImpact.directCallers.length})
+                      </small>
+                      {activeFileImpact.directCallers.length === 0 ? (
+                        <p className="review-aside-hint">
+                          No observed workspace importers.
+                        </p>
+                      ) : (
+                        <ul className="review-impact-links">
+                          {activeFileImpact.directCallers
+                            .slice(0, 5)
+                            .map((caller) => (
+                              <li key={caller.filePath}>
+                                <button
+                                  type="button"
+                                  className="review-inline-link"
+                                  onClick={() =>
+                                    onOpenInEditor(caller.filePath)
+                                  }
+                                >
+                                  {caller.filePath}
+                                  {caller.line ? `:${caller.line}` : ""}
+                                </button>
+                                <span className="status-pill">
+                                  {caller.alsoChanged ? "in diff" : "untouched"}
+                                </span>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div className="review-impact-group">
+                      <small>
+                        Related tests ({activeFileImpact.relatedTests.length})
+                      </small>
+                      {activeFileImpact.relatedTests.length === 0 ? (
+                        <p className="review-aside-hint">
+                          No linked tests matched.
+                        </p>
+                      ) : (
+                        <ul className="review-impact-links">
+                          {activeFileImpact.relatedTests
+                            .slice(0, 5)
+                            .map((test) => (
+                              <li key={test.filePath}>
+                                <button
+                                  type="button"
+                                  className="review-inline-link"
+                                  onClick={() => onOpenInEditor(test.filePath)}
+                                >
+                                  {test.filePath}
+                                </button>
+                                <span className="status-pill">
+                                  {test.provenance}
+                                </span>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="review-aside-hint">
+                    Select a changed file to inspect its callers and tests.
+                  </p>
+                )}
+                {impactReport.recommendedChecks.length > 0 && (
+                  <div className="review-impact-group">
+                    <small>Recommended checks</small>
+                    {impactReport.recommendedChecks.slice(0, 3).map((chk) => (
+                      <div className="review-check-row" key={chk.id}>
+                        <span title={chk.reason}>{chk.label}</span>
+                        {workspaceTrusted &&
+                          (onRunQuickRecipe || onRunQuickCheck) && (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              disabled={actionPending}
+                              onClick={() => {
+                                setActionPending(true);
+                                const promise =
+                                  chk.recipeName && onRunQuickRecipe
+                                    ? onRunQuickRecipe(chk.recipeName)
+                                    : onRunQuickCheck?.(chk.program, chk.args);
+                                void promise
+                                  ?.then(() => loadReview())
+                                  .catch((failure) =>
+                                    setError(
+                                      errorText(
+                                        failure,
+                                        "Check failed to run.",
+                                      ),
+                                    ),
+                                  )
+                                  .finally(() => setActionPending(false));
+                              }}
+                            >
+                              {chk.isFresh ? "Re-run ✓" : "Run"}
+                            </button>
+                          )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
             <section className="review-aside-card">
               <div className="review-section-head">
                 <span className="eyebrow">Verification</span>

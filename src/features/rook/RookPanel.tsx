@@ -86,6 +86,7 @@ export function RookPanel({
   onPreviewRookPatch,
   onJumpToLocation,
   onOpenReview,
+  onOpenVerify,
   onUndoTurn,
   onToggleExpand,
 }: {
@@ -110,16 +111,23 @@ export function RookPanel({
     selectedPaths?: string[],
     baseline?: "head" | "last_review",
   ) => void;
+  onOpenVerify?: () => void;
   onUndoTurn?: (messageIndex: number, touchedFiles: string[]) => Promise<void>;
   onToggleExpand?: () => void;
 }) {
   const activeProject = useWorkspaceStore((s) => s.activeProject);
   const documents = useWorkspaceStore((s) => s.documents);
+  const workspaceTrusted = useWorkspaceStore((s) => s.workspaceTrusted);
+  const executions = useWorkspaceStore((s) => s.executions);
+  const projectRecipes = useWorkspaceStore((s) => s.projectRecipes);
+  const setExecutions = useWorkspaceStore((s) => s.setExecutions);
 
   const session = useRookStore((s) => s.session);
   const rookMode = useRookStore((s) => s.mode);
   const rookSandbox = useRookStore((s) => s.sandbox);
   const rookTrustPromptPending = useRookStore((s) => s.trustPromptPending);
+  const planFirst = useRookStore((s) => s.planFirst);
+  const autoVerifyAfterBuild = useRookStore((s) => s.autoVerifyAfterBuild);
   const providers = useRookStore((s) => s.providers);
   const providerControlsAvailable = useRookStore(
     (s) => s.providerControlsAvailable,
@@ -149,6 +157,16 @@ export function RookPanel({
   const removeContextChip = useRookStore((s) => s.removeContextChip);
   const clearContextChips = useRookStore((s) => s.clearContextChips);
   const setPermissionPending = useRookStore((s) => s.setPermissionPending);
+  const setPlanFirst = useRookStore((s) => s.setPlanFirst);
+  const setAutoVerifyAfterBuild = useRookStore(
+    (s) => s.setAutoVerifyAfterBuild,
+  );
+  const setPendingPlanTurn = useRookStore((s) => s.setPendingPlanTurn);
+
+  const [runningVerifyTurn, setRunningVerifyTurn] = useState<number | null>(
+    null,
+  );
+  const [verifyFeedback, setVerifyFeedback] = useState<string>();
 
   const [search, setSearch] = useState("");
   const [sessionSearch, setSessionSearch] = useState("");
@@ -234,6 +252,53 @@ export function RookPanel({
     setShowJumpToLatest(!nearBottom);
   }
 
+  function dispatchRookPrompt(
+    userDisplayText: string,
+    payloadText: string,
+    serializedContext: string,
+    options?: { isPlanOnly?: boolean; restoreDraftOnFail?: boolean },
+  ) {
+    if (!session) return;
+    shouldAutoScrollRef.current = true;
+    setShowJumpToLatest(false);
+    setMessages((items) => [...items, { role: "user", text: userDisplayText }]);
+    if (options?.isPlanOnly) {
+      setPendingPlanTurn({
+        prompt: userDisplayText,
+        context: serializedContext,
+      });
+    } else {
+      setPendingPlanTurn(null);
+    }
+    setError(undefined);
+    const send = async () => {
+      if (
+        rookMode === "build" &&
+        !options?.isPlanOnly &&
+        activeProject?.isGitRepository
+      ) {
+        await service
+          .saveWorkspaceCheckpoint(activeProject.id, "Before Rook Build")
+          .catch(() => undefined);
+      }
+      await service.promptRookAsk(
+        session,
+        payloadText,
+        serializedContext || undefined,
+      );
+    };
+    void send().catch((failure) => {
+      setPendingPlanTurn(null);
+      setMessages((items) =>
+        items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
+      );
+      if (options?.restoreDraftOnFail) {
+        setPrompt(userDisplayText);
+      }
+      setError(errorMessage(failure, "Your message could not be sent."));
+    });
+  }
+
   function submitPrompt(steeringMode?: "steer" | "queue") {
     const text = prompt.trim();
     if (!text) return;
@@ -276,31 +341,49 @@ export function RookPanel({
       }
       return;
     }
-    shouldAutoScrollRef.current = true;
-    setShowJumpToLatest(false);
-    setMessages((items) => [...items, { role: "user", text }]);
     setPrompt("");
     clearContextChips();
-    setError(undefined);
-    const send = async () => {
-      if (rookMode === "build" && activeProject?.isGitRepository) {
-        await service
-          .saveWorkspaceCheckpoint(activeProject.id, "Before Rook Build")
-          .catch(() => undefined);
-      }
-      await service.promptRookAsk(
-        session,
-        text,
-        serializedContext || undefined,
-      );
-    };
-    void send().catch((failure) => {
-      setMessages((items) =>
-        items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
-      );
-      setPrompt(text);
-      setError(errorMessage(failure, "Your message could not be sent."));
+    const isPlanOnly = rookMode === "build" && planFirst;
+    const payloadText = isPlanOnly
+      ? [
+          "[PLAN FIRST — DO NOT EDIT FILES YET]",
+          "Inspect the workspace read-only and respond with a concise implementation plan:",
+          "1. Target files to edit",
+          "2. Planned behavior & data changes",
+          "3. Recommended checks to run",
+          "Do not modify files in this turn.",
+          "",
+          `Request:\n${text}`,
+        ].join("\n")
+      : text;
+    dispatchRookPrompt(text, payloadText, serializedContext, {
+      isPlanOnly,
+      restoreDraftOnFail: true,
     });
+  }
+
+  async function runTurnVerifyCheck(turnIndex: number) {
+    if (!activeProject || !workspaceTrusted) return;
+    const recipe = projectRecipes[0];
+    setRunningVerifyTurn(turnIndex);
+    setVerifyFeedback(undefined);
+    try {
+      const execution = recipe
+        ? await service.runProjectRecipe(activeProject.id, recipe.name)
+        : await service.runCheck(activeProject.id, "pnpm", ["test"]);
+      setExecutions((items) => [execution, ...items]);
+      setVerifyFeedback(
+        execution.status === "passed"
+          ? `${execution.program} ${execution.args.join(" ")} passed`
+          : `${execution.program} ${execution.args.join(" ")}: ${execution.status}`,
+      );
+    } catch (failure) {
+      setVerifyFeedback(
+        errorMessage(failure, "Verification check could not start."),
+      );
+    } finally {
+      setRunningVerifyTurn(null);
+    }
   }
 
   useEffect(() => {
@@ -772,6 +855,33 @@ export function RookPanel({
                   )}
 
                   {isSettledAssistant &&
+                    message.planOnly &&
+                    message.planOriginalPrompt && (
+                      <div className="rook-turn-diff-strip">
+                        <span className="rook-turn-diff-count">
+                          Plan ready · no files edited
+                        </span>
+                        <div className="rook-turn-diff-actions">
+                          <button
+                            type="button"
+                            className="button button-primary"
+                            disabled={!session || Boolean(runId)}
+                            onClick={() => {
+                              setPlanFirst(false);
+                              dispatchRookPrompt(
+                                `Approve & Build: ${message.planOriginalPrompt}`,
+                                message.planOriginalPrompt!,
+                                message.planOriginalContext ?? "",
+                              );
+                            }}
+                          >
+                            Approve &amp; Build →
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                  {isSettledAssistant &&
                     touchedFiles.length > 0 &&
                     !message.turnUndone && (
                       <div className="rook-turn-diff-strip">
@@ -813,6 +923,90 @@ export function RookPanel({
                         </div>
                       </div>
                     )}
+
+                  {isSettledAssistant &&
+                    touchedFiles.length > 0 &&
+                    !message.turnUndone &&
+                    !message.planOnly &&
+                    workspaceTrusted &&
+                    (() => {
+                      const projectChecks = executions.filter(
+                        (item) => item.projectId === activeProject.id,
+                      );
+                      const latestCheck = projectChecks[0];
+                      const primaryRecipe = projectRecipes[0];
+                      const checkFailed =
+                        latestCheck &&
+                        (latestCheck.status === "failed" ||
+                          latestCheck.status === "timed_out" ||
+                          latestCheck.status === "start_failed");
+                      return (
+                        <div className="rook-verify-strip">
+                          <div className="rook-verify-strip-status">
+                            <span
+                              className={`verify-status-pill verify-status-${latestCheck?.status ?? "stale"}`}
+                            >
+                              {latestCheck
+                                ? `${latestCheck.program}: ${latestCheck.status}`
+                                : primaryRecipe
+                                  ? `Suggested: ${primaryRecipe.name}`
+                                  : "Not verified"}
+                            </span>
+                            {verifyFeedback && (
+                              <span className="rook-verify-note">
+                                {verifyFeedback}
+                              </span>
+                            )}
+                          </div>
+                          <div className="rook-turn-diff-actions">
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              disabled={runningVerifyTurn === index}
+                              onClick={() => void runTurnVerifyCheck(index)}
+                            >
+                              {runningVerifyTurn === index
+                                ? "Running…"
+                                : primaryRecipe
+                                  ? `Verify (${primaryRecipe.name})`
+                                  : "Run verify"}
+                            </button>
+                            {checkFailed && latestCheck && (
+                              <button
+                                type="button"
+                                className="button button-primary"
+                                disabled={!session || Boolean(runId)}
+                                onClick={() => {
+                                  const excerpt = formatFailureContextExcerpt(
+                                    `${latestCheck.program} ${latestCheck.args.join(" ")}`,
+                                    latestCheck.output ||
+                                      "(no output recorded)",
+                                  );
+                                  dispatchRookPrompt(
+                                    `Fix verification failure in \`${latestCheck.program}\` and prepare for re-verify`,
+                                    `Fix the failure from \`${latestCheck.program} ${latestCheck.args.join(" ")}\` (status: ${latestCheck.status}) and keep the diff minimal.\n\nFailure output:\n${excerpt}`,
+                                    excerpt,
+                                  );
+                                }}
+                              >
+                                Fix failure &amp; re-verify
+                              </button>
+                            )}
+                            {onOpenVerify && (
+                              <button
+                                type="button"
+                                className="button button-quiet"
+                                onClick={onOpenVerify}
+                              >
+                                {projectChecks.length >= 2
+                                  ? "Compare vs prev ↗"
+                                  : "Verify ↗"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                   {isSettledAssistant &&
                     message.text &&
@@ -1003,6 +1197,19 @@ export function RookPanel({
                     Build
                   </button>
                 </div>
+
+                {rookMode === "build" && (
+                  <button
+                    type="button"
+                    aria-pressed={planFirst}
+                    className={`rook-plan-pill${planFirst ? " is-active" : ""}`}
+                    title="Inspect and present a plan before editing files"
+                    disabled={Boolean(runId)}
+                    onClick={() => setPlanFirst(!planFirst)}
+                  >
+                    Plan first
+                  </button>
+                )}
 
                 {providerControlsAvailable && (
                   <Dialog.Root
@@ -1511,7 +1718,24 @@ export function RookPanel({
                 ? sandboxSummary(rookSandbox)
                 : "Read-only · cites workspace"}
             </span>
-            <span className="rook-shortcut-hint">⇧↵ newline</span>
+            <div className="rook-footer-right">
+              {rookMode === "build" && workspaceTrusted && (
+                <label
+                  className="rook-autoverify-toggle"
+                  title="Automatically run the primary verify recipe after Build edits files"
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoVerifyAfterBuild}
+                    onChange={(event) =>
+                      setAutoVerifyAfterBuild(event.currentTarget.checked)
+                    }
+                  />
+                  <span>Auto-verify</span>
+                </label>
+              )}
+              <span className="rook-shortcut-hint">⇧↵ newline</span>
+            </div>
           </div>
         </div>
 

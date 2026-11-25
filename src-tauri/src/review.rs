@@ -160,7 +160,10 @@ pub(crate) struct ExecuteIntegrationRequest {
     attempt_id: String,
 }
 
-fn canonical_git_root(project_id: &str, operation_id: &str) -> Result<PathBuf, IpcError> {
+pub(crate) fn canonical_git_root(
+    project_id: &str,
+    operation_id: &str,
+) -> Result<PathBuf, IpcError> {
     let root = fs::canonicalize(project_id).map_err(|_| {
         terminal_error(
             "workspace_unavailable",
@@ -268,7 +271,10 @@ fn read_git_status_at(root: &Path, operation_id: &str) -> Result<GitStatusRespon
     parse_git_status(&output.stdout, operation_id)
 }
 
-fn validate_safe_relative_path(relative_path: &str, operation_id: &str) -> Result<(), IpcError> {
+pub(crate) fn validate_safe_relative_path(
+    relative_path: &str,
+    operation_id: &str,
+) -> Result<(), IpcError> {
     let path = Path::new(relative_path);
     if relative_path.is_empty()
         || relative_path.contains('\0')
@@ -1863,6 +1869,22 @@ pub(crate) struct RevertFileRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct RevertHunkRequest {
+    schema_version: u16,
+    operation_id: String,
+    project_id: String,
+    relative_path: String,
+    #[serde(default)]
+    baseline: Option<String>,
+    old_start: usize,
+    old_count: usize,
+    new_start: usize,
+    new_count: usize,
+    expected_modified: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CommitWorkspaceReviewRequest {
     schema_version: u16,
     operation_id: String,
@@ -2147,6 +2169,210 @@ pub(crate) async fn revert_workspace_file_with_pool(
             ));
         }
     }
+
+    get_workspace_review_with_pool(pool, root, operation_id).await
+}
+
+pub(crate) fn apply_hunk_revert_text(
+    original: &str,
+    modified: &str,
+    old_start: usize,
+    old_count: usize,
+    new_start: usize,
+    new_count: usize,
+    operation_id: &str,
+) -> Result<String, IpcError> {
+    let uses_crlf = modified.contains("\r\n");
+    let had_trailing_nl = modified.ends_with('\n');
+    let orig_had_trailing_nl = original.ends_with('\n');
+
+    fn split_lines(text: &str) -> Vec<String> {
+        let normalized = text.replace("\r\n", "\n");
+        let trimmed = normalized.strip_suffix('\n').unwrap_or(&normalized);
+        if normalized.is_empty() {
+            Vec::new()
+        } else {
+            trimmed.split('\n').map(str::to_owned).collect()
+        }
+    }
+
+    let orig_lines = split_lines(original);
+    let mut mod_lines = split_lines(modified);
+
+    let orig_start = if old_count == 0 {
+        0
+    } else {
+        old_start.checked_sub(1).ok_or_else(|| {
+            terminal_error(
+                "invalid_hunk_range",
+                "Original hunk line range is out of bounds.",
+                operation_id,
+            )
+        })?
+    };
+    let orig_end = orig_start.checked_add(old_count).ok_or_else(|| {
+        terminal_error(
+            "invalid_hunk_range",
+            "Original hunk line range overflows.",
+            operation_id,
+        )
+    })?;
+
+    let mod_start = if new_count == 0 {
+        new_start
+    } else {
+        new_start.checked_sub(1).ok_or_else(|| {
+            terminal_error(
+                "invalid_hunk_range",
+                "Modified hunk line range is out of bounds.",
+                operation_id,
+            )
+        })?
+    };
+    let mod_end = mod_start.checked_add(new_count).ok_or_else(|| {
+        terminal_error(
+            "invalid_hunk_range",
+            "Modified hunk line range overflows.",
+            operation_id,
+        )
+    })?;
+
+    if orig_end > orig_lines.len() || mod_end > mod_lines.len() {
+        return Err(terminal_error(
+            "hunk_out_of_range",
+            "Hunk coordinates no longer match the current diff. Refresh Review and try again.",
+            operation_id,
+        ));
+    }
+
+    let replacement: Vec<String> = orig_lines[orig_start..orig_end].to_vec();
+    mod_lines.splice(mod_start..mod_end, replacement);
+
+    if mod_lines.is_empty() {
+        return Ok(String::new());
+    }
+
+    let separator = if uses_crlf { "\r\n" } else { "\n" };
+    let mut next = mod_lines.join(separator);
+    if had_trailing_nl || orig_had_trailing_nl {
+        next.push_str(separator);
+    }
+    Ok(next)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn revert_workspace_hunk_with_pool(
+    pool: &SqlitePool,
+    processes: &RookProcesses,
+    root: &Path,
+    relative_path: &str,
+    baseline: Option<&str>,
+    old_start: usize,
+    old_count: usize,
+    new_start: usize,
+    new_count: usize,
+    expected_modified: &str,
+    operation_id: &str,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    if processes.has_active_build(root) {
+        return Err(terminal_error(
+            "build_run_active",
+            "Stop Rook Build before reverting a hunk.",
+            operation_id,
+        ));
+    }
+    if git_operation_in_progress(root) {
+        return Err(terminal_error(
+            "git_operation_in_progress",
+            "Finish or abort the active Git merge or rebase before reverting a hunk.",
+            operation_id,
+        ));
+    }
+    validate_safe_relative_path(relative_path, operation_id)?;
+    let full_path = root.join(relative_path);
+    if let Ok(meta) = fs::symlink_metadata(&full_path) {
+        if meta.file_type().is_symlink() {
+            return Err(terminal_error(
+                "project_file_symlink",
+                "Symbolic links cannot be reverted from Review.",
+                operation_id,
+            ));
+        }
+    }
+
+    let pair = match baseline {
+        Some("last_review") => {
+            let review_id = ensure_workspace_review_id(pool, root, operation_id).await?;
+            read_git_file_diff_pair_since_review_with_pool(
+                pool,
+                root,
+                &review_id,
+                relative_path,
+                operation_id,
+            )
+            .await?
+        }
+        _ => read_git_file_diff_pair_at(root, relative_path, operation_id)?,
+    };
+    if pair.kind != ProjectFileReadKind::Text {
+        return Err(terminal_error(
+            "hunk_revert_unsupported",
+            "Only UTF-8 text files under 1 MiB support hunk revert.",
+            operation_id,
+        ));
+    }
+
+    let current_modified = pair.modified.unwrap_or_default();
+    if current_modified != expected_modified {
+        return Err(terminal_error(
+            "file_modified_since_read",
+            "This file changed on disk since the diff loaded. Refresh Review before reverting a hunk.",
+            operation_id,
+        ));
+    }
+
+    let original = pair.original.unwrap_or_default();
+    let updated = apply_hunk_revert_text(
+        &original,
+        &current_modified,
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+        operation_id,
+    )?;
+
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent).map_err(|_| {
+            terminal_error(
+                "revert_failed",
+                "Parent directory could not be prepared for hunk revert.",
+                operation_id,
+            )
+        })?;
+    }
+    let tmp_path = full_path.with_file_name(format!(
+        ".{}.laplace-hunk.tmp",
+        full_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+    ));
+    fs::write(&tmp_path, updated.as_bytes()).map_err(|_| {
+        terminal_error(
+            "revert_failed",
+            "Reverted hunk could not be written to disk.",
+            operation_id,
+        )
+    })?;
+    fs::rename(&tmp_path, &full_path).map_err(|_| {
+        let _ = fs::remove_file(&tmp_path);
+        terminal_error(
+            "revert_failed",
+            "Reverted hunk could not replace the target file.",
+            operation_id,
+        )
+    })?;
 
     get_workspace_review_with_pool(pool, root, operation_id).await
 }
@@ -2513,6 +2739,39 @@ pub(crate) async fn revert_workspace_file(
         &root,
         &request.relative_path,
         &request.target,
+        &request.operation_id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn revert_workspace_hunk(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    processes: tauri::State<'_, RookProcesses>,
+    request: RevertHunkRequest,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_revert_request",
+            "The hunk revert request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    revert_workspace_hunk_with_pool(
+        &pool,
+        &processes,
+        &root,
+        &request.relative_path,
+        request.baseline.as_deref(),
+        request.old_start,
+        request.old_count,
+        request.new_start,
+        request.new_count,
+        &request.expected_modified,
         &request.operation_id,
     )
     .await
@@ -3009,6 +3268,67 @@ mod review_tests {
             .unwrap();
         assert_eq!(after.changed_files.len(), 1);
         assert_eq!(after.changed_files[0].path, "other.ts");
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn hunk_revert_restores_targeted_slice_and_detects_drift() {
+        let (base, root, pool, _change_id) = setup_fixture().await;
+        let processes = RookProcesses::default();
+
+        fs::write(
+            root.join("app.ts"),
+            "line 1\nline 2\nline 3\nline 4\nline 5\n",
+        )
+        .unwrap();
+        let git_commit = Command::new("git")
+            .args(["commit", "-am", "multi-line baseline"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(git_commit.status.success());
+
+        let modified = "line 1\nline TWO\nline 3\nline FOUR\nline 5\n";
+        fs::write(root.join("app.ts"), modified).unwrap();
+
+        // Drift guard rejects stale expected_modified
+        let stale = revert_workspace_hunk_with_pool(
+            &pool,
+            &processes,
+            &root,
+            "app.ts",
+            Some("head"),
+            2,
+            1,
+            2,
+            1,
+            "stale content",
+            "op-hunk-stale",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(stale.code, "file_modified_since_read");
+
+        // Revert only the first modified hunk (line 2 -> "line TWO")
+        revert_workspace_hunk_with_pool(
+            &pool,
+            &processes,
+            &root,
+            "app.ts",
+            Some("head"),
+            2,
+            1,
+            2,
+            1,
+            modified,
+            "op-hunk-1",
+        )
+        .await
+        .unwrap();
+
+        let disk_after = fs::read_to_string(root.join("app.ts")).unwrap();
+        assert_eq!(disk_after, "line 1\nline 2\nline 3\nline FOUR\nline 5\n");
 
         let _ = fs::remove_dir_all(&base);
     }

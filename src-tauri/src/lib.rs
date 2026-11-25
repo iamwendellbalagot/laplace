@@ -29,6 +29,7 @@ mod context;
 mod db_recovery;
 mod fs_service;
 mod git_service;
+mod impact;
 mod pulse;
 mod redact;
 mod review;
@@ -1685,11 +1686,13 @@ pub fn run() {
             review::add_workspace_review_comment,
             review::toggle_review_comment_resolved,
             review::revert_workspace_file,
+            review::revert_workspace_hunk,
             review::commit_workspace_review,
             review::approve_change_review,
             review::request_change_revision,
             review::prepare_change_integration,
             review::execute_change_integration,
+            impact::get_workspace_impact_report,
             git_service::git_status,
             git_service::git_diff,
             git_service::create_candidate_worktree,

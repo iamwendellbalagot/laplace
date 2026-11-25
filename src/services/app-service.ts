@@ -37,6 +37,7 @@ import {
   type ProjectRecipeSummary,
   type ChangeReviewSnapshot,
   type WorkspaceReviewSnapshot,
+  type WorkspaceImpactReport,
   type RevertTarget,
   type GitDiffPair,
   type ReviewComment,
@@ -233,6 +234,22 @@ export interface AppService {
     relativePath: string,
     target: RevertTarget,
   ): Promise<WorkspaceReviewSnapshot>;
+  revertWorkspaceHunk(
+    projectId: string,
+    relativePath: string,
+    options: {
+      baseline?: ReviewDiffBaseline;
+      oldStart: number;
+      oldCount: number;
+      newStart: number;
+      newCount: number;
+      expectedModified: string;
+    },
+  ): Promise<WorkspaceReviewSnapshot>;
+  getWorkspaceImpactReport(
+    projectId: string,
+    changedPaths?: string[],
+  ): Promise<WorkspaceImpactReport>;
   commitWorkspaceReview(
     projectId: string,
     selectedPaths: string[],
@@ -638,6 +655,55 @@ export class TauriAppService implements AppService {
       return await invoke<WorkspaceReviewSnapshot>("revert_workspace_file", {
         request,
       });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async revertWorkspaceHunk(
+    projectId: string,
+    relativePath: string,
+    options: {
+      baseline?: ReviewDiffBaseline;
+      oldStart: number;
+      oldCount: number;
+      newStart: number;
+      newCount: number;
+      expectedModified: string;
+    },
+  ): Promise<WorkspaceReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+      baseline: options.baseline ?? null,
+      oldStart: options.oldStart,
+      oldCount: options.oldCount,
+      newStart: options.newStart,
+      newCount: options.newCount,
+      expectedModified: options.expectedModified,
+    };
+    try {
+      return await invoke<WorkspaceReviewSnapshot>("revert_workspace_hunk", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getWorkspaceImpactReport(
+    projectId: string,
+    changedPaths?: string[],
+  ): Promise<WorkspaceImpactReport> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      changedPaths: changedPaths ?? null,
+    };
+    try {
+      return await invoke<WorkspaceImpactReport>(
+        "get_workspace_impact_report",
+        { request },
+      );
     } catch (error) {
       throw normalizeError(error, request.operationId);
     }

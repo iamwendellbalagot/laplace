@@ -162,6 +162,7 @@ export function WorkspaceRightPanel({
             onJumpToLocation(relPath, line, col, true)
           }
           onOpenReview={onOpenReview}
+          onOpenVerify={onOpenVerify}
           onUndoTurn={onUndoTurn}
           onToggleExpand={onToggleRookExpand}
         />

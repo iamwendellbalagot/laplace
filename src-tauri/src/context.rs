@@ -250,28 +250,28 @@ pub(crate) struct DeleteContextPinnedLinkRequest {
 }
 
 #[derive(Debug, Clone)]
-struct RawImport {
-    specifier: String,
-    line: usize,
+pub(crate) struct RawImport {
+    pub(crate) specifier: String,
+    pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone)]
-struct CachedIndexedFile {
+pub(crate) struct CachedIndexedFile {
     relative_path: String,
     mtime_ms: i64,
     size_bytes: u64,
-    digest: String,
-    language: String,
+    pub(crate) digest: String,
+    pub(crate) language: String,
     symbols: Vec<FileSymbol>,
-    raw_imports: Vec<RawImport>,
-    has_inline_rust_tests: bool,
+    pub(crate) raw_imports: Vec<RawImport>,
+    pub(crate) has_inline_rust_tests: bool,
     cached_text: Option<String>,
 }
 
 #[derive(Default, Clone)]
-struct WorkspaceContextCache {
-    files: HashMap<String, CachedIndexedFile>,
-    truncated: bool,
+pub(crate) struct WorkspaceContextCache {
+    pub(crate) files: HashMap<String, CachedIndexedFile>,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Default, Clone)]
@@ -752,7 +752,7 @@ fn resolve_ts_candidate(candidate: &str, file_set: &HashSet<String>) -> Option<S
     None
 }
 
-fn resolve_import(
+pub(crate) fn resolve_import(
     source_path: &str,
     language: &str,
     specifier: &str,
@@ -845,7 +845,7 @@ fn resolve_import(
     }
 }
 
-fn is_test_file(relative_path: &str) -> bool {
+pub(crate) fn is_test_file(relative_path: &str) -> bool {
     let lower = relative_path.to_ascii_lowercase();
     let name = Path::new(&lower)
         .file_name()
@@ -860,7 +860,7 @@ fn is_test_file(relative_path: &str) -> bool {
         || name.starts_with("test_")
 }
 
-fn normalized_stem(relative_path: &str) -> String {
+pub(crate) fn normalized_stem(relative_path: &str) -> String {
     let name = Path::new(relative_path)
         .file_name()
         .and_then(|v| v.to_str())
@@ -975,7 +975,7 @@ fn walk_indexable_files(
     (files, truncated, false)
 }
 
-fn update_workspace_index(
+pub(crate) fn update_workspace_index(
     root: &Path,
     state: &ContextIndexState,
     token: &AtomicU64,
@@ -1133,7 +1133,7 @@ fn git_log_commits(
         .collect()
 }
 
-async fn load_annotations_for_project(
+pub(crate) async fn load_annotations_for_project(
     pool: &SqlitePool,
     project_id: &str,
     operation_id: &str,
