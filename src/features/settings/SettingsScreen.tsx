@@ -228,28 +228,9 @@ export function SettingsScreen({
           >
             <h2 id="layout-title">Layout</h2>
             <p>
-              Navigation and inspector choices are saved by Laplace and restored
-              on the next launch.
+              Layout and inspector choices are saved by Laplace and restored on
+              the next launch.
             </p>
-            <PreferenceRow
-              title="Navigation rail"
-              description="Collapse labels to make more room for the current view."
-            >
-              <button
-                type="button"
-                className="button button-quiet"
-                aria-pressed={preferences.navigationCollapsed}
-                disabled={savingPreferences}
-                onClick={() =>
-                  void onPreferencesChange({
-                    ...preferences,
-                    navigationCollapsed: !preferences.navigationCollapsed,
-                  })
-                }
-              >
-                {preferences.navigationCollapsed ? "Collapsed" : "Expanded"}
-              </button>
-            </PreferenceRow>
             <PreferenceRow
               title="Co-pilot & context panel"
               description="Keep Rook and source context docked beside the Editor."

@@ -69,6 +69,158 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function headerNavIcon(id: PageId, fallbackSymbol: string) {
+  switch (id) {
+    case "editor":
+      return (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <rect
+            x="2.25"
+            y="2.75"
+            width="11.5"
+            height="10.5"
+            rx="1.75"
+            stroke="currentColor"
+            strokeWidth="1.4"
+          />
+          <path d="M6 2.75v10.5" stroke="currentColor" strokeWidth="1.4" />
+        </svg>
+      );
+    case "changes":
+      return (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle
+            cx="4.75"
+            cy="4.25"
+            r="1.5"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <circle
+            cx="4.75"
+            cy="11.75"
+            r="1.5"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <circle
+            cx="11.25"
+            cy="6.25"
+            r="1.5"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <path
+            d="M4.75 5.75v4.5M11.25 7.75v1.75a2.25 2.25 0 0 1-2.25 2.25H6.25"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "context":
+      return (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M8 2.25 13.5 8 8 13.75 2.5 8Z"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+          <circle cx="8" cy="8" r="1.45" fill="currentColor" />
+        </svg>
+      );
+    case "tools":
+      return (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <rect
+            x="2.5"
+            y="2.5"
+            width="4.5"
+            height="4.5"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <rect
+            x="9"
+            y="2.5"
+            width="4.5"
+            height="4.5"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <rect
+            x="2.5"
+            y="9"
+            width="4.5"
+            height="4.5"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <path
+            d="M11.25 9v4.5M9 11.25h4.5"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "settings":
+      return (
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle
+            cx="8"
+            cy="8"
+            r="2.2"
+            stroke="currentColor"
+            strokeWidth="1.35"
+          />
+          <path
+            d="M8 2.25v1.3M8 12.45v1.3M2.25 8h1.3M12.45 8h1.3M3.9 3.9l.95.95M11.15 11.15l.95.95M12.1 3.9l-.95.95M4.85 11.15l-.95.95"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    default:
+      return <span aria-hidden="true">{fallbackSymbol}</span>;
+  }
+}
+
 export function App({ service, browserPreview = false }: AppProps) {
   const page = useAppStore((s) => s.page);
   const preferences = useAppStore((s) => s.preferences);
@@ -1847,33 +1999,17 @@ export function App({ service, browserPreview = false }: AppProps) {
         navigateHistoryStep(1);
       } else if (
         (event.metaKey || event.ctrlKey) &&
-        event.shiftKey &&
+        !event.shiftKey &&
         key === "b" &&
+        page === "editor" &&
+        activeProject &&
         !isNonEditorTextEntry
       ) {
         event.preventDefault();
         void savePreferences({
           ...preferences,
-          navigationCollapsed: !preferences.navigationCollapsed,
+          explorerCollapsed: !preferences.explorerCollapsed,
         });
-      } else if (
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        key === "b" &&
-        !isNonEditorTextEntry
-      ) {
-        event.preventDefault();
-        if (page === "editor" && activeProject) {
-          void savePreferences({
-            ...preferences,
-            explorerCollapsed: !preferences.explorerCollapsed,
-          });
-        } else {
-          void savePreferences({
-            ...preferences,
-            navigationCollapsed: !preferences.navigationCollapsed,
-          });
-        }
       } else if (
         (event.metaKey || event.ctrlKey) &&
         !event.shiftKey &&
@@ -2052,19 +2188,6 @@ export function App({ service, browserPreview = false }: AppProps) {
             bottomDrawerCollapsed: !preferences.bottomDrawerCollapsed,
           });
         },
-      },
-      {
-        id: "toggle-navigation",
-        label: preferences.navigationCollapsed
-          ? "Expand navigation rail"
-          : "Collapse navigation rail",
-        description: "Toggle the left navigation rail (⌘⇧B)",
-        category: "action",
-        run: () =>
-          void savePreferences({
-            ...preferences,
-            navigationCollapsed: !preferences.navigationCollapsed,
-          }),
       },
       {
         id: "toggle-inspector",
@@ -2817,6 +2940,30 @@ export function App({ service, browserPreview = false }: AppProps) {
               />
             </svg>
           </button>
+          <span className="system-nav-separator" aria-hidden="true" />
+          <nav className="system-nav" aria-label="Primary navigation">
+            {navigationItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`toolbar-icon-button system-nav-button${page === item.id ? " is-active" : ""}`}
+                aria-label={item.label}
+                aria-current={page === item.id ? "page" : undefined}
+                title={item.label}
+                onClick={() => navigateTracked(item.id)}
+              >
+                {headerNavIcon(item.id, item.symbol)}
+                {item.id === "changes" && dirtyTotal > 0 && (
+                  <span
+                    className="system-nav-badge"
+                    aria-label={`${dirtyTotal} modified files`}
+                  >
+                    {dirtyTotal > 99 ? "99+" : dirtyTotal}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
         </div>
 
         <div className="system-titlebar-right" data-tauri-drag-region>
@@ -2850,69 +2997,6 @@ export function App({ service, browserPreview = false }: AppProps) {
       </header>
 
       <div className="app-body">
-        <nav
-          className={`nav-rail${preferences.navigationCollapsed ? " nav-rail-collapsed" : ""}`}
-          aria-label="Primary navigation"
-        >
-          {navigationItems.map((item, index) => (
-            <div
-              className={
-                index === 3 ? "nav-group nav-group-separated" : "nav-group"
-              }
-              key={item.id}
-            >
-              <button
-                type="button"
-                className={`nav-item${page === item.id ? " nav-item-active" : ""}`}
-                aria-label={item.label}
-                aria-current={page === item.id ? "page" : undefined}
-                title={preferences.navigationCollapsed ? item.label : undefined}
-                onClick={() => navigateTracked(item.id)}
-              >
-                <span className="nav-symbol" aria-hidden="true">
-                  {item.symbol}
-                </span>
-                <span className="nav-label">{item.label}</span>
-                {item.id === "changes" && dirtyTotal > 0 && (
-                  <span
-                    className="nav-badge"
-                    aria-label={`${dirtyTotal} modified files`}
-                  >
-                    {dirtyTotal > 99 ? "99+" : dirtyTotal}
-                  </span>
-                )}
-              </button>
-            </div>
-          ))}
-          <div className="nav-rail-footer">
-            <button
-              type="button"
-              className="nav-collapse-button"
-              aria-label={
-                preferences.navigationCollapsed
-                  ? "Expand navigation rail"
-                  : "Collapse navigation rail"
-              }
-              title={
-                preferences.navigationCollapsed
-                  ? "Expand navigation"
-                  : "Collapse navigation"
-              }
-              onClick={() =>
-                void savePreferences({
-                  ...preferences,
-                  navigationCollapsed: !preferences.navigationCollapsed,
-                })
-              }
-            >
-              <span aria-hidden="true">
-                {preferences.navigationCollapsed ? "›" : "‹"}
-              </span>
-              <span className="nav-label">Collapse</span>
-            </button>
-          </div>
-        </nav>
-
         <main
           className="screen"
           id="main-content"
