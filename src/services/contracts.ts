@@ -203,7 +203,15 @@ export type ExecutionStatus =
   | "timed_out"
   | "start_failed"
   | "interrupted"
-  | "inconclusive";
+  | "inconclusive"
+  | "stale";
+
+export interface ProjectRecipeSummary {
+  name: string;
+  program: string;
+  args: string[];
+  cwd: string | null;
+}
 export interface ExecutionRecord {
   id: string;
   projectId: string;

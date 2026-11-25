@@ -4780,6 +4780,15 @@ struct RecipeDefinition {
     cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ProjectRecipeSummary {
+    name: String,
+    program: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RecipeRequest {
@@ -4787,6 +4796,140 @@ struct RecipeRequest {
     operation_id: String,
     project_id: String,
     recipe_name: String,
+    #[serde(default)]
+    change_id: Option<String>,
+}
+
+fn read_project_recipes(
+    root: &Path,
+    operation_id: &str,
+) -> Result<Option<HashMap<String, RecipeDefinition>>, IpcError> {
+    let settings_dir = root.join(".laplace");
+    if settings_dir.exists()
+        && (!settings_dir.is_dir()
+            || fs::symlink_metadata(&settings_dir)
+                .map(|meta| meta.file_type().is_symlink())
+                .unwrap_or(true))
+    {
+        return Err(terminal_error(
+            "recipe_path_unsafe",
+            "The .laplace recipe directory cannot be a symlink or file.",
+            operation_id,
+        ));
+    }
+    let recipe_path = settings_dir.join("recipes.toml");
+    if !recipe_path.exists() {
+        return Ok(None);
+    }
+    if fs::symlink_metadata(&recipe_path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(terminal_error(
+            "recipe_path_unsafe",
+            "The project recipe file cannot be a symlink.",
+            operation_id,
+        ));
+    }
+    let bytes = fs::read(&recipe_path).map_err(|_| {
+        terminal_error(
+            "recipe_missing",
+            "No approved project recipes file was found.",
+            operation_id,
+        )
+    })?;
+    let recipe_doc: toml::Value = toml::from_str(std::str::from_utf8(&bytes).map_err(|_| {
+        terminal_error(
+            "recipe_invalid",
+            "The project recipes file must be UTF-8.",
+            operation_id,
+        )
+    })?)
+    .map_err(|_| {
+        terminal_error(
+            "recipe_invalid",
+            "The project recipes file is invalid.",
+            operation_id,
+        )
+    })?;
+    let recipes: HashMap<String, RecipeDefinition> = recipe_doc
+        .get("recipes")
+        .cloned()
+        .ok_or_else(|| {
+            terminal_error(
+                "recipe_invalid",
+                "The project recipes file must have a recipes table.",
+                operation_id,
+            )
+        })
+        .and_then(|value| {
+            value.try_into().map_err(|_| {
+                terminal_error(
+                    "recipe_invalid",
+                    "The project recipes file is invalid.",
+                    operation_id,
+                )
+            })
+        })?;
+    let root_str = root.to_string_lossy();
+    for (name, recipe) in &recipes {
+        if !validate_operation_id(name)
+            || recipe.version != 1
+            || recipe.program.is_empty()
+            || recipe.program.contains('\0')
+            || recipe.args.iter().any(|arg| arg.contains('\0'))
+        {
+            return Err(terminal_error(
+                "recipe_invalid",
+                "The project recipe has unsupported or invalid fields.",
+                operation_id,
+            ));
+        }
+        if let Some(relative) = &recipe.cwd {
+            resolve_project_directory(&root_str, relative)?;
+        }
+    }
+    Ok(Some(recipes))
+}
+
+fn list_project_recipes_at(
+    root: &Path,
+    operation_id: &str,
+) -> Result<Vec<ProjectRecipeSummary>, IpcError> {
+    let Some(recipes) = read_project_recipes(root, operation_id)? else {
+        return Ok(Vec::new());
+    };
+    let mut items: Vec<ProjectRecipeSummary> = recipes
+        .into_iter()
+        .map(|(name, recipe)| ProjectRecipeSummary {
+            name,
+            program: recipe.program,
+            args: recipe.args,
+            cwd: recipe.cwd,
+        })
+        .collect();
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(items)
+}
+
+#[tauri::command]
+async fn list_project_recipes(request: GitRequest) -> Result<Vec<ProjectRecipeSummary>, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_recipe_request",
+            "The recipe request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = fs::canonicalize(&request.project_id).map_err(|_| {
+        terminal_error(
+            "workspace_unavailable",
+            "The recipe workspace is no longer available.",
+            &request.operation_id,
+        )
+    })?;
+    list_project_recipes_at(&root, &request.operation_id)
 }
 
 #[tauri::command]
@@ -4813,77 +4956,53 @@ async fn run_project_recipe(
             &request.operation_id,
         )
     })?;
+    if !root.join(".git").exists() {
+        return Err(terminal_error(
+            "not_git_repository",
+            "Verification manifests require a Git repository.",
+            &request.operation_id,
+        ));
+    }
+    let pool = open_domain_database(&app, &db).await?;
     if !trusted.contains(&root)? {
-        return Err(terminal_error(
-            "workspace_not_trusted",
-            "Confirm project trust before running project recipes.",
-            &request.operation_id,
-        ));
+        let row = sqlx::query("SELECT project_id FROM trusted_workspaces WHERE project_id = ?")
+            .bind(root.to_string_lossy().as_ref())
+            .fetch_optional(&pool)
+            .await
+            .map_err(|_| {
+                terminal_error(
+                    "trust_read_failed",
+                    "Project trust could not be checked.",
+                    &request.operation_id,
+                )
+            })?;
+        if row.is_some() {
+            trusted
+                .0
+                .lock()
+                .map_err(|_| {
+                    terminal_error(
+                        "trust_unavailable",
+                        "Workspace trust is temporarily unavailable.",
+                        &request.operation_id,
+                    )
+                })?
+                .insert(root.to_string_lossy().into_owned());
+        } else {
+            return Err(terminal_error(
+                "workspace_not_trusted",
+                "Confirm project trust before running project recipes.",
+                &request.operation_id,
+            ));
+        }
     }
-    let settings_dir = root.join(".laplace");
-    if settings_dir.exists()
-        && (!settings_dir.is_dir()
-            || fs::symlink_metadata(&settings_dir)
-                .map(|meta| meta.file_type().is_symlink())
-                .unwrap_or(true))
-    {
-        return Err(terminal_error(
-            "recipe_path_unsafe",
-            "The .laplace recipe directory cannot be a symlink or file.",
-            &request.operation_id,
-        ));
-    }
-    let recipe_path = settings_dir.join("recipes.toml");
-    if fs::symlink_metadata(&recipe_path)
-        .map(|meta| meta.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        return Err(terminal_error(
-            "recipe_path_unsafe",
-            "The project recipe file cannot be a symlink.",
-            &request.operation_id,
-        ));
-    }
-    let bytes = fs::read(&recipe_path).map_err(|_| {
+    let recipes = read_project_recipes(&root, &request.operation_id)?.ok_or_else(|| {
         terminal_error(
             "recipe_missing",
             "No approved project recipes file was found.",
             &request.operation_id,
         )
     })?;
-    let recipe_doc: toml::Value = toml::from_str(std::str::from_utf8(&bytes).map_err(|_| {
-        terminal_error(
-            "recipe_invalid",
-            "The project recipes file must be UTF-8.",
-            &request.operation_id,
-        )
-    })?)
-    .map_err(|_| {
-        terminal_error(
-            "recipe_invalid",
-            "The project recipes file is invalid.",
-            &request.operation_id,
-        )
-    })?;
-    let recipes: HashMap<String, RecipeDefinition> = recipe_doc
-        .get("recipes")
-        .cloned()
-        .ok_or_else(|| {
-            terminal_error(
-                "recipe_invalid",
-                "The project recipes file must have a recipes table.",
-                &request.operation_id,
-            )
-        })
-        .and_then(|value| {
-            value.try_into().map_err(|_| {
-                terminal_error(
-                    "recipe_invalid",
-                    "The project recipes file is invalid.",
-                    &request.operation_id,
-                )
-            })
-        })?;
     let recipe = recipes.get(&request.recipe_name).ok_or_else(|| {
         terminal_error(
             "recipe_missing",
@@ -4891,41 +5010,49 @@ async fn run_project_recipe(
             &request.operation_id,
         )
     })?;
-    if recipe.version != 1
-        || recipe.program.is_empty()
-        || recipe.program.contains('\0')
-        || recipe.args.iter().any(|arg| arg.contains('\0'))
-    {
-        return Err(terminal_error(
-            "recipe_invalid",
-            "The project recipe has unsupported or invalid fields.",
-            &request.operation_id,
-        ));
-    }
     let cwd = if let Some(relative) = &recipe.cwd {
-        resolve_project_directory(&request.project_id, relative)?
+        resolve_project_directory(&root.to_string_lossy(), relative)?
     } else {
         root.clone()
     };
+    if VERIFY_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(terminal_error(
+            "check_already_running",
+            "Wait for the active verification check to finish.",
+            &request.operation_id,
+        ));
+    }
+    VERIFY_CANCELLED.store(false, Ordering::Release);
     let check = RunCheckRequest {
         schema_version: request.schema_version,
         operation_id: request.operation_id.clone(),
         project_id: root.to_string_lossy().into_owned(),
-        change_id: None,
+        change_id: request.change_id.clone(),
         program: recipe.program.clone(),
         args: recipe.args.clone(),
         timeout_ms: Some(10 * 60 * 1000),
     };
-    let pool = open_domain_database(&app, &db).await?;
-    let result = tokio::task::spawn_blocking(move || execute_check(&cwd, check, &VERIFY_CANCELLED))
-        .await
-        .map_err(|_| {
-            terminal_error(
+    let execution =
+        tokio::task::spawn_blocking(move || execute_check(&cwd, check, &VERIFY_CANCELLED)).await;
+    let result = match execution {
+        Ok(Ok(record)) => record,
+        Ok(Err(error)) => {
+            VERIFY_RUNNING.store(false, Ordering::Release);
+            return Err(error);
+        }
+        Err(_) => {
+            VERIFY_RUNNING.store(false, Ordering::Release);
+            return Err(terminal_error(
                 "recipe_interrupted",
                 "The project recipe was interrupted.",
                 &request.operation_id,
-            )
-        })??;
+            ));
+        }
+    };
+    VERIFY_RUNNING.store(false, Ordering::Release);
     persist_execution(&pool, &result).await?;
     Ok(result)
 }
@@ -5598,6 +5725,92 @@ mod rook_start_tests {
     }
 }
 
+#[cfg(test)]
+mod recipe_tests {
+    use super::*;
+
+    #[test]
+    fn list_project_recipes_returns_empty_when_missing_and_parses_sorted_v1() {
+        let root = std::env::temp_dir().join(format!(
+            "laplace-recipe-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("packages/app")).unwrap();
+        let canonical = fs::canonicalize(&root).unwrap();
+
+        assert!(list_project_recipes_at(&canonical, "recipe-empty")
+            .unwrap()
+            .is_empty());
+
+        fs::create_dir_all(canonical.join(".laplace")).unwrap();
+        fs::write(
+            canonical.join(".laplace/recipes.toml"),
+            r#"
+[recipes.typecheck]
+version = 1
+program = "pnpm"
+args = ["typecheck"]
+
+[recipes.app-test]
+version = 1
+program = "pnpm"
+args = ["test"]
+cwd = "packages/app"
+"#,
+        )
+        .unwrap();
+
+        let listed = list_project_recipes_at(&canonical, "recipe-list").unwrap();
+        assert_eq!(
+            listed,
+            vec![
+                ProjectRecipeSummary {
+                    name: "app-test".to_owned(),
+                    program: "pnpm".to_owned(),
+                    args: vec!["test".to_owned()],
+                    cwd: Some("packages/app".to_owned()),
+                },
+                ProjectRecipeSummary {
+                    name: "typecheck".to_owned(),
+                    program: "pnpm".to_owned(),
+                    args: vec!["typecheck".to_owned()],
+                    cwd: None,
+                },
+            ]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_project_recipes_rejects_traversal_cwd() {
+        let root = std::env::temp_dir().join(format!(
+            "laplace-recipe-escape-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".laplace")).unwrap();
+        let canonical = fs::canonicalize(&root).unwrap();
+        fs::write(
+            canonical.join(".laplace/recipes.toml"),
+            r#"
+[recipes.bad]
+version = 1
+program = "echo"
+args = ["hi"]
+cwd = "../outside"
+"#,
+        )
+        .unwrap();
+
+        let error = list_project_recipes_at(&canonical, "recipe-bad").unwrap_err();
+        assert_eq!(error.code, "invalid_relative_path");
+        let _ = fs::remove_dir_all(&root);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(TerminalSessions::default())
@@ -5632,6 +5845,7 @@ pub fn run() {
             create_candidate_worktree,
             run_check,
             list_executions,
+            list_project_recipes,
             run_project_recipe,
             cancel_check,
             start_rook_ask,

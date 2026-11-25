@@ -1,6 +1,6 @@
 # 10 — Verification and source-bound evidence
 
-Status: Structured execution/source-manifest foundation implemented; artifact ledger UI, recipes, cancellation integration and native acceptance remain open
+Status: Core Plan 10 verification workflow implemented (Save-and-Run dirty-buffer guard, `.laplace/recipes.toml` discovery/execution, Verify ledger filters/Rerun/Change linking/manifest details, and concise check summaries in Changes & Editor); artifact retention quotas, acceptance-criterion mapping, and native desktop acceptance remain open
 Depends on: [09](09-worktrees-environments.md)  
 Next: [11 — Review and integration](11-review-integration.md)
 
@@ -12,15 +12,15 @@ Recorded checks demonstrate what actually executed against a known source state.
 
 - [x] Capture content-addressed manifests of Git-listed tracked and nonignored untracked files with per-file digests.
 - [x] Omit Git-ignored files, symlinks, common secret/key filenames, and cap manifests at 5,000 files / 256 MiB. Broader secret-content detection and configurable policy remain open.
-- [ ] Require Save and Run or explicitly identify checks against saved disk source when buffers are dirty.
+- [x] Require Save and Run or explicitly identify checks against saved disk source when buffers are dirty.
 - [x] Detect source mutation during execution and mark results inconclusive.
-- [x] Run explicitly entered executable/argument arrays through a structured runner; record command, cwd, times, exit, source digest, and per-file manifest. Approved recipe definitions remain open.
+- [x] Run explicitly entered executable/argument arrays and `.laplace/recipes.toml` recipes through a structured runner; record command, cwd, times, exit, source digest, and per-file manifest.
 - [x] Record Passed, Failed, Cancelled, Timed out, Start failed, Interrupted (startup migration), and Inconclusive distinctly. Aggregated verification remains unimplemented.
 - [x] Persist bounded output (1 MiB) and manifests transactionally in SQLite. Separate artifact files and quotas/retention remain open.
 - [x] Mark recorded Passed/Failed evidence Stale when current source digest changes, using the complete manifest.
 - [ ] Link acceptance criteria to supporting checks/manual review while preserving Not verified.
-- [x] Build basic Verify ledger, execution details/output, and rerun controls. Filters and artifact navigation remain open.
-- [ ] Build concise check summaries in Change review and bottom drawer from the same records.
+- [x] Build Verify ledger with execution details/output, status/Change filters, source-manifest inspection, and Rerun controls. Separate artifact navigation remains open.
+- [x] Build concise check summaries in Change cards and bottom drawer from the same records.
 - [ ] Correlate harness-triggered verification where protocol permits; mark imported agent assertions unverified unless independently recorded.
 
 ## UI reference

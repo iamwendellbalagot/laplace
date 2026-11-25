@@ -24,6 +24,9 @@ import type {
   UiPreferences,
   ChangeRecord,
   ChangeStatus,
+  ExecutionRecord,
+  ExecutionStatus,
+  ProjectRecipeSummary,
 } from "./services/contracts";
 import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
@@ -197,9 +200,11 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [candidateWorktrees, setCandidateWorktrees] = useState<
     Record<string, { path: string; branch: string; baseRevision: string }>
   >({});
-  const [executions, setExecutions] = useState<
-    import("./services/contracts").ExecutionRecord[]
-  >([]);
+  const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
+  const [projectRecipes, setProjectRecipes] = useState<ProjectRecipeSummary[]>(
+    [],
+  );
+  const [verifyChangeId, setVerifyChangeId] = useState<string>("");
 
   useEffect(() => {
     if (browserPreview) return;
@@ -351,6 +356,10 @@ export function App({ service, browserPreview = false }: AppProps) {
       );
       setChanges(await service.listChanges(project.id).catch(() => []));
       setExecutions(await service.listExecutions(project.id).catch(() => []));
+      setProjectRecipes(
+        await service.listProjectRecipes(project.id).catch(() => []),
+      );
+      setVerifyChangeId("");
       setProjectEntries(listing.entries);
       setProjectEntriesTruncated(listing.truncated);
       setProjectDirectory("");
@@ -588,6 +597,14 @@ export function App({ service, browserPreview = false }: AppProps) {
         setProjectEntries(listing.entries);
         setProjectEntriesTruncated(listing.truncated);
       }
+      const [latestExecutions, latestRecipes] = await Promise.all([
+        service.listExecutions(projectId).catch(() => undefined),
+        service.listProjectRecipes(projectId).catch(() => undefined),
+      ]);
+      if (rookProjectId.current === projectId) {
+        if (latestExecutions) setExecutions(latestExecutions);
+        if (latestRecipes) setProjectRecipes(latestRecipes);
+      }
       setWorkspaceSyncVersion((version) => version + 1);
     } finally {
       syncInFlightRef.current = false;
@@ -618,7 +635,7 @@ export function App({ service, browserPreview = false }: AppProps) {
 
   useEffect(() => {
     if (!activeProject || browserPreview) return;
-    if (page === "editor") {
+    if (page === "editor" || page === "verify" || page === "changes") {
       void syncWorkspaceFromDisk(activeProject.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -876,7 +893,7 @@ export function App({ service, browserPreview = false }: AppProps) {
     );
   }
 
-  async function saveDocuments(items: EditorDocument[]) {
+  async function saveDocuments(items: EditorDocument[]): Promise<boolean> {
     setSavingFiles(true);
     setProjectError(undefined);
     try {
@@ -887,11 +904,21 @@ export function App({ service, browserPreview = false }: AppProps) {
           savedAny = true;
         }
       }
-      if (savedAny) setWorkspaceSyncVersion((version) => version + 1);
+      if (savedAny) {
+        setWorkspaceSyncVersion((version) => version + 1);
+        if (activeProject) {
+          void service
+            .listExecutions(activeProject.id)
+            .then(setExecutions)
+            .catch(() => undefined);
+        }
+      }
+      return true;
     } catch (error) {
       setProjectError(
         error instanceof Error ? error.message : "The file could not be saved.",
       );
+      return false;
     } finally {
       setSavingFiles(false);
     }
@@ -1316,7 +1343,7 @@ export function App({ service, browserPreview = false }: AppProps) {
               }
             }}
             onUpdateDocument={updateDocument}
-            onSaveDocuments={(items) => void saveDocuments(items)}
+            onSaveDocuments={saveDocuments}
             onReloadDocument={reloadDocumentFromDisk}
             onKeepDocumentEdits={keepDocumentEdits}
             onCloseDocument={closeDocument}
@@ -1329,12 +1356,34 @@ export function App({ service, browserPreview = false }: AppProps) {
             onChangeFilter={setChangeFilter}
             candidateWorktrees={candidateWorktrees}
             executions={executions}
-            onRunCheck={async (program, args) => {
+            projectRecipes={projectRecipes}
+            verifyChangeId={verifyChangeId}
+            onVerifyChangeIdChange={setVerifyChangeId}
+            onOpenVerifyForChange={(changeId) => {
+              setVerifyChangeId(changeId);
+              navigate("verify");
+            }}
+            onTrustWorkspace={async () => {
+              if (!activeProject) return;
+              await service.trustWorkspace(activeProject.id);
+              setWorkspaceTrusted(true);
+            }}
+            onRunCheck={async (program, args, changeId) => {
               if (!activeProject) return;
               const execution = await service.runCheck(
                 activeProject.id,
                 program,
                 args,
+                changeId || undefined,
+              );
+              setExecutions((items) => [execution, ...items]);
+            }}
+            onRunProjectRecipe={async (recipeName, changeId) => {
+              if (!activeProject) return;
+              const execution = await service.runProjectRecipe(
+                activeProject.id,
+                recipeName,
+                changeId || undefined,
               );
               setExecutions((items) => [execution, ...items]);
             }}
@@ -1551,8 +1600,18 @@ interface ScreenContentProps {
     string,
     { path: string; branch: string; baseRevision: string }
   >;
-  executions?: import("./services/contracts").ExecutionRecord[];
-  onRunCheck?: (program: string, args: string[]) => Promise<void>;
+  executions?: ExecutionRecord[];
+  projectRecipes?: ProjectRecipeSummary[];
+  verifyChangeId?: string;
+  onVerifyChangeIdChange?: (changeId: string) => void;
+  onOpenVerifyForChange?: (changeId: string) => void;
+  onTrustWorkspace?: () => Promise<void>;
+  onRunCheck?: (
+    program: string,
+    args: string[],
+    changeId?: string,
+  ) => Promise<void>;
+  onRunProjectRecipe?: (recipeName: string, changeId?: string) => Promise<void>;
   onCreateChange?: (objective: string) => Promise<void>;
   onUpdateChange?: (
     changeId: string,
@@ -1622,7 +1681,7 @@ interface ScreenContentProps {
   activeDocumentKey?: string;
   onSelectDocument: (key: string) => void;
   onUpdateDocument: (key: string, content: string) => void;
-  onSaveDocuments: (documents: EditorDocument[]) => void;
+  onSaveDocuments: (documents: EditorDocument[]) => Promise<boolean>;
   onReloadDocument: (key: string) => void;
   onKeepDocumentEdits: (key: string) => void;
   onCloseDocument: (document: EditorDocument) => void;
@@ -1679,16 +1738,55 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function executionStatusLabel(status: ExecutionStatus): string {
+  switch (status) {
+    case "passed":
+      return "Passed";
+    case "failed":
+      return "Failed";
+    case "stale":
+      return "Stale";
+    case "inconclusive":
+      return "Inconclusive";
+    case "timed_out":
+      return "Timed out";
+    case "start_failed":
+      return "Start failed";
+    case "cancelled":
+      return "Cancelled";
+    case "interrupted":
+      return "Interrupted";
+    case "running":
+      return "Running";
+  }
+}
+
+function summarizeVerification(records: ExecutionRecord[]): {
+  status: ExecutionStatus | "unverified";
+  label: string;
+  latest?: ExecutionRecord;
+} {
+  const latest = records[0];
+  if (!latest) {
+    return { status: "unverified", label: "Not verified" };
+  }
+  return {
+    status: latest.status,
+    label: `${executionStatusLabel(latest.status)} · ${latest.sourceDigest.slice(0, 8)}`,
+    latest,
+  };
+}
+
 function ChangesScreen({
   activeProject,
   changes,
+  executions = [],
   changeFilter = "all",
   onChangeFilter,
   onCreateChange,
   onUpdateChange,
   onReopenChange,
-  onCreateCandidate,
-  candidateWorktrees,
+  onOpenVerifyForChange,
   browserPreview,
 }: ScreenContentProps) {
   const [objective, setObjective] = useState("");
@@ -1824,30 +1922,30 @@ function ChangesScreen({
                       <option value="integrated">Integrated</option>
                       <option value="abandoned">Abandoned</option>
                     </select>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void onCreateCandidate?.(change.id).catch((failure) =>
-                          setError(
-                            errorMessage(
-                              failure,
-                              "Candidate worktree could not be created.",
-                            ),
-                          ),
-                        )
-                      }
-                    >
-                      Create isolated candidate
-                    </button>
-                    {candidateWorktrees?.[change.id] && (
-                      <small>
-                        Candidate · {candidateWorktrees[change.id].branch} ·{" "}
-                        {candidateWorktrees[change.id].baseRevision.slice(
-                          0,
-                          12,
-                        )}
-                      </small>
-                    )}
+                    <div className="change-verify-summary">
+                      {(() => {
+                        const linked = executions.filter(
+                          (item) => item.changeId === change.id,
+                        );
+                        const summary = summarizeVerification(linked);
+                        return (
+                          <>
+                            <span
+                              className={`verify-status-pill verify-status-${summary.status}`}
+                            >
+                              {summary.label}
+                            </span>
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              onClick={() => onOpenVerifyForChange?.(change.id)}
+                            >
+                              Verify
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
                     {change.status === "integrated" && (
                       <button
                         type="button"
@@ -1881,21 +1979,79 @@ function ChangesScreen({
 function VerifyScreen({
   service,
   activeProject,
+  changes = [],
+  documents,
   executions = [],
+  projectRecipes = [],
+  verifyChangeId = "",
+  onVerifyChangeIdChange,
+  workspaceTrusted,
+  onTrustWorkspace,
+  onSaveDocuments,
   onRunCheck,
+  onRunProjectRecipe,
+  savingFiles,
   browserPreview,
 }: ScreenContentProps) {
   const [program, setProgram] = useState("pnpm");
   const [argsText, setArgsText] = useState("test");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "passed" | "failed" | "stale" | "inconclusive" | "other"
+  >("all");
+  const [changeFilterId, setChangeFilterId] = useState<string>("all");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
-  const [workspaceTrusted, setWorkspaceTrusted] = useState(false);
-  useEffect(() => {
-    setWorkspaceTrusted(false);
-  }, [activeProject?.id]);
+
   const checks = executions.filter(
     (record) => record.projectId === activeProject?.id,
   );
+  const dirtyDocuments = documents.filter(
+    (document) =>
+      document.projectId === activeProject?.id &&
+      document.content !== document.savedContent,
+  );
+  const filteredChecks = checks.filter((check) => {
+    if (changeFilterId === "none" && check.changeId !== null) return false;
+    if (
+      changeFilterId !== "all" &&
+      changeFilterId !== "none" &&
+      check.changeId !== changeFilterId
+    )
+      return false;
+    if (statusFilter === "all") return true;
+    if (statusFilter === "other") {
+      return !["passed", "failed", "stale", "inconclusive"].includes(
+        check.status,
+      );
+    }
+    return check.status === statusFilter;
+  });
+  const changesById = new Map(changes.map((change) => [change.id, change]));
+
+  async function executeWithOptionalSave(
+    saveFirst: boolean,
+    run: () => Promise<void>,
+  ) {
+    setPending(true);
+    setError(undefined);
+    try {
+      if (saveFirst && dirtyDocuments.length > 0) {
+        const saved = await onSaveDocuments(dirtyDocuments);
+        if (!saved) {
+          setError(
+            "Unsaved files could not be saved. Resolve the save error before running checks.",
+          );
+          return;
+        }
+      }
+      await run();
+    } catch (failure) {
+      setError(errorMessage(failure, "The verification check failed to run."));
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <section className="content-page" aria-labelledby="screen-title">
       <PageHeading
@@ -1910,18 +2066,92 @@ function VerifyScreen({
         />
       ) : (
         <>
+          {dirtyDocuments.length > 0 && (
+            <div
+              className="verify-dirty-banner"
+              role="status"
+              aria-label="Unsaved editor files"
+            >
+              <p>
+                <strong>
+                  {dirtyDocuments.length} open file
+                  {dirtyDocuments.length === 1 ? "" : "s"} ha
+                  {dirtyDocuments.length === 1 ? "s" : "ve"} unsaved edits.
+                </strong>{" "}
+                Checks run against saved disk source, not unsaved editor
+                buffers.
+              </p>
+              {workspaceTrusted && (
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={pending || savingFiles || !program.trim()}
+                  onClick={() =>
+                    void executeWithOptionalSave(true, () =>
+                      onRunCheck
+                        ? onRunCheck(
+                            program,
+                            argsText.trim().split(/\s+/).filter(Boolean),
+                            verifyChangeId || undefined,
+                          )
+                        : Promise.resolve(),
+                    )
+                  }
+                >
+                  Save all &amp; run check
+                </button>
+              )}
+            </div>
+          )}
+          {projectRecipes.length > 0 && (
+            <section
+              className="verify-recipes"
+              aria-label="Project verification recipes"
+            >
+              <span className="eyebrow">.laplace/recipes.toml</span>
+              <div className="verify-recipe-list">
+                {projectRecipes.map((recipe) => (
+                  <button
+                    key={recipe.name}
+                    type="button"
+                    className="button button-quiet"
+                    disabled={!workspaceTrusted || pending || savingFiles}
+                    title={`${recipe.program} ${recipe.args.join(" ")}${recipe.cwd ? ` (cwd: ${recipe.cwd})` : ""}`}
+                    onClick={() =>
+                      void executeWithOptionalSave(
+                        dirtyDocuments.length > 0,
+                        () =>
+                          onRunProjectRecipe
+                            ? onRunProjectRecipe(
+                                recipe.name,
+                                verifyChangeId || undefined,
+                              )
+                            : Promise.resolve(),
+                      )
+                    }
+                  >
+                    <span>{recipe.name}</span>
+                    <code>
+                      {recipe.program} {recipe.args.join(" ")}
+                    </code>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           <form
             className="check-run-form"
             onSubmit={(event) => {
               event.preventDefault();
-              setPending(true);
-              setError(undefined);
-              void onRunCheck?.(
-                program,
-                argsText.trim().split(/\s+/).filter(Boolean),
-              )
-                .catch((failure) => setError(String(failure)))
-                .finally(() => setPending(false));
+              void executeWithOptionalSave(false, () =>
+                onRunCheck
+                  ? onRunCheck(
+                      program,
+                      argsText.trim().split(/\s+/).filter(Boolean),
+                      verifyChangeId || undefined,
+                    )
+                  : Promise.resolve(),
+              );
             }}
           >
             <label>
@@ -1938,18 +2168,37 @@ function VerifyScreen({
                 onChange={(event) => setArgsText(event.target.value)}
               />
             </label>
+            <label>
+              Link to Change{" "}
+              <select
+                value={verifyChangeId}
+                onChange={(event) =>
+                  onVerifyChangeIdChange?.(event.target.value)
+                }
+              >
+                <option value="">Workspace (no Change)</option>
+                {changes.map((change) => (
+                  <option key={change.id} value={change.id}>
+                    {change.objective.slice(0, 48)}
+                  </option>
+                ))}
+              </select>
+            </label>
             {!workspaceTrusted ? (
               <button
                 type="button"
                 className="button button-quiet"
                 disabled={pending || browserPreview}
-                onClick={async () => {
-                  try {
-                    await service.trustWorkspace(activeProject.id);
-                    setWorkspaceTrusted(true);
-                  } catch (failure) {
-                    setError(String(failure));
-                  }
+                onClick={() => {
+                  setError(undefined);
+                  void onTrustWorkspace?.().catch((failure) =>
+                    setError(
+                      errorMessage(
+                        failure,
+                        "Project trust could not be saved.",
+                      ),
+                    ),
+                  );
                 }}
               >
                 Trust project to run checks
@@ -1967,39 +2216,147 @@ function VerifyScreen({
                 className="button button-primary"
                 disabled={pending || !program.trim()}
               >
-                {pending ? "Running…" : "Run check"}
+                {dirtyDocuments.length > 0 ? "Run on saved disk" : "Run check"}
               </button>
             )}
           </form>
-          <p>
-            Checks run from the open workspace against a Git-derived source
-            manifest. Project trust is required to run code.
-          </p>
+          <div
+            className="verify-filters"
+            aria-label="Filter verification records"
+          >
+            <label>
+              Status{" "}
+              <select
+                value={statusFilter}
+                onChange={(event) =>
+                  setStatusFilter(
+                    event.target.value as
+                      | "all"
+                      | "passed"
+                      | "failed"
+                      | "stale"
+                      | "inconclusive"
+                      | "other",
+                  )
+                }
+              >
+                <option value="all">All ({checks.length})</option>
+                <option value="passed">Passed</option>
+                <option value="failed">Failed</option>
+                <option value="stale">Stale</option>
+                <option value="inconclusive">Inconclusive</option>
+                <option value="other">Cancelled / Timed out / Other</option>
+              </select>
+            </label>
+            <label>
+              Change{" "}
+              <select
+                value={changeFilterId}
+                onChange={(event) => setChangeFilterId(event.target.value)}
+              >
+                <option value="all">All Changes</option>
+                <option value="none">Unlinked workspace checks</option>
+                {changes.map((change) => (
+                  <option key={change.id} value={change.id}>
+                    {change.objective.slice(0, 48)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           {error && (
             <p className="inline-error" role="alert">
               {error}
             </p>
           )}
           <div className="execution-list">
-            {checks.map((check) => (
-              <article key={check.id}>
-                <div>
-                  <strong>
-                    {check.program} {check.args.join(" ")}
-                  </strong>
-                  <span>
-                    {check.status} · {check.sourceDigest.slice(0, 12)}
-                  </span>
-                  <small>
-                    {check.files.length} source files · exit{" "}
-                    {check.exitCode ?? "—"}
-                  </small>
-                </div>
-                <pre>{check.output}</pre>
-              </article>
-            ))}
+            {filteredChecks.map((check) => {
+              const linkedChange = check.changeId
+                ? changesById.get(check.changeId)
+                : undefined;
+              const durationMs =
+                check.finishedAt !== null
+                  ? Math.max(0, check.finishedAt - check.startedAt)
+                  : null;
+              return (
+                <article key={check.id}>
+                  <div>
+                    <div className="verify-record-header">
+                      <span
+                        className={`verify-status-pill verify-status-${check.status}`}
+                      >
+                        {executionStatusLabel(check.status)}
+                      </span>
+                      <button
+                        type="button"
+                        className="button button-quiet"
+                        disabled={!workspaceTrusted || pending}
+                        onClick={() =>
+                          void executeWithOptionalSave(
+                            dirtyDocuments.length > 0,
+                            () =>
+                              onRunCheck
+                                ? onRunCheck(
+                                    check.program,
+                                    check.args,
+                                    check.changeId ?? undefined,
+                                  )
+                                : Promise.resolve(),
+                          )
+                        }
+                      >
+                        {dirtyDocuments.length > 0 ? "Save & rerun" : "Rerun"}
+                      </button>
+                    </div>
+                    <strong>
+                      {check.program} {check.args.join(" ")}
+                    </strong>
+                    <span>
+                      Digest {check.sourceDigest.slice(0, 12)} · exit{" "}
+                      {check.exitCode ?? "—"}
+                      {durationMs !== null
+                        ? ` · ${(durationMs / 1000).toFixed(1)}s`
+                        : ""}
+                    </span>
+                    {linkedChange && (
+                      <small>Change · {linkedChange.objective}</small>
+                    )}
+                    <small>
+                      {new Date(check.startedAt).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </small>
+                    {check.files.length > 0 && (
+                      <details className="verify-manifest-details">
+                        <summary>
+                          Source manifest ({check.files.length} files)
+                        </summary>
+                        <ul>
+                          {check.files.slice(0, 100).map((filePath) => (
+                            <li key={filePath}>{filePath}</li>
+                          ))}
+                          {check.files.length > 100 && (
+                            <li>…and {check.files.length - 100} more</li>
+                          )}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                  <pre>{check.output || "(no output)"}</pre>
+                </article>
+              );
+            })}
           </div>
-          {checks.length === 0 && <p>No verification records.</p>}
+          {filteredChecks.length === 0 && (
+            <p>
+              {checks.length === 0
+                ? "No verification records yet."
+                : "No verification records match the current filter."}
+            </p>
+          )}
         </>
       )}
     </section>
@@ -3178,6 +3535,8 @@ function EditorScreen(props: ScreenContentProps) {
     onReloadDocument,
     onKeepDocumentEdits,
     onCloseDocument,
+    onNavigate,
+    executions = [],
     savingFiles,
     workspaceSyncVersion,
     lastSyncedAt,
@@ -3534,7 +3893,11 @@ function EditorScreen(props: ScreenContentProps) {
           <WorkspaceTools
             service={service}
             projectId={activeProject.id}
+            executions={executions.filter(
+              (item) => item.projectId === activeProject.id,
+            )}
             syncVersion={workspaceSyncVersion}
+            onOpenVerify={() => onNavigate("verify")}
             browserPreview={browserPreview}
           />
         )}
@@ -3641,14 +4004,19 @@ function EditorScreen(props: ScreenContentProps) {
 function WorkspaceTools({
   service,
   projectId,
+  executions,
   syncVersion,
+  onOpenVerify,
   browserPreview,
 }: {
   service: AppService;
   projectId: string;
+  executions: ExecutionRecord[];
   syncVersion: number;
+  onOpenVerify: () => void;
   browserPreview: boolean;
 }) {
+  const verifySummary = summarizeVerification(executions);
   const [tab, setTab] = useState<"terminal" | "git">("terminal");
   const [terminalTrusted, setTerminalTrusted] = useState(false);
   const [terminalStarted, setTerminalStarted] = useState(false);
@@ -3688,6 +4056,25 @@ function WorkspaceTools({
         >
           Git changes
         </button>
+        <div className="workspace-tools-verify">
+          <span
+            className={`verify-status-pill verify-status-${verifySummary.status}`}
+            title={
+              verifySummary.latest
+                ? `${verifySummary.latest.program} ${verifySummary.latest.args.join(" ")}`
+                : "No verification checks recorded yet"
+            }
+          >
+            {verifySummary.label}
+          </span>
+          <button
+            type="button"
+            className="workspace-tools-verify-link"
+            onClick={onOpenVerify}
+          >
+            Verify
+          </button>
+        </div>
       </div>
       {tab === "terminal" ? (
         !terminalStarted ? (

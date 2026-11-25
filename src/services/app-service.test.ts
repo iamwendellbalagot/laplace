@@ -49,6 +49,53 @@ describe("TauriAppService", () => {
     });
   });
 
+  it("lists and runs project recipes with optional change linkage", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce([
+        { name: "test", program: "pnpm", args: ["test"], cwd: null },
+      ])
+      .mockResolvedValueOnce({
+        id: "exec-1",
+        projectId: "/work/project",
+        changeId: "change-1",
+        program: "pnpm",
+        args: ["test"],
+        sourceDigest: "abc123",
+        files: ["package.json"],
+        status: "passed",
+        exitCode: 0,
+        output: "ok",
+        startedAt: 1,
+        finishedAt: 2,
+      });
+    const service = new TauriAppService();
+
+    await expect(service.listProjectRecipes("/work/project")).resolves.toEqual([
+      { name: "test", program: "pnpm", args: ["test"], cwd: null },
+    ]);
+    await expect(
+      service.runProjectRecipe("/work/project", "test", "change-1"),
+    ).resolves.toMatchObject({ status: "passed", changeId: "change-1" });
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "list_project_recipes", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        untrackedPath: null,
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "run_project_recipe", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        recipeName: "test",
+        changeId: "change-1",
+      },
+    });
+  });
+
   it("checks workspace trust and starts Rook Build sessions over native IPC", async () => {
     mocks.invoke
       .mockResolvedValueOnce(true)

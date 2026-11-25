@@ -32,6 +32,7 @@ import {
   type ChangeStatus,
   type WorktreeRecord,
   type ExecutionRecord,
+  type ProjectRecipeSummary,
   type RookInitResponse,
   type RookMode,
   type RookEvent,
@@ -105,6 +106,12 @@ export interface AppService {
     changeId?: string,
   ): Promise<ExecutionRecord>;
   listExecutions(projectId: string): Promise<ExecutionRecord[]>;
+  listProjectRecipes(projectId: string): Promise<ProjectRecipeSummary[]>;
+  runProjectRecipe(
+    projectId: string,
+    recipeName: string,
+    changeId?: string,
+  ): Promise<ExecutionRecord>;
   cancelCheck(): Promise<void>;
   startRookAsk(
     sessionId: string,
@@ -348,6 +355,39 @@ export class TauriAppService implements AppService {
         untrackedPath: null,
       },
     });
+  }
+
+  async listProjectRecipes(projectId: string): Promise<ProjectRecipeSummary[]> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      untrackedPath: null,
+    };
+    try {
+      return await invoke<ProjectRecipeSummary[]>("list_project_recipes", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async runProjectRecipe(
+    projectId: string,
+    recipeName: string,
+    changeId?: string,
+  ): Promise<ExecutionRecord> {
+    const request = {
+      schemaVersion: IPC_SCHEMA_VERSION,
+      operationId: crypto.randomUUID(),
+      projectId,
+      recipeName,
+      changeId: changeId ?? null,
+    };
+    try {
+      return await invoke<ExecutionRecord>("run_project_recipe", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async cancelCheck(): Promise<void> {

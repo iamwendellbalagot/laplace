@@ -28,7 +28,7 @@ export const navigationItems: NavigationItem[] = [
     label: "Changes",
     description: "Durable engineering changes",
     symbol: "▤",
-    available: false,
+    available: true,
   },
   {
     id: "context",
@@ -42,14 +42,14 @@ export const navigationItems: NavigationItem[] = [
     label: "Verify",
     description: "Recorded checks and evidence",
     symbol: "◇",
-    available: false,
+    available: true,
   },
   {
     id: "rook",
     label: "Rook",
     description: "Agent sessions and activity",
     symbol: "◉",
-    available: false,
+    available: true,
   },
   {
     id: "tools",
