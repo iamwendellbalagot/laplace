@@ -90,7 +90,7 @@ export function SettingsScreen({
             </p>
             <PreferenceRow
               title="Color treatment"
-              description="Choose the graphite palette or its daylight counterpart."
+              description="Choose the obsidian terminal palette or its daylight counterpart."
             >
               <div
                 className="segmented-control"

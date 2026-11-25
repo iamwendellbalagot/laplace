@@ -5,6 +5,11 @@ import {
   stripJsonComments,
 } from "./ts-project-hydration";
 import { extractProposedCodeBlock, spliceLines } from "./InlineCommandBar";
+import {
+  LAPLACE_MONACO_DARK,
+  LAPLACE_MONACO_LIGHT,
+  registerLaplaceMonacoThemes,
+} from "./monaco-theme";
 
 describe("git-gutter parser", () => {
   it("parses added, modified, and deleted hunks for target file", () => {
@@ -59,6 +64,34 @@ describe("InlineCommandBar code extraction & splicing", () => {
     const original = "line1\nline2\nline3\nline4";
     expect(spliceLines(original, 2, 3, "const x = 42;\nreturn x;")).toBe(
       "line1\nconst x = 42;\nreturn x;\nline4",
+    );
+  });
+});
+
+describe("monaco terminal themes", () => {
+  it("registers dark and light terminal themes idempotently", () => {
+    const defined: Record<
+      string,
+      { base: string; colors: Record<string, string> }
+    > = {};
+    const fakeMonaco = {
+      editor: {
+        defineTheme: (
+          name: string,
+          data: { base: string; colors: Record<string, string> },
+        ) => {
+          defined[name] = data;
+        },
+      },
+    };
+    registerLaplaceMonacoThemes(fakeMonaco, true);
+    expect(defined[LAPLACE_MONACO_DARK]?.base).toBe("vs-dark");
+    expect(defined[LAPLACE_MONACO_DARK]?.colors["editor.background"]).toBe(
+      "#0b0e12",
+    );
+    expect(defined[LAPLACE_MONACO_LIGHT]?.base).toBe("vs");
+    expect(defined[LAPLACE_MONACO_LIGHT]?.colors["editor.background"]).toBe(
+      "#f6f8fa",
     );
   });
 });

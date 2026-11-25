@@ -6,6 +6,11 @@ import TypeScriptWorker from "monaco-editor/language/typescript/ts.worker?worker
 import type { AppService } from "../../services/app-service";
 import type { EditorDiagnostic } from "../../services/contracts";
 import type { GutterLineMarker } from "./git-gutter";
+import {
+  LAPLACE_MONACO_DARK,
+  LAPLACE_MONACO_LIGHT,
+  registerLaplaceMonacoThemes,
+} from "./monaco-theme";
 import { hydrateWorkspaceTypeScript } from "./ts-project-hydration";
 
 self.MonacoEnvironment = {
@@ -163,7 +168,8 @@ export function CodeEditor({
       path={Uri.file(path.replaceAll("\\", "/")).toString()}
       language={languageFor(path)}
       value={value}
-      theme={theme === "dark" ? "vs-dark" : "vs"}
+      theme={theme === "dark" ? LAPLACE_MONACO_DARK : LAPLACE_MONACO_LIGHT}
+      beforeMount={registerLaplaceMonacoThemes}
       onChange={(next) => onChange(next ?? "")}
       onMount={(editor, monaco) => {
         editorRef.current = editor;

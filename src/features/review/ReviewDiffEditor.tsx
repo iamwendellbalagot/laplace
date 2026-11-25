@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { DiffEditor } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
+import {
+  LAPLACE_MONACO_DARK,
+  LAPLACE_MONACO_LIGHT,
+  registerLaplaceMonacoThemes,
+} from "../editor/monaco-theme";
 
 function languageFor(path: string): string {
   const extension = path.split(".").at(-1)?.toLowerCase();
@@ -71,7 +76,8 @@ export function ReviewDiffEditor({
       original={original}
       modified={modified}
       language={languageFor(path)}
-      theme={theme === "dark" ? "vs-dark" : "vs"}
+      theme={theme === "dark" ? LAPLACE_MONACO_DARK : LAPLACE_MONACO_LIGHT}
+      beforeMount={registerLaplaceMonacoThemes}
       onMount={(diffEditor: editor.IStandaloneDiffEditor) => {
         diffEditorRef.current = diffEditor;
         listenerRef.current?.dispose();
