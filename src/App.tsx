@@ -52,10 +52,7 @@ import {
   CommandPalette,
   type PaletteCommand,
 } from "./features/shell/CommandPalette";
-import {
-  TopbarProjectSwitcher,
-  TopbarPulse,
-} from "./features/shell/TopbarPulse";
+import { TopbarPulse } from "./features/shell/TopbarPulse";
 import { ToolsScreen } from "./features/tools/ToolsScreen";
 
 interface AppProps {
@@ -2771,36 +2768,30 @@ export function App({ service, browserPreview = false }: AppProps) {
         data-tauri-drag-region
       >
         <div className="system-titlebar-left" data-tauri-drag-region>
-          <div className="nav-history-controls" aria-label="Navigation history">
-            <button
-              type="button"
-              className="toolbar-icon-button"
-              aria-label="Go back"
-              title="Back (Alt+Left)"
-              disabled={navHistoryIndex <= 0}
-              onClick={() => navigateHistoryStep(-1)}
+          <button
+            type="button"
+            className={`toolbar-icon-button system-home-button${page === "home" ? " is-active" : ""}`}
+            aria-label="Home"
+            aria-current={page === "home" ? "page" : undefined}
+            title={activeProject ? `${activeProject.name} — Home` : "Home"}
+            onClick={() => navigateTracked("home")}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
             >
-              ‹
-            </button>
-            <button
-              type="button"
-              className="toolbar-icon-button"
-              aria-label="Go forward"
-              title="Forward (Alt+Right)"
-              disabled={navHistoryIndex >= navHistory.length - 1}
-              onClick={() => navigateHistoryStep(1)}
-            >
-              ›
-            </button>
-          </div>
-          <TopbarProjectSwitcher
-            activeProject={activeProject}
-            recentProjects={recentProjects}
-            browserPreview={browserPreview}
-            projectPending={projectPending}
-            onOpenProject={(p) => void openProject(p)}
-            onOpenHome={() => navigateTracked("home")}
-          />
+              <path
+                d="M2.5 7.25L8 2.5L13.5 7.25V13.25C13.5 13.6642 13.1642 14 12.75 14H9.75V9.75H6.25V14H3.25C2.83579 14 2.5 13.6642 2.5 13.25V7.25Z"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
         </div>
 
         <div className="system-titlebar-center" data-tauri-drag-region>

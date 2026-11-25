@@ -270,6 +270,12 @@ kbd,
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
+  border-radius: 6px;
+}
+.system-home-button.is-active {
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  background: var(--surface);
+  color: var(--brass-light);
 }
 .toolbar-icon-button:hover,
 .icon-button:hover {
