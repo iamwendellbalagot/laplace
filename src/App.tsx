@@ -30,12 +30,17 @@ import type {
   ExecutionStatus,
   ProjectRecipeSummary,
   ReviewDiffBaseline,
+  EditorDiagnostic,
 } from "./services/contracts";
 import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
 import { RookPermissionCard } from "./features/rook/RookPermissionCard";
 import { WorkspaceReviewScreen } from "./features/review/WorkspaceReviewScreen";
+import {
+  ContextLensScreen,
+  type ReturnSourceAnchor,
+} from "./features/context/ContextLensScreen";
 import { LinkedStackOutput, RunPanel } from "./features/runs/RunPanel";
 import {
   formatFailureContextExcerpt,
@@ -48,6 +53,7 @@ import {
 } from "./features/editor/InlinePatchOverlay";
 import {
   EditorContextInspector,
+  type EditorCursorState,
   type EditorSelection,
 } from "./features/editor/EditorContextInspector";
 import type { RevealTarget } from "./features/editor/CodeEditor";
@@ -252,6 +258,15 @@ export function App({ service, browserPreview = false }: AppProps) {
   } | null>(null);
   const [editorSelection, setEditorSelection] =
     useState<EditorSelection | null>(null);
+  const [editorCursor, setEditorCursor] = useState<EditorCursorState | null>(
+    null,
+  );
+  const [editorDiagnostics, setEditorDiagnostics] = useState<
+    EditorDiagnostic[]
+  >([]);
+  const [returnSourceAnchor, setReturnSourceAnchor] =
+    useState<ReturnSourceAnchor | null>(null);
+  const [contextFocusPath, setContextFocusPath] = useState<string>();
   const [inlinePatch, setInlinePatch] = useState<PendingInlinePatch | null>(
     null,
   );
@@ -579,6 +594,7 @@ export function App({ service, browserPreview = false }: AppProps) {
         if (
           continuity.layout?.activePage === "editor" ||
           continuity.layout?.activePage === "changes" ||
+          continuity.layout?.activePage === "context" ||
           continuity.layout?.activePage === "verify" ||
           continuity.layout?.activePage === "rook"
         ) {
@@ -848,7 +864,12 @@ export function App({ service, browserPreview = false }: AppProps) {
 
   useEffect(() => {
     if (!activeProject || browserPreview) return;
-    if (page === "editor" || page === "verify" || page === "changes") {
+    if (
+      page === "editor" ||
+      page === "verify" ||
+      page === "changes" ||
+      page === "context"
+    ) {
       void syncWorkspaceFromDisk(activeProject.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1152,7 +1173,53 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
-  function jumpToLocation(relativePath: string, line: number, column?: number) {
+  function captureReturnSourceAnchor() {
+    const activeDoc = documentsRef.current.find(
+      (doc) =>
+        doc.key ===
+        (activeEditorPane === "secondary" && splitDocumentKey
+          ? splitDocumentKey
+          : activeDocumentKey),
+    );
+    if (!activeDoc) return;
+    const line =
+      editorCursor && editorCursor.path === activeDoc.path
+        ? editorCursor.line
+        : 1;
+    const column =
+      editorCursor && editorCursor.path === activeDoc.path
+        ? editorCursor.column
+        : 1;
+    setReturnSourceAnchor({ filePath: activeDoc.path, line, column });
+  }
+
+  function expandToContextLens(focusPath?: string) {
+    captureReturnSourceAnchor();
+    setContextFocusPath(focusPath);
+    navigateTracked("context");
+  }
+
+  function returnToSourceAnchor() {
+    if (returnSourceAnchor) {
+      navigate("editor");
+      void openProjectFile(returnSourceAnchor.filePath, {
+        line: returnSourceAnchor.line,
+        column: returnSourceAnchor.column,
+      });
+      return;
+    }
+    navigateTracked("editor");
+  }
+
+  function jumpToLocation(
+    relativePath: string,
+    line: number,
+    column?: number,
+    recordReturnAnchor = false,
+  ) {
+    if (recordReturnAnchor) {
+      captureReturnSourceAnchor();
+    }
     navigate("editor");
     void openProjectFile(relativePath, { line, column });
   }
@@ -1946,6 +2013,14 @@ export function App({ service, browserPreview = false }: AppProps) {
             revealTarget={revealTarget}
             editorSelection={editorSelection}
             onEditorSelectionChange={setEditorSelection}
+            editorCursor={editorCursor}
+            onEditorCursorChange={setEditorCursor}
+            editorDiagnostics={editorDiagnostics}
+            onEditorDiagnosticsChange={setEditorDiagnostics}
+            returnSourceAnchor={returnSourceAnchor}
+            contextFocusPath={contextFocusPath}
+            onExpandToContextLens={expandToContextLens}
+            onReturnToSourceAnchor={returnToSourceAnchor}
             inlinePatch={inlinePatch}
             inlinePatchSaving={inlinePatchSaving}
             inlinePatchError={inlinePatchError}
@@ -2400,6 +2475,14 @@ interface ScreenContentProps {
   } | null;
   editorSelection?: EditorSelection | null;
   onEditorSelectionChange?: (selection: EditorSelection | null) => void;
+  editorCursor?: EditorCursorState | null;
+  onEditorCursorChange?: (cursor: EditorCursorState | null) => void;
+  editorDiagnostics?: EditorDiagnostic[];
+  onEditorDiagnosticsChange?: (diagnostics: EditorDiagnostic[]) => void;
+  returnSourceAnchor?: ReturnSourceAnchor | null;
+  contextFocusPath?: string;
+  onExpandToContextLens?: (focusPath?: string) => void;
+  onReturnToSourceAnchor?: () => void;
   inlinePatch?: PendingInlinePatch | null;
   inlinePatchSaving?: boolean;
   inlinePatchError?: string;
@@ -2417,6 +2500,7 @@ interface ScreenContentProps {
     relativePath: string,
     line: number,
     column?: number,
+    recordReturnAnchor?: boolean,
   ) => void;
   onAttachContextChipToRook?: (chip: RookContextChip, mode?: RookMode) => void;
   onPromoteEditsToChange?: (
@@ -2509,6 +2593,47 @@ function ScreenContent(props: ScreenContentProps) {
             props.onRefreshChangeDomain
               ? props.onRefreshChangeDomain()
               : Promise.resolve()
+          }
+        />
+      );
+    }
+  } else if (page === "context") {
+    if (props.browserPreview) {
+      nonEditorView = (
+        <section className="content-page" aria-labelledby="screen-title">
+          <PageHeading eyebrow="System understanding" title="Context Lens" />
+          <EmptyState
+            title="Not available in browser preview"
+            description="Source relationship indexing, file history, and developer-confirmed notes require the native desktop app."
+            label="Desktop only"
+          />
+        </section>
+      );
+    } else if (!props.activeProject) {
+      nonEditorView = (
+        <section className="content-page" aria-labelledby="screen-title">
+          <PageHeading eyebrow="Project required" title="Context Lens" />
+          <EmptyState
+            title="Open a project"
+            description="Open a local project to explore observed source relationships, inferred test links, and developer-confirmed context."
+            label="Project required"
+          />
+        </section>
+      );
+    } else {
+      nonEditorView = (
+        <ContextLensScreen
+          service={props.service}
+          project={props.activeProject}
+          initialFocusPath={props.contextFocusPath}
+          returnAnchor={props.returnSourceAnchor}
+          syncVersion={props.workspaceSyncVersion}
+          onReturnToSource={() => props.onReturnToSourceAnchor?.()}
+          onJumpToLocation={(relativePath, line, column) =>
+            props.onJumpToLocation?.(relativePath, line, column, false)
+          }
+          onAttachToRook={(chip, mode) =>
+            props.onAttachContextChipToRook?.(chip, mode)
           }
         />
       );
@@ -4747,6 +4872,15 @@ function EditorScreen(props: ScreenContentProps) {
                       sel ? { path: activeDocument.path, ...sel } : null,
                     )
                   }
+                  onCursorChange={(cur) =>
+                    props.onEditorCursorChange?.({
+                      path: activeDocument.path,
+                      ...cur,
+                    })
+                  }
+                  onDiagnosticsChange={(diags) =>
+                    props.onEditorDiagnosticsChange?.(diags)
+                  }
                   onChange={(content) =>
                     onUpdateDocument(activeDocument.key, content)
                   }
@@ -4814,6 +4948,15 @@ function EditorScreen(props: ScreenContentProps) {
                       onEditorSelectionChange?.(
                         sel ? { path: splitDocument.path, ...sel } : null,
                       )
+                    }
+                    onCursorChange={(cur) =>
+                      props.onEditorCursorChange?.({
+                        path: splitDocument.path,
+                        ...cur,
+                      })
+                    }
+                    onDiagnosticsChange={(diags) =>
+                      props.onEditorDiagnosticsChange?.(diags)
                     }
                     onChange={(content) =>
                       onUpdateDocument(splitDocument.key, content)
@@ -4993,19 +5136,33 @@ function EditorScreen(props: ScreenContentProps) {
       )}
       {!preferences.inspectorCollapsed ? (
         <EditorContextInspector
+          service={service}
+          browserPreview={browserPreview}
           activeProject={activeProject}
           activeDocument={focusedDocument}
           selection={editorSelection}
+          cursor={props.editorCursor}
+          diagnostics={props.editorDiagnostics}
           gitStatus={editorGitStatus}
           executions={executions.filter(
             (item) => item.projectId === activeProject?.id,
           )}
+          syncVersion={workspaceSyncVersion}
+          returnAnchor={props.returnSourceAnchor}
+          onReturnToAnchor={() => props.onReturnToSourceAnchor?.()}
           onAttachToRook={(chip, mode) =>
             onAttachContextChipToRook?.(chip, mode)
           }
           onOpenInlinePatch={(doc) => onOpenInlinePatch?.(doc)}
           onOpenFileInReview={(relativePath) =>
             props.onOpenWorkspaceReview?.([relativePath], "head")
+          }
+          onOpenVerify={() => props.onNavigate("verify")}
+          onJumpToLocation={(relativePath, line, column, recordAnchor) =>
+            onJumpToLocation?.(relativePath, line, column, recordAnchor)
+          }
+          onExpandToContextLens={(focusPath) =>
+            props.onExpandToContextLens?.(focusPath)
           }
           onHide={() =>
             void onPreferencesChange({

@@ -34,8 +34,8 @@ export const navigationItems: NavigationItem[] = [
     id: "context",
     label: "Context",
     description: "Source relationships and history",
-    symbol: "⌘",
-    available: false,
+    symbol: "◇",
+    available: true,
   },
   {
     id: "verify",

@@ -22,6 +22,7 @@ use sqlx::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
+mod context;
 mod review;
 mod runs;
 mod workspace_state;
@@ -5869,6 +5870,7 @@ pub fn run() {
         .manage(DomainDatabase::default())
         .manage(RookProcesses::default())
         .manage(runs::RunProcesses::default())
+        .manage(context::ContextIndexState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -5895,6 +5897,14 @@ pub fn run() {
             runs::list_run_instances,
             runs::start_run_config,
             runs::stop_run_config,
+            context::get_file_context,
+            context::get_file_history,
+            context::get_system_context,
+            context::cancel_context_index,
+            context::save_context_annotation,
+            context::delete_context_annotation,
+            context::save_context_pinned_link,
+            context::delete_context_pinned_link,
             get_workspace_trust,
             trust_workspace,
             untrust_workspace,

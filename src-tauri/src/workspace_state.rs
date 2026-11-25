@@ -311,7 +311,7 @@ pub(crate) async fn save_workspace_layout_with_pool(
         _ => "terminal",
     };
     let safe_page = match active_page {
-        "home" | "editor" | "changes" | "verify" | "rook" | "settings" => active_page,
+        "home" | "editor" | "changes" | "context" | "verify" | "rook" | "settings" => active_page,
         _ => "editor",
     };
     let now = now_ms();

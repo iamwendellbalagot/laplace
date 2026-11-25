@@ -766,4 +766,94 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("sends Plan 13 context lens, history, and confirmation IPC commands", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ filePath: "src/a.ts" })
+      .mockResolvedValueOnce({ filePath: "src/a.ts", commits: [] })
+      .mockResolvedValueOnce({ modules: [] })
+      .mockResolvedValueOnce({ id: "ctx-ann-1" })
+      .mockResolvedValueOnce({ id: "ctx-lnk-1" })
+      .mockResolvedValueOnce(true);
+    const service = new TauriAppService();
+
+    await service.getFileContext("/work/project", "src/a.ts", {
+      symbol: "rotateSession",
+      cursorLine: 12,
+    });
+    await service.getFileHistory("/work/project", "src/a.ts");
+    await service.getSystemContext("/work/project");
+    await service.saveContextAnnotation(
+      "/work/project",
+      "file",
+      "src/a.ts",
+      "Handles token rotation",
+    );
+    await service.saveContextPinnedLink(
+      "/work/project",
+      "src/a.ts",
+      "tests/a.test.ts",
+      "tests",
+      "Verified test",
+    );
+    await service.cancelContextIndex("/work/project");
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_file_context", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        relativePath: "src/a.ts",
+        symbol: "rotateSession",
+        cursorLine: 12,
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "get_file_history", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        relativePath: "src/a.ts",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "get_system_context", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(4, "save_context_annotation", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        targetKind: "file",
+        targetKey: "src/a.ts",
+        summary: "Handles token rotation",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      5,
+      "save_context_pinned_link",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          sourcePath: "src/a.ts",
+          targetPath: "tests/a.test.ts",
+          relationKind: "tests",
+          note: "Verified test",
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(6, "cancel_context_index", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+  });
 });

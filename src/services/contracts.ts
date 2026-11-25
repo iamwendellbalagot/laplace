@@ -375,7 +375,12 @@ export interface WorkspaceContinuity {
 
 export interface RookContextChip {
   id: string;
-  kind: "file" | "selection" | "verify_failure" | "run_failure";
+  kind:
+    | "file"
+    | "selection"
+    | "verify_failure"
+    | "run_failure"
+    | "context_bundle";
   label: string;
   filePath?: string;
   startLine?: number;
@@ -488,3 +493,148 @@ export interface RookEvent {
   message: Record<string, unknown>;
 }
 export type RookPermissionChoice = "once" | "session" | "deny";
+
+export type ContextProvenance = "observed" | "inferred" | "developer_confirmed";
+
+export interface EditorDiagnostic {
+  severity: "error" | "warning" | "info";
+  message: string;
+  line: number;
+  column: number;
+  source?: string;
+}
+
+export interface FileSymbol {
+  name: string;
+  kind: string;
+  line: number;
+  exported: boolean;
+}
+
+export interface SymbolReference {
+  filePath: string;
+  line: number;
+  preview: string;
+  provenance: ContextProvenance;
+  evidence: string;
+}
+
+export interface ContextRelation {
+  id: string;
+  sourcePath: string;
+  sourceLine: number | null;
+  targetPath: string;
+  relationKind: string;
+  provenance: ContextProvenance;
+  evidence: string;
+  stale: boolean;
+  pinnedLinkId: string | null;
+}
+
+export interface ContextAnnotationRecord {
+  id: string;
+  targetKind: "file" | "module" | string;
+  targetKey: string;
+  summary: string;
+  provenance: ContextProvenance;
+  sourceDigest: string;
+  stale: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ContextPinnedLinkRecord {
+  id: string;
+  sourcePath: string;
+  targetPath: string;
+  relationKind: string;
+  note: string;
+  sourceDigest: string;
+  stale: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FileContextSnapshot {
+  filePath: string;
+  language: string;
+  fileDigest: string;
+  symbols: FileSymbol[];
+  activeSymbol: FileSymbol | null;
+  queriedSymbol: string | null;
+  symbolReferences: SymbolReference[];
+  imports: ContextRelation[];
+  importers: ContextRelation[];
+  relatedTests: ContextRelation[];
+  annotation: ContextAnnotationRecord | null;
+  pinnedLinks: ContextPinnedLinkRecord[];
+  indexedFileCount: number;
+  truncated: boolean;
+  cancelled: boolean;
+}
+
+export interface FileHistoryCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  committedAt: number;
+}
+
+export interface FileHistoryCheckpoint {
+  id: string;
+  label: string;
+  sourceDigest: string;
+  createdAt: number;
+}
+
+export interface FileHistoryCheck {
+  id: string;
+  command: string;
+  status: string;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
+export interface FileHistorySnapshot {
+  filePath: string;
+  commits: FileHistoryCommit[];
+  checkpoints: FileHistoryCheckpoint[];
+  notes: ReviewComment[];
+  checks: FileHistoryCheck[];
+}
+
+export interface SystemModuleNode {
+  key: string;
+  label: string;
+  primaryFile: string;
+  files: string[];
+  fileCount: number;
+  incomingCount: number;
+  outgoingCount: number;
+  digest: string;
+  annotation: ContextAnnotationRecord | null;
+}
+
+export interface SystemModuleEdge {
+  id: string;
+  sourceModule: string;
+  targetModule: string;
+  referenceCount: number;
+  sampleSourcePath: string;
+  sampleSourceLine: number | null;
+  sampleTargetPath: string;
+  provenance: ContextProvenance;
+}
+
+export interface SystemContextSnapshot {
+  modules: SystemModuleNode[];
+  edges: SystemModuleEdge[];
+  relationships: ContextRelation[];
+  annotations: ContextAnnotationRecord[];
+  pinnedLinks: ContextPinnedLinkRecord[];
+  recentCommits: FileHistoryCommit[];
+  indexedFileCount: number;
+  truncated: boolean;
+  cancelled: boolean;
+}

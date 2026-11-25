@@ -52,6 +52,11 @@ import {
   type RookProvider,
   type RookSessionSummary,
   type RookSessionMessage,
+  type FileContextSnapshot,
+  type FileHistorySnapshot,
+  type SystemContextSnapshot,
+  type ContextAnnotationRecord,
+  type ContextPinnedLinkRecord,
 } from "./contracts";
 
 export interface AppService {
@@ -101,6 +106,36 @@ export interface AppService {
   ): Promise<RunInstance>;
   stopRunConfig(projectId: string, instanceId: string): Promise<RunInstance>;
   listenRunEvents(listener: (event: RunEvent) => void): Promise<UnlistenFn>;
+  getFileContext(
+    projectId: string,
+    relativePath: string,
+    options?: { symbol?: string; cursorLine?: number },
+  ): Promise<FileContextSnapshot>;
+  getFileHistory(
+    projectId: string,
+    relativePath: string,
+  ): Promise<FileHistorySnapshot>;
+  getSystemContext(projectId: string): Promise<SystemContextSnapshot>;
+  cancelContextIndex(projectId: string): Promise<boolean>;
+  saveContextAnnotation(
+    projectId: string,
+    targetKind: "file" | "module",
+    targetKey: string,
+    summary: string,
+  ): Promise<ContextAnnotationRecord>;
+  deleteContextAnnotation(
+    projectId: string,
+    targetKind: "file" | "module",
+    targetKey: string,
+  ): Promise<void>;
+  saveContextPinnedLink(
+    projectId: string,
+    sourcePath: string,
+    targetPath: string,
+    relationKind: "calls" | "imports" | "tests" | "documents" | "depends_on",
+    note?: string,
+  ): Promise<ContextPinnedLinkRecord>;
+  deleteContextPinnedLink(projectId: string, linkId: string): Promise<void>;
   readProjectFile(
     projectId: string,
     relativePath: string,
@@ -1340,6 +1375,135 @@ export class TauriAppService implements AppService {
     return listen<RunEvent>("laplace://run-event", (event) => {
       listener(event.payload);
     });
+  }
+
+  async getFileContext(
+    projectId: string,
+    relativePath: string,
+    options?: { symbol?: string; cursorLine?: number },
+  ): Promise<FileContextSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+      symbol: options?.symbol ?? null,
+      cursorLine: options?.cursorLine ?? null,
+    };
+    try {
+      return await invoke<FileContextSnapshot>("get_file_context", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getFileHistory(
+    projectId: string,
+    relativePath: string,
+  ): Promise<FileHistorySnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+    };
+    try {
+      return await invoke<FileHistorySnapshot>("get_file_history", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getSystemContext(projectId: string): Promise<SystemContextSnapshot> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<SystemContextSnapshot>("get_system_context", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async cancelContextIndex(projectId: string): Promise<boolean> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<boolean>("cancel_context_index", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveContextAnnotation(
+    projectId: string,
+    targetKind: "file" | "module",
+    targetKey: string,
+    summary: string,
+  ): Promise<ContextAnnotationRecord> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      targetKind,
+      targetKey,
+      summary,
+    };
+    try {
+      return await invoke<ContextAnnotationRecord>("save_context_annotation", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async deleteContextAnnotation(
+    projectId: string,
+    targetKind: "file" | "module",
+    targetKey: string,
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      targetKind,
+      targetKey,
+    };
+    try {
+      await invoke<void>("delete_context_annotation", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveContextPinnedLink(
+    projectId: string,
+    sourcePath: string,
+    targetPath: string,
+    relationKind: "calls" | "imports" | "tests" | "documents" | "depends_on",
+    note = "",
+  ): Promise<ContextPinnedLinkRecord> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      sourcePath,
+      targetPath,
+      relationKind,
+      note,
+    };
+    try {
+      return await invoke<ContextPinnedLinkRecord>("save_context_pinned_link", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async deleteContextPinnedLink(
+    projectId: string,
+    linkId: string,
+  ): Promise<void> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      linkId,
+    };
+    try {
+      await invoke<void>("delete_context_pinned_link", { request });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
   }
 
   async readProjectFile(

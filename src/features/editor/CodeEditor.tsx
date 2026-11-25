@@ -3,6 +3,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { Uri, type editor as MonacoEditor } from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TypeScriptWorker from "monaco-editor/language/typescript/ts.worker?worker";
+import type { EditorDiagnostic } from "../../services/contracts";
 
 self.MonacoEnvironment = {
   getWorker(_moduleId, label) {
@@ -24,6 +25,12 @@ export interface CodeSelectionChange {
   text: string;
 }
 
+export interface CodeCursorChange {
+  line: number;
+  column: number;
+  word: string | null;
+}
+
 export function CodeEditor({
   path,
   value,
@@ -32,6 +39,8 @@ export function CodeEditor({
   revealTarget,
   onChange,
   onSelectionChange,
+  onCursorChange,
+  onDiagnosticsChange,
   onFocus,
   onMount,
 }: {
@@ -42,14 +51,52 @@ export function CodeEditor({
   revealTarget?: RevealTarget | null;
   onChange: (value: string) => void;
   onSelectionChange?: (selection: CodeSelectionChange | null) => void;
+  onCursorChange?: (cursor: CodeCursorChange) => void;
+  onDiagnosticsChange?: (diagnostics: EditorDiagnostic[]) => void;
   onFocus?: () => void;
   onMount?: OnMount;
 }) {
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
   const selectionCbRef = useRef(onSelectionChange);
+  const cursorCbRef = useRef(onCursorChange);
+  const diagnosticsCbRef = useRef(onDiagnosticsChange);
   const focusCbRef = useRef(onFocus);
   selectionCbRef.current = onSelectionChange;
+  cursorCbRef.current = onCursorChange;
+  diagnosticsCbRef.current = onDiagnosticsChange;
   focusCbRef.current = onFocus;
+
+  function emitDiagnosticsForCurrentModel() {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco || !diagnosticsCbRef.current) return;
+    const model = editor.getModel();
+    if (!model) {
+      diagnosticsCbRef.current([]);
+      return;
+    }
+    const markers = monaco.editor.getModelMarkers({ resource: model.uri });
+    const mapped: EditorDiagnostic[] = markers
+      .slice(0, 40)
+      .map((marker: MonacoEditor.IMarker) => ({
+        severity:
+          marker.severity >= monaco.MarkerSeverity.Error
+            ? "error"
+            : marker.severity >= monaco.MarkerSeverity.Warning
+              ? "warning"
+              : "info",
+        message: marker.message,
+        line: marker.startLineNumber,
+        column: marker.startColumn,
+        source: marker.source,
+      }));
+    diagnosticsCbRef.current(mapped);
+  }
+
+  useEffect(() => {
+    emitDiagnosticsForCurrentModel();
+  }, [path]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -72,8 +119,18 @@ export function CodeEditor({
       onChange={(next) => onChange(next ?? "")}
       onMount={(editor, monaco) => {
         editorRef.current = editor;
+        monacoRef.current = monaco;
         editor.onDidFocusEditorText(() => {
           focusCbRef.current?.();
+        });
+        editor.onDidChangeCursorPosition((event) => {
+          const model = editor.getModel();
+          const word = model?.getWordAtPosition(event.position)?.word ?? null;
+          cursorCbRef.current?.({
+            line: event.position.lineNumber,
+            column: event.position.column,
+            word,
+          });
         });
         editor.onDidChangeCursorSelection((event) => {
           const sel = event.selection;
@@ -89,6 +146,14 @@ export function CodeEditor({
             text,
           });
         });
+        monaco.editor.onDidChangeMarkers((uris: readonly Uri[]) => {
+          const model = editor.getModel();
+          if (!model) return;
+          if (uris.some((u: Uri) => u.toString() === model.uri.toString())) {
+            emitDiagnosticsForCurrentModel();
+          }
+        });
+        emitDiagnosticsForCurrentModel();
         if (revealTarget) {
           const position = {
             lineNumber: Math.max(1, revealTarget.line),
