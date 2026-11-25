@@ -1372,7 +1372,18 @@ export function RookPanel({
               </button>
             )}
 
-            <div className="rook-composer-row">
+            <div
+              className={
+                variant === "docked"
+                  ? "rook-composer-row rook-cli-composer-row"
+                  : "rook-composer-row"
+              }
+            >
+              {variant === "docked" && (
+                <span className="rook-cli-input-prompt" aria-hidden="true">
+                  ❯
+                </span>
+              )}
               <textarea
                 ref={promptRef}
                 id="rook-prompt"

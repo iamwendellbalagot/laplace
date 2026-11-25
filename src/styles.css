@@ -5262,19 +5262,19 @@ kbd,
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, white 8%);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 95%, white 10%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--canvas) 95%, transparent);
   backdrop-filter: blur(16px);
   box-shadow:
-    0 14px 36px rgb(0 0 0 / 42%),
-    0 2px 8px rgb(0 0 0 / 26%),
-    inset 0 1px 0 rgb(255 255 255 / 5%);
+    0 16px 40px rgb(0 0 0 / 48%),
+    0 2px 10px rgb(0 0 0 / 28%),
+    inset 0 1px 0 rgb(255 255 255 / 4%);
   pointer-events: auto;
 }
 .app-shell[data-theme="light"] .rook-dock-surface {
   border-color: var(--border);
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
   box-shadow:
     0 14px 34px rgb(15 23 42 / 12%),
     0 2px 8px rgb(15 23 42 / 6%),
@@ -5294,16 +5294,16 @@ kbd,
   height: 56px;
   padding: 0;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--border) 90%, white 8%);
+  border: 1px solid color-mix(in srgb, var(--border) 95%, white 10%);
   border-right: 0;
-  border-radius: 10px 0 0 10px;
-  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+  border-radius: 8px 0 0 8px;
+  background: color-mix(in srgb, var(--shell) 94%, transparent);
   backdrop-filter: blur(14px);
   color: var(--muted);
   cursor: pointer;
   pointer-events: auto;
   transform: translateY(-50%);
-  box-shadow: -6px 4px 16px rgb(0 0 0 / 24%);
+  box-shadow: -6px 4px 16px rgb(0 0 0 / 26%);
   transition:
     color 140ms ease,
     background-color 140ms ease,
@@ -5378,10 +5378,31 @@ kbd,
   background: transparent;
 }
 .rook-dock-floating .rook-panel-docked .rook-chat-topbar {
-  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  min-height: 32px;
+  padding: 4px 8px;
+  gap: 5px;
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in srgb, var(--shell) 72%, transparent);
 }
 .workspace-right-panel .inspector-heading {
-  padding: 0 10px 0 8px;
+  padding: 0 8px;
+}
+.rook-dock-surface .inspector-heading {
+  height: 34px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--shell) 90%, transparent);
+}
+.rook-dock-surface .inspector-tabs [role="tab"] {
+  padding: 6px 9px;
+  font: 500 11px var(--mono);
+  letter-spacing: 0.02em;
+}
+.rook-dock-surface .inspector-heading .icon-button {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  font: 12px var(--mono);
 }
 .inspector-tabs-inline {
   height: 100%;
@@ -5422,9 +5443,9 @@ kbd,
   gap: 18px;
 }
 .rook-panel-docked .rook-chat-topbar {
-  min-height: 36px;
-  padding: 5px 10px;
-  gap: 6px;
+  min-height: 32px;
+  padding: 4px 8px;
+  gap: 5px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--surface);
 }
@@ -5455,20 +5476,20 @@ kbd,
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
 }
 .rook-session-select {
   flex: 1 1 auto;
   min-width: 0;
   max-width: none;
-  height: 25px;
+  height: 23px;
   padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--surface-raised);
+  border-radius: 3px;
+  background: var(--canvas);
   color: var(--text-secondary);
-  font: 11px var(--mono);
+  font: 10.5px var(--mono);
   text-overflow: ellipsis;
 }
 .rook-session-select:hover:not(:disabled) {
@@ -5485,13 +5506,14 @@ kbd,
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  padding: 0 7px;
-  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--border));
-  border-radius: 999px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--border));
+  border-radius: 3px;
   background: var(--brass-tint);
   color: var(--brass-light);
   font: 10px var(--mono);
+  text-transform: lowercase;
   letter-spacing: 0.02em;
 }
 .rook-build-badge-dot {
@@ -5501,11 +5523,11 @@ kbd,
   background: var(--brass);
 }
 .rook-panel-docked .rook-chat-topbar .icon-button {
-  width: 25px;
-  height: 25px;
-  flex: 0 0 25px;
-  border-radius: 5px;
-  font-size: 13px;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  border-radius: 3px;
+  font: 12px var(--mono);
 }
 .rook-panel-docked .rook-welcome {
   align-content: start;
@@ -5875,24 +5897,57 @@ kbd,
   min-width: 0;
 }
 .rook-panel-docked .rook-composer-dock-wrap {
-  padding: 8px 10px 8px;
-  border-top: 1px solid var(--border-soft);
-  background: var(--surface);
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--shell) 86%, transparent);
 }
 .rook-panel-docked .rook-composer {
   width: 100%;
   margin: 0;
-  padding: 8px 9px 6px;
-  border-radius: 9px;
+  padding: 7px 9px 6px;
+  border-color: var(--border);
+  border-radius: 4px;
   background: var(--canvas);
   box-shadow: none;
   gap: 6px;
 }
+.rook-panel-docked .rook-composer:focus-within {
+  border-color: var(--brass);
+}
+.rook-cli-composer-row {
+  align-items: flex-start;
+  gap: 7px;
+}
+.rook-cli-input-prompt {
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--brass);
+  font: 600 12px/1.48 var(--mono);
+  user-select: none;
+}
 .rook-panel-docked .rook-composer textarea {
-  min-height: 44px;
+  min-height: 38px;
   max-height: 150px;
   padding: 2px 0;
-  font: 12.5px/1.48 var(--sans);
+  caret-color: var(--brass);
+  font: 12px/1.48 var(--mono);
+}
+.rook-panel-docked .rook-composer textarea::placeholder {
+  color: var(--dim);
+}
+.rook-panel-docked .rook-context-chip {
+  padding: 2px 6px;
+  border-color: color-mix(in srgb, var(--cyan) 35%, var(--border));
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--cyan) 9%, var(--shell));
+  color: var(--cyan);
+}
+.rook-panel-docked .rook-steering-status {
+  border: 0;
+  border-left: 2px solid var(--brass);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font: 10.5px/1.4 var(--mono);
 }
 .rook-composer-toolbar {
   display: flex;
@@ -5908,9 +5963,51 @@ kbd,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   flex: 1 1 auto;
+}
+.rook-panel-docked .rook-mode-toggle,
+.rook-panel-docked .rook-target-toggle {
+  border-radius: 3px;
+}
+.rook-panel-docked .rook-mode-toggle button {
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 2px;
+  font: 500 10.5px var(--mono);
+}
+.rook-panel-docked .rook-target-toggle button {
+  padding: 2px 7px;
+  font: 10.5px var(--mono);
+}
+.rook-panel-docked .rook-plan-pill {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 3px;
+  font: 10.5px var(--mono);
+}
+.rook-panel-docked .rook-model-trigger {
+  min-height: 23px;
+  padding: 0 7px;
+  border-radius: 3px;
+  background: var(--shell);
+  font: 10.5px var(--mono);
+}
+.rook-panel-docked .rook-send-button {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 4px;
+}
+.rook-panel-docked .rook-composer-run-actions .button {
+  min-height: 23px;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font: 10.5px var(--mono);
+}
+.rook-panel-docked .rook-autoverify-toggle {
+  font: 10px var(--mono);
 }
 .rook-composer-actions {
   display: flex;
@@ -5952,6 +6049,65 @@ kbd,
 }
 .rook-panel-docked .rook-startup-error {
   margin: 8px 10px 0;
+  border: 0;
+  border-left: 2px solid var(--red);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--red) 8%, var(--shell));
+  font: 11px/1.45 var(--mono);
+}
+.rook-panel-docked .rook-trust-banner {
+  margin: 8px 10px 0;
+  padding: 9px 10px;
+  border: 0;
+  border-left: 2px solid var(--brass);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--brass) 7%, var(--shell));
+}
+.rook-panel-docked .rook-trust-banner p {
+  font: 11px/1.45 var(--mono);
+}
+.rook-panel-docked .rook-worktree-banner {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--brass) 8%, var(--shell));
+  font: 10.5px var(--mono);
+}
+.rook-panel-docked .permission-card {
+  margin: 8px 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--brass);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--shell) 90%, var(--canvas));
+}
+.rook-panel-docked .permission-card-header strong,
+.rook-panel-docked .permission-card-detail,
+.rook-panel-docked .permission-card-reason {
+  font: 11px/1.45 var(--mono);
+}
+.rook-panel-docked .permission-card-code {
+  border-radius: 3px;
+  background: var(--canvas);
+}
+.rook-panel-docked .permission-card-actions .button,
+.rook-panel-docked .rook-trust-banner-actions .button,
+.rook-panel-docked .rook-worktree-banner-actions .button {
+  min-height: 23px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font: 10.5px var(--mono);
+}
+.rook-dock-surface .inspector-body,
+.rook-dock-surface .inspector-empty {
+  font-family: var(--mono);
+}
+.rook-dock-surface .inspector-empty h2 {
+  font: 600 13px/1.4 var(--mono);
+}
+.rook-dock-surface .context-source-link {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--shell) 75%, transparent);
+  font: 11px var(--mono);
 }
 .rook-panel-docked .rook-composer-dock-wrap > .inline-error,
 .rook-panel-docked .rook-composer-dock-wrap > .rook-version-note {
