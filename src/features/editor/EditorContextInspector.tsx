@@ -22,7 +22,7 @@ export function EditorContextInspector({
   executions,
   onAttachToRook,
   onOpenInlinePatch,
-  onPromoteFileToChange,
+  onOpenFileInReview,
   onHide,
 }: {
   activeProject?: ProjectSummary;
@@ -32,7 +32,7 @@ export function EditorContextInspector({
   executions: ExecutionRecord[];
   onAttachToRook: (chip: RookContextChip, mode: RookMode) => void;
   onOpenInlinePatch: (document: SyncableDocument) => void;
-  onPromoteFileToChange: (relativePath: string) => void;
+  onOpenFileInReview: (relativePath: string) => void;
   onHide: () => void;
 }) {
   const fileGit = activeDocument
@@ -156,9 +156,9 @@ export function EditorContextInspector({
                 <button
                   type="button"
                   className="button button-quiet"
-                  onClick={() => onPromoteFileToChange(activeDocument.path)}
+                  onClick={() => onOpenFileInReview(activeDocument.path)}
                 >
-                  Promote edits to Change
+                  Open in Review ↗
                 </button>
               )}
             </div>

@@ -3234,3 +3234,17 @@ kbd,
   border-color: var(--brass);
   color: var(--brass);
 }
+
+.review-compact-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.review-unverified-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}

@@ -29,12 +29,13 @@ import type {
   ExecutionRecord,
   ExecutionStatus,
   ProjectRecipeSummary,
+  ReviewDiffBaseline,
 } from "./services/contracts";
 import { useAppStore, type PageId } from "./state/app-store";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { GitPanel } from "./features/git/GitPanel";
 import { RookPermissionCard } from "./features/rook/RookPermissionCard";
-import { ChangeReviewScreen } from "./features/review/ChangeReviewScreen";
+import { WorkspaceReviewScreen } from "./features/review/WorkspaceReviewScreen";
 import { LinkedStackOutput, RunPanel } from "./features/runs/RunPanel";
 import {
   formatFailureContextExcerpt,
@@ -234,6 +235,8 @@ export function App({ service, browserPreview = false }: AppProps) {
   const [reviewInitialSelectedPaths, setReviewInitialSelectedPaths] = useState<
     string[] | undefined
   >(undefined);
+  const [reviewBaseline, setReviewBaseline] =
+    useState<ReviewDiffBaseline>("head");
   const [splitDocumentKey, setSplitDocumentKey] = useState<string>();
   const [activeEditorPane, setActiveEditorPane] = useState<
     "primary" | "secondary"
@@ -1165,16 +1168,22 @@ export function App({ service, browserPreview = false }: AppProps) {
     }
   }
 
+  function openWorkspaceReview(
+    selectedPaths?: string[],
+    baseline: ReviewDiffBaseline = "head",
+  ) {
+    setReviewInitialSelectedPaths(selectedPaths);
+    setReviewBaseline(baseline);
+    navigateTracked("changes");
+  }
+
   async function promoteEditsToChange(
     objective: string,
     selectedPaths: string[],
   ) {
     if (!activeProject) return;
-    const created = await service.createChange(activeProject.id, objective);
-    setChanges((items) => [created, ...items]);
-    setReviewInitialSelectedPaths(selectedPaths);
-    setReviewChangeId(created.id);
-    navigateTracked("changes");
+    void objective;
+    openWorkspaceReview(selectedPaths, "head");
   }
 
   function openInlinePatchForDocument(
@@ -1875,11 +1884,14 @@ export function App({ service, browserPreview = false }: AppProps) {
                 );
               }
             }}
-            onPromoteRookToChange={(objective) => {
-              const dirtyOrChanged =
-                editorGitStatus?.files.map((file) => file.path) ?? [];
-              void promoteEditsToChange(objective, dirtyOrChanged);
+            onPromoteRookToChange={() => {
+              openWorkspaceReview(
+                undefined,
+                rookMode === "build" ? "last_review" : "head",
+              );
             }}
+            onOpenWorkspaceReview={openWorkspaceReview}
+            reviewBaseline={reviewBaseline}
             rookDraft={rookDraft}
             onRookDraftChange={setRookDraft}
             onRookDraftSave={(draft) => {
@@ -2005,7 +2017,10 @@ export function App({ service, browserPreview = false }: AppProps) {
               if (activeProject) {
                 rookDraftByProject.current[activeProject.id] = prompt;
               }
-              navigate("rook");
+              navigateTracked("rook");
+              if (workspaceTrusted && rookMode !== "build") {
+                void switchRookMode("build");
+              }
             }}
             onRefreshChangeDomain={async () => {
               if (!activeProject) return;
@@ -2272,6 +2287,11 @@ interface ScreenContentProps {
   onVerifyChangeIdChange?: (changeId: string) => void;
   reviewChangeId?: string | null;
   reviewInitialSelectedPaths?: string[];
+  reviewBaseline?: ReviewDiffBaseline;
+  onOpenWorkspaceReview?: (
+    selectedPaths?: string[],
+    baseline?: ReviewDiffBaseline,
+  ) => void;
   onOpenReviewChange?: (changeId: string | null) => void;
   onOpenReviewFileInEditor?: (relativePath: string) => void;
   onSendRevisionToRook?: (prompt: string) => void;
@@ -2428,38 +2448,70 @@ function ScreenContent(props: ScreenContentProps) {
   } else if (page === "home") {
     nonEditorView = <HomeScreen {...props} />;
   } else if (page === "changes") {
-    if (props.reviewChangeId && props.activeProject && !props.browserPreview) {
+    if (props.browserPreview) {
+      nonEditorView = (
+        <section className="content-page" aria-labelledby="screen-title">
+          <PageHeading eyebrow="Review" title="Review" />
+          <EmptyState
+            title="Not available in browser preview"
+            description="Working-tree diff review and selective commits require the native desktop app."
+            label="Desktop only"
+          />
+        </section>
+      );
+    } else if (!props.activeProject || !props.activeProject.isGitRepository) {
+      nonEditorView = (
+        <section className="content-page" aria-labelledby="screen-title">
+          <PageHeading
+            eyebrow={props.activeProject?.name ?? "Project required"}
+            title="Review"
+          />
+          <EmptyState
+            title={
+              props.activeProject
+                ? "Not a Git repository"
+                : "Open a Git repository"
+            }
+            description="Review shows live uncommitted diffs, pre-Rook checkpoints, per-file revert, and selective commits for Git repositories."
+            label="Git required"
+          />
+        </section>
+      );
+    } else {
       const dirtyProjectDocs = props.documents.filter(
         (doc) =>
           doc.projectId === props.activeProject?.id &&
           doc.content !== doc.savedContent,
       );
       nonEditorView = (
-        <ChangeReviewScreen
+        <WorkspaceReviewScreen
           service={props.service}
           project={props.activeProject}
-          changeId={props.reviewChangeId}
           initialSelectedPaths={props.reviewInitialSelectedPaths}
+          initialBaseline={props.reviewBaseline ?? "head"}
           preferences={props.preferences}
           executions={props.executions ?? []}
+          recipes={props.projectRecipes ?? []}
+          workspaceTrusted={props.workspaceTrusted}
           dirtyCount={dirtyProjectDocs.length}
           savingFiles={props.savingFiles}
+          syncVersion={props.workspaceSyncVersion}
           onSaveAllDirty={() => props.onSaveDocuments(dirtyProjectDocs)}
-          onBack={() => props.onOpenReviewChange?.(null)}
           onOpenInEditor={(path) => props.onOpenReviewFileInEditor?.(path)}
-          onOpenVerify={(id) => props.onOpenVerifyForChange?.(id)}
-          onSendRevisionToRook={(prompt) =>
-            props.onSendRevisionToRook?.(prompt)
+          onOpenVerify={() => props.onNavigate("verify")}
+          onRunQuickRecipe={
+            props.onRunProjectRecipe
+              ? (name) => props.onRunProjectRecipe!(name)
+              : undefined
           }
-          onChangeUpdated={() =>
+          onSendNotesToRook={(prompt) => props.onSendRevisionToRook?.(prompt)}
+          onWorkspaceMutated={() =>
             props.onRefreshChangeDomain
               ? props.onRefreshChangeDomain()
               : Promise.resolve()
           }
         />
       );
-    } else {
-      nonEditorView = <ChangesScreen {...props} />;
     }
   } else if (page === "verify") {
     nonEditorView = <VerifyScreen {...props} />;
@@ -2563,213 +2615,6 @@ function summarizeVerification(records: ExecutionRecord[]): {
   };
 }
 
-function ChangesScreen({
-  activeProject,
-  changes,
-  executions = [],
-  changeFilter = "all",
-  onChangeFilter,
-  onCreateChange,
-  onUpdateChange,
-  onReopenChange,
-  onOpenReviewChange,
-  onOpenVerifyForChange,
-  browserPreview,
-}: ScreenContentProps) {
-  const [objective, setObjective] = useState("");
-  const [error, setError] = useState<string>();
-  const [pending, setPending] = useState(false);
-  async function create() {
-    setPending(true);
-    setError(undefined);
-    try {
-      await onCreateChange?.(objective);
-      setObjective("");
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : "Change could not be created.",
-      );
-    } finally {
-      setPending(false);
-    }
-  }
-  return (
-    <section
-      className="content-page changes-page"
-      aria-labelledby="screen-title"
-    >
-      <PageHeading
-        eyebrow={activeProject?.name ?? "Project required"}
-        title="Changes"
-      />
-      {browserPreview ? (
-        <EmptyState
-          title="Not available yet"
-          description="Durable Change records require the desktop application."
-          label="Desktop only"
-        />
-      ) : !activeProject ? (
-        <EmptyState
-          title="Open a project"
-          description="Durable Change records belong to a project."
-          label="Workspace"
-        />
-      ) : (
-        <>
-          <label className="change-filter">
-            Filter{" "}
-            <select
-              value={changeFilter}
-              onChange={(event) =>
-                onChangeFilter?.(event.target.value as ChangeStatus | "all")
-              }
-            >
-              <option value="all">All</option>
-              <option value="draft">Draft</option>
-              <option value="active">Active</option>
-              <option value="in_review">In review</option>
-              <option value="approved">Approved</option>
-              <option value="integrated">Integrated</option>
-              <option value="abandoned">Abandoned</option>
-            </select>
-          </label>
-          <form
-            className="change-create"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void create();
-            }}
-          >
-            <label htmlFor="change-objective">New Change objective</label>
-            <textarea
-              id="change-objective"
-              maxLength={500}
-              value={objective}
-              onChange={(event) => setObjective(event.target.value)}
-              placeholder="What would you like to change?"
-            />
-            <button
-              className="button button-primary"
-              type="submit"
-              disabled={pending || !objective.trim()}
-            >
-              Create Change
-            </button>
-          </form>
-          {error && (
-            <p role="alert" className="inline-error">
-              {error}
-            </p>
-          )}
-          {(changes ?? []).filter(
-            (change) =>
-              changeFilter === "all" || change.status === changeFilter,
-          ).length === 0 ? (
-            <p>No Changes yet.</p>
-          ) : (
-            <div className="change-list">
-              {(changes ?? [])
-                .filter(
-                  (change) =>
-                    changeFilter === "all" || change.status === changeFilter,
-                )
-                .map((change) => (
-                  <article key={change.id} className="change-card">
-                    <div>
-                      <span className="eyebrow">
-                        {change.status.replaceAll("_", " ")}
-                      </span>
-                      <h2>{change.objective}</h2>
-                      <small>{change.id}</small>
-                    </div>
-                    <select
-                      aria-label={`Status for ${change.objective}`}
-                      value={change.status}
-                      onChange={(event) =>
-                        void onUpdateChange?.(
-                          change.id,
-                          change.objective,
-                          event.target.value as ChangeStatus,
-                        ).catch((failure) =>
-                          setError(
-                            errorMessage(
-                              failure,
-                              "Change status could not be updated.",
-                            ),
-                          ),
-                        )
-                      }
-                    >
-                      <option value="draft">Draft</option>
-                      <option value="active">Active</option>
-                      <option value="in_review">In review</option>
-                      <option value="approved">Approved</option>
-                      <option value="integrated">Integrated</option>
-                      <option value="abandoned">Abandoned</option>
-                    </select>
-                    <div className="change-verify-summary">
-                      {(() => {
-                        const linked = executions.filter(
-                          (item) => item.changeId === change.id,
-                        );
-                        const summary = summarizeVerification(linked);
-                        return (
-                          <>
-                            <span
-                              className={`verify-status-pill verify-status-${summary.status}`}
-                            >
-                              {summary.label}
-                            </span>
-                            <button
-                              type="button"
-                              className="button button-primary"
-                              onClick={() => onOpenReviewChange?.(change.id)}
-                            >
-                              Review
-                            </button>
-                            <button
-                              type="button"
-                              className="button button-quiet"
-                              onClick={() => onOpenVerifyForChange?.(change.id)}
-                            >
-                              Verify
-                            </button>
-                          </>
-                        );
-                      })()}
-                    </div>
-                    {change.status === "integrated" && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void onReopenChange?.(
-                            change.id,
-                            change.objective,
-                          ).catch((failure) =>
-                            setError(
-                              errorMessage(
-                                failure,
-                                "Change could not be reopened.",
-                              ),
-                            ),
-                          )
-                        }
-                      >
-                        Reopen review
-                      </button>
-                    )}
-                  </article>
-                ))}
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
 function VerifyScreen({
   service,
   activeProject,
@@ -2778,7 +2623,6 @@ function VerifyScreen({
   executions = [],
   projectRecipes = [],
   verifyChangeId = "",
-  onVerifyChangeIdChange,
   workspaceTrusted,
   onTrustWorkspace,
   onSaveDocuments,
@@ -2795,7 +2639,6 @@ function VerifyScreen({
   const [statusFilter, setStatusFilter] = useState<
     "all" | "passed" | "failed" | "stale" | "inconclusive" | "other"
   >("all");
-  const [changeFilterId, setChangeFilterId] = useState<string>("all");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -2808,13 +2651,6 @@ function VerifyScreen({
       document.content !== document.savedContent,
   );
   const filteredChecks = checks.filter((check) => {
-    if (changeFilterId === "none" && check.changeId !== null) return false;
-    if (
-      changeFilterId !== "all" &&
-      changeFilterId !== "none" &&
-      check.changeId !== changeFilterId
-    )
-      return false;
     if (statusFilter === "all") return true;
     if (statusFilter === "other") {
       return !["passed", "failed", "stale", "inconclusive"].includes(
@@ -2965,22 +2801,6 @@ function VerifyScreen({
                 onChange={(event) => setArgsText(event.target.value)}
               />
             </label>
-            <label>
-              Link to Change{" "}
-              <select
-                value={verifyChangeId}
-                onChange={(event) =>
-                  onVerifyChangeIdChange?.(event.target.value)
-                }
-              >
-                <option value="">Workspace (no Change)</option>
-                {changes.map((change) => (
-                  <option key={change.id} value={change.id}>
-                    {change.objective.slice(0, 48)}
-                  </option>
-                ))}
-              </select>
-            </label>
             {!workspaceTrusted ? (
               <button
                 type="button"
@@ -3043,21 +2863,6 @@ function VerifyScreen({
                 <option value="stale">Stale</option>
                 <option value="inconclusive">Inconclusive</option>
                 <option value="other">Cancelled / Timed out / Other</option>
-              </select>
-            </label>
-            <label>
-              Change{" "}
-              <select
-                value={changeFilterId}
-                onChange={(event) => setChangeFilterId(event.target.value)}
-              >
-                <option value="all">All Changes</option>
-                <option value="none">Unlinked workspace checks</option>
-                {changes.map((change) => (
-                  <option key={change.id} value={change.id}>
-                    {change.objective.slice(0, 48)}
-                  </option>
-                ))}
               </select>
             </label>
             <button
@@ -3396,15 +3201,25 @@ function RookScreen({
     setPrompt("");
     onClearRookContextChips?.();
     setError(undefined);
-    void service
-      .promptRookAsk(session, text, serializedContext || undefined)
-      .catch((failure) => {
-        setMessages((items) =>
-          items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
-        );
-        setPrompt(text);
-        setError(errorMessage(failure, "Your message could not be sent."));
-      });
+    const send = async () => {
+      if (rookMode === "build" && activeProject?.isGitRepository) {
+        await service
+          .saveWorkspaceCheckpoint(activeProject.id, "Before Rook Build")
+          .catch(() => undefined);
+      }
+      await service.promptRookAsk(
+        session,
+        text,
+        serializedContext || undefined,
+      );
+    };
+    void send().catch((failure) => {
+      setMessages((items) =>
+        items.at(-1)?.role === "user" ? items.slice(0, -1) : items,
+      );
+      setPrompt(text);
+      setError(errorMessage(failure, "Your message could not be sent."));
+    });
   }
   useEffect(() => {
     if (!modelPickerOpen) return;
@@ -4191,17 +4006,11 @@ function RookScreen({
                             <button
                               type="button"
                               className="button button-quiet"
-                              onClick={() => {
-                                const prevUser = messages
-                                  .slice(0, index)
-                                  .reverse()
-                                  .find((m) => m.role === "user")?.text;
-                                onPromoteRookToChange(
-                                  (prevUser ?? message.text).slice(0, 140),
-                                );
-                              }}
+                              onClick={() => onPromoteRookToChange("")}
                             >
-                              Promote to Change
+                              {rookMode === "build"
+                                ? "Review Rook edits ↗"
+                                : "Open Review ↗"}
                             </button>
                           )}
                       </div>
@@ -5195,10 +5004,8 @@ function EditorScreen(props: ScreenContentProps) {
             onAttachContextChipToRook?.(chip, mode)
           }
           onOpenInlinePatch={(doc) => onOpenInlinePatch?.(doc)}
-          onPromoteFileToChange={(relativePath) =>
-            void onPromoteEditsToChange?.(`Update ${relativePath}`, [
-              relativePath,
-            ])
+          onOpenFileInReview={(relativePath) =>
+            props.onOpenWorkspaceReview?.([relativePath], "head")
           }
           onHide={() =>
             void onPreferencesChange({
@@ -5409,7 +5216,11 @@ function WorkspaceTools({
             syncVersion={syncVersion}
             onStatus={onGitStatusChange}
             onOpenFile={onOpenFile}
-            onContinueAsChange={onContinueAsChange}
+            onOpenInReview={
+              onContinueAsChange
+                ? (paths) => void onContinueAsChange("", paths)
+                : undefined
+            }
           />
         ))}
     </section>

@@ -25,8 +25,8 @@ export const navigationItems: NavigationItem[] = [
   },
   {
     id: "changes",
-    label: "Changes",
-    description: "Durable engineering changes",
+    label: "Review",
+    description: "Diff, verify, and commit working changes",
     symbol: "▤",
     available: true,
   },
@@ -70,7 +70,7 @@ export const navigationItems: NavigationItem[] = [
 export const screenTitles: Record<PageId, string> = {
   home: "Home",
   editor: "Editor",
-  changes: "Changes",
+  changes: "Review",
   context: "Context Lens",
   verify: "Verification",
   rook: "Rook",

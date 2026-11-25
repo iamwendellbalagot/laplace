@@ -1412,19 +1412,19 @@ pub(crate) async fn read_git_file_diff_pair(
     }
     let root = canonical_git_root(&request.project_id, &request.operation_id)?;
     if request.baseline.as_deref() == Some("last_review") {
-        if let Some(change_id) = request.change_id.as_deref() {
-            if validate_operation_id(change_id) {
-                let pool = open_domain_database(&app, &db).await?;
-                return read_git_file_diff_pair_since_review_with_pool(
-                    &pool,
-                    &root,
-                    change_id,
-                    &request.relative_path,
-                    &request.operation_id,
-                )
-                .await;
-            }
-        }
+        let pool = open_domain_database(&app, &db).await?;
+        let target_id = match request.change_id.as_deref() {
+            Some(change_id) if validate_operation_id(change_id) => change_id.to_owned(),
+            _ => ensure_workspace_review_id(&pool, &root, &request.operation_id).await?,
+        };
+        return read_git_file_diff_pair_since_review_with_pool(
+            &pool,
+            &root,
+            &target_id,
+            &request.relative_path,
+            &request.operation_id,
+        )
+        .await;
     }
     read_git_file_diff_pair_at(&root, &request.relative_path, &request.operation_id)
 }
@@ -1811,6 +1811,743 @@ pub(crate) async fn execute_change_integration(
     .await
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceReviewSnapshot {
+    pub(crate) review_id: String,
+    pub(crate) branch: Option<String>,
+    pub(crate) head_revision: String,
+    pub(crate) source_digest: String,
+    pub(crate) changed_files: Vec<GitFileStatus>,
+    pub(crate) git_operation_in_progress: bool,
+    pub(crate) has_fresh_passing_check: bool,
+    pub(crate) comments: Vec<ReviewComment>,
+    pub(crate) last_checkpoint_digest: Option<String>,
+    pub(crate) last_checkpoint_label: Option<String>,
+    pub(crate) last_checkpoint_at: Option<i64>,
+    pub(crate) changed_since_checkpoint: Vec<String>,
+    pub(crate) last_commit_sha: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SaveWorkspaceCheckpointRequest {
+    schema_version: u16,
+    operation_id: String,
+    project_id: String,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AddWorkspaceCommentRequest {
+    schema_version: u16,
+    operation_id: String,
+    project_id: String,
+    file_path: String,
+    #[serde(default)]
+    line_number: Option<i64>,
+    body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RevertFileRequest {
+    schema_version: u16,
+    operation_id: String,
+    project_id: String,
+    relative_path: String,
+    target: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommitWorkspaceReviewRequest {
+    schema_version: u16,
+    operation_id: String,
+    project_id: String,
+    selected_paths: Vec<String>,
+    commit_message: String,
+    expected_source_digest: String,
+    #[serde(default)]
+    allow_unverified: bool,
+}
+
+pub(crate) async fn ensure_workspace_review_id(
+    pool: &SqlitePool,
+    root: &Path,
+    operation_id: &str,
+) -> Result<String, IpcError> {
+    let project_id = root.to_string_lossy().into_owned();
+    let hash = format!("{:x}", Sha256::digest(project_id.as_bytes()));
+    let review_id = format!("ws-rev-{}", &hash[..12]);
+    let now = now_ms();
+    sqlx::query(
+        "INSERT OR IGNORE INTO changes (id, project_id, objective, status, created_at, updated_at) VALUES (?, ?, 'Working tree review', 'in_review', ?, ?)",
+    )
+    .bind(&review_id)
+    .bind(&project_id)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "review_init_failed",
+            "Workspace review session could not be prepared.",
+            operation_id,
+        )
+    })?;
+    Ok(review_id)
+}
+
+pub(crate) async fn get_workspace_review_with_pool(
+    pool: &SqlitePool,
+    root: &Path,
+    operation_id: &str,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    let review_id = ensure_workspace_review_id(pool, root, operation_id).await?;
+    let snapshot = get_change_review_with_pool(pool, root, &review_id, operation_id).await?;
+    let label_row = sqlx::query(
+        "SELECT detail FROM change_activity WHERE change_id = ? AND kind = 'checkpoint' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&review_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "review_read_failed",
+            "Checkpoint metadata could not be loaded.",
+            operation_id,
+        )
+    })?;
+    let last_checkpoint_label = label_row
+        .and_then(|row| row.try_get::<String, _>("detail").ok())
+        .filter(|value| !value.trim().is_empty());
+    let last_commit_sha = snapshot
+        .latest_attempt
+        .as_ref()
+        .filter(|attempt| attempt.status == "succeeded")
+        .and_then(|attempt| attempt.commit_sha.clone());
+
+    Ok(WorkspaceReviewSnapshot {
+        review_id,
+        branch: snapshot.branch,
+        head_revision: snapshot.head_revision,
+        source_digest: snapshot.source_digest,
+        changed_files: snapshot.changed_files,
+        git_operation_in_progress: snapshot.git_operation_in_progress,
+        has_fresh_passing_check: snapshot.has_fresh_passing_check,
+        comments: snapshot.comments,
+        last_checkpoint_digest: snapshot.last_reviewed_digest,
+        last_checkpoint_label,
+        last_checkpoint_at: snapshot.last_reviewed_at,
+        changed_since_checkpoint: snapshot.changed_since_last_review,
+        last_commit_sha,
+    })
+}
+
+pub(crate) async fn save_workspace_checkpoint_with_pool(
+    pool: &SqlitePool,
+    root: &Path,
+    label: Option<&str>,
+    operation_id: &str,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    let review_id = ensure_workspace_review_id(pool, root, operation_id).await?;
+    let (live_digest, _) = source_manifest(root)?;
+    capture_review_snapshot_with_pool(pool, root, &review_id, &live_digest, operation_id).await?;
+    let clean_label = label
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("Manual checkpoint");
+    let now = now_ms();
+    let _ = sqlx::query(
+        "INSERT INTO change_activity (change_id, kind, detail, created_at) VALUES (?, 'checkpoint', ?, ?)",
+    )
+    .bind(&review_id)
+    .bind(clean_label)
+    .bind(now)
+    .execute(pool)
+    .await;
+    get_workspace_review_with_pool(pool, root, operation_id).await
+}
+
+pub(crate) async fn revert_workspace_file_with_pool(
+    pool: &SqlitePool,
+    processes: &RookProcesses,
+    root: &Path,
+    relative_path: &str,
+    target: &str,
+    operation_id: &str,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    if processes.has_active_build(root) {
+        return Err(terminal_error(
+            "build_run_active",
+            "Stop Rook Build before reverting files.",
+            operation_id,
+        ));
+    }
+    if git_operation_in_progress(root) {
+        return Err(terminal_error(
+            "git_operation_in_progress",
+            "Finish or abort the active Git merge or rebase before reverting files.",
+            operation_id,
+        ));
+    }
+    validate_safe_relative_path(relative_path, operation_id)?;
+    let full_path = root.join(relative_path);
+    if let Ok(meta) = fs::symlink_metadata(&full_path) {
+        if meta.file_type().is_symlink() {
+            return Err(terminal_error(
+                "project_file_symlink",
+                "Symbolic links cannot be reverted from Review.",
+                operation_id,
+            ));
+        }
+    }
+
+    match target {
+        "head" => {
+            let spec = format!("HEAD:{relative_path}");
+            let in_head = git_read_raw(root, &["cat-file", "-e", &spec], operation_id)?
+                .status
+                .success();
+            if in_head {
+                let output = git_write_raw(
+                    root,
+                    &[
+                        "checkout".to_owned(),
+                        "HEAD".to_owned(),
+                        "--".to_owned(),
+                        relative_path.to_owned(),
+                    ],
+                    operation_id,
+                )?;
+                if !output.status.success() {
+                    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                    return Err(terminal_error(
+                        "revert_failed",
+                        if detail.is_empty() {
+                            "Git could not revert this file to HEAD."
+                        } else {
+                            &detail
+                        },
+                        operation_id,
+                    ));
+                }
+            } else if full_path.is_file() {
+                fs::remove_file(&full_path).map_err(|_| {
+                    terminal_error(
+                        "revert_failed",
+                        "Untracked file could not be removed.",
+                        operation_id,
+                    )
+                })?;
+            }
+        }
+        "checkpoint" => {
+            let review_id = ensure_workspace_review_id(pool, root, operation_id).await?;
+            let snap_row = sqlx::query(
+                "SELECT id FROM review_snapshots WHERE change_id = ? ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(&review_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| {
+                terminal_error(
+                    "revert_failed",
+                    "Last checkpoint could not be read.",
+                    operation_id,
+                )
+            })?
+            .ok_or_else(|| {
+                terminal_error(
+                    "checkpoint_missing",
+                    "No review checkpoint exists yet to revert to.",
+                    operation_id,
+                )
+            })?;
+            let snap_id: String = snap_row.try_get("id").unwrap_or_default();
+            let file_row = sqlx::query(
+                "SELECT content FROM review_snapshot_files WHERE snapshot_id = ? AND file_path = ?",
+            )
+            .bind(&snap_id)
+            .bind(relative_path)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| {
+                terminal_error(
+                    "revert_failed",
+                    "Checkpoint file content could not be read.",
+                    operation_id,
+                )
+            })?;
+            if let Some(row) = file_row {
+                let saved_text: Option<String> = row.try_get("content").ok().flatten();
+                match saved_text {
+                    Some(content) => {
+                        if let Some(parent) = full_path.parent() {
+                            let _ = fs::create_dir_all(parent);
+                        }
+                        fs::write(&full_path, content.as_bytes()).map_err(|_| {
+                            terminal_error(
+                                "revert_failed",
+                                "Could not restore file content from the last checkpoint.",
+                                operation_id,
+                            )
+                        })?;
+                    }
+                    None => {
+                        if full_path.is_file() {
+                            let _ = fs::remove_file(&full_path);
+                        }
+                    }
+                }
+            } else {
+                // File wasn't modified at checkpoint time -> either tracked at HEAD or created after checkpoint
+                let spec = format!("HEAD:{relative_path}");
+                let in_head = git_read_raw(root, &["cat-file", "-e", &spec], operation_id)?
+                    .status
+                    .success();
+                if in_head {
+                    let output = git_write_raw(
+                        root,
+                        &[
+                            "checkout".to_owned(),
+                            "HEAD".to_owned(),
+                            "--".to_owned(),
+                            relative_path.to_owned(),
+                        ],
+                        operation_id,
+                    )?;
+                    if !output.status.success() {
+                        return Err(terminal_error(
+                            "revert_failed",
+                            "Git could not restore this file to its pre-checkpoint state.",
+                            operation_id,
+                        ));
+                    }
+                } else if full_path.is_file() {
+                    fs::remove_file(&full_path).map_err(|_| {
+                        terminal_error(
+                            "revert_failed",
+                            "New file created after the checkpoint could not be removed.",
+                            operation_id,
+                        )
+                    })?;
+                }
+            }
+        }
+        _ => {
+            return Err(terminal_error(
+                "invalid_revert_target",
+                "Revert target must be 'head' or 'checkpoint'.",
+                operation_id,
+            ));
+        }
+    }
+
+    get_workspace_review_with_pool(pool, root, operation_id).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn commit_workspace_review_with_pool(
+    pool: &SqlitePool,
+    processes: &RookProcesses,
+    root: &Path,
+    selected_paths: &[String],
+    commit_message: &str,
+    expected_source_digest: &str,
+    allow_unverified: bool,
+    operation_id: &str,
+) -> Result<IntegrationAttempt, IpcError> {
+    if processes.has_active_build(root) {
+        return Err(terminal_error(
+            "build_run_active",
+            "Stop Rook Build before committing files.",
+            operation_id,
+        ));
+    }
+    if git_operation_in_progress(root) {
+        return Err(terminal_error(
+            "git_operation_in_progress",
+            "Finish or abort the active Git merge or rebase before committing.",
+            operation_id,
+        ));
+    }
+    let message = commit_message.trim();
+    if message.is_empty() || message.len() > 1000 {
+        return Err(terminal_error(
+            "invalid_commit_message",
+            "Enter a commit message between 1 and 1,000 characters.",
+            operation_id,
+        ));
+    }
+    if selected_paths.is_empty() {
+        return Err(terminal_error(
+            "no_files_selected",
+            "Select at least one changed file to commit.",
+            operation_id,
+        ));
+    }
+
+    let review_id = ensure_workspace_review_id(pool, root, operation_id).await?;
+    let status = read_git_status_at(root, operation_id)?;
+    let head_revision = read_git_head(root, operation_id)?;
+    if head_revision == "UNBORN" {
+        return Err(terminal_error(
+            "unborn_head",
+            "Create an initial Git commit before committing from Review.",
+            operation_id,
+        ));
+    }
+    let (live_digest, _) = source_manifest(root)?;
+    if live_digest != expected_source_digest {
+        return Err(terminal_error(
+            "source_changed_during_review",
+            "Workspace files changed since Review loaded. Refresh the diff before committing.",
+            operation_id,
+        ));
+    }
+    let project_id = root.to_string_lossy().into_owned();
+    let fresh_pass =
+        has_fresh_passing_check(pool, &project_id, &review_id, &live_digest, operation_id).await?;
+    if !fresh_pass && !allow_unverified {
+        return Err(terminal_error(
+            "verification_required",
+            "No fresh passing check exists for this diff. Run a check or check 'Commit without fresh check'.",
+            operation_id,
+        ));
+    }
+
+    let changed_map: HashMap<&str, &GitFileStatus> = status
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    let mut normalized_paths = Vec::new();
+    let mut untracked_selected = Vec::new();
+    for path in selected_paths {
+        validate_safe_relative_path(path, operation_id)?;
+        let Some(entry) = changed_map.get(path.as_str()) else {
+            return Err(terminal_error(
+                "selected_path_not_changed",
+                &format!("'{path}' has no pending changes to commit."),
+                operation_id,
+            ));
+        };
+        if !normalized_paths.contains(path) {
+            normalized_paths.push(path.clone());
+            if entry.index_status == '?' && entry.worktree_status == '?' {
+                untracked_selected.push(path.clone());
+            }
+        }
+    }
+    normalized_paths.sort();
+
+    let now = now_ms();
+    let attempt_id = format!(
+        "int-{}-{}",
+        now,
+        EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let paths_json = serde_json::to_string(&normalized_paths).unwrap_or_else(|_| "[]".into());
+    sqlx::query(
+        "INSERT INTO integration_attempts (id, change_id, project_id, base_head, approved_source_digest, commit_message, selected_paths_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'committing', ?, ?)",
+    )
+    .bind(&attempt_id)
+    .bind(&review_id)
+    .bind(&project_id)
+    .bind(&head_revision)
+    .bind(&live_digest)
+    .bind(message)
+    .bind(&paths_json)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "integration_write_failed",
+            "Commit attempt could not be recorded.",
+            operation_id,
+        )
+    })?;
+
+    if !untracked_selected.is_empty() {
+        let mut add_args = vec!["add".to_owned(), "--".to_owned()];
+        add_args.extend(untracked_selected.iter().cloned());
+        let add_output = git_write_raw(root, &add_args, operation_id)?;
+        if !add_output.status.success() {
+            let detail = String::from_utf8_lossy(&add_output.stderr)
+                .trim()
+                .to_owned();
+            let _ = sqlx::query(
+                "UPDATE integration_attempts SET status = 'failed', error_detail = ?, updated_at = ? WHERE id = ?",
+            )
+            .bind(&detail)
+            .bind(now_ms())
+            .bind(&attempt_id)
+            .execute(pool)
+            .await;
+            return Err(terminal_error(
+                "git_commit_failed",
+                if detail.is_empty() {
+                    "Git could not stage selected new files. Your edits were preserved."
+                } else {
+                    &detail
+                },
+                operation_id,
+            ));
+        }
+    }
+
+    let mut commit_args = vec![
+        "commit".to_owned(),
+        "--only".to_owned(),
+        "-m".to_owned(),
+        message.to_owned(),
+        "--".to_owned(),
+    ];
+    commit_args.extend(normalized_paths.iter().cloned());
+    let commit_output = git_write_raw(root, &commit_args, operation_id)?;
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr)
+            .trim()
+            .to_owned();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout)
+            .trim()
+            .to_owned();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        let _ = sqlx::query(
+            "UPDATE integration_attempts SET status = 'failed', error_detail = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&detail)
+        .bind(now_ms())
+        .bind(&attempt_id)
+        .execute(pool)
+        .await;
+        return Err(terminal_error(
+            "git_commit_failed",
+            if detail.is_empty() {
+                "Git commit failed (for example, a pre-commit hook rejected the change). Your files were preserved."
+            } else {
+                &detail
+            },
+            operation_id,
+        ));
+    }
+
+    let commit_sha = read_git_head(root, operation_id)?;
+    let finished_at = now_ms();
+    let _ = sqlx::query(
+        "UPDATE integration_attempts SET status = 'succeeded', commit_sha = ?, error_detail = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(&commit_sha)
+    .bind(finished_at)
+    .bind(&attempt_id)
+    .execute(pool)
+    .await;
+
+    for committed_path in &normalized_paths {
+        let _ = sqlx::query(
+            "UPDATE review_comments SET resolved = 1 WHERE change_id = ? AND file_path = ?",
+        )
+        .bind(&review_id)
+        .bind(committed_path)
+        .execute(pool)
+        .await;
+    }
+
+    Ok(IntegrationAttempt {
+        id: attempt_id,
+        change_id: review_id,
+        project_id,
+        base_head: head_revision,
+        approved_source_digest: live_digest,
+        commit_message: message.to_owned(),
+        selected_paths: normalized_paths,
+        status: "succeeded".to_owned(),
+        commit_sha: Some(commit_sha),
+        error_detail: None,
+        created_at: now,
+        updated_at: finished_at,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn get_workspace_review(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    request: GitRequest,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_review_request",
+            "The review request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    get_workspace_review_with_pool(&pool, &root, &request.operation_id).await
+}
+
+#[tauri::command]
+pub(crate) async fn save_workspace_checkpoint(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    request: SaveWorkspaceCheckpointRequest,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_review_request",
+            "The checkpoint request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    save_workspace_checkpoint_with_pool(
+        &pool,
+        &root,
+        request.label.as_deref(),
+        &request.operation_id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn add_workspace_review_comment(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    request: AddWorkspaceCommentRequest,
+) -> Result<ReviewComment, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_comment_request",
+            "The review note request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    validate_safe_relative_path(&request.file_path, &request.operation_id)?;
+    let body = request.body.trim();
+    if body.is_empty() || body.len() > 2000 {
+        return Err(terminal_error(
+            "invalid_comment_body",
+            "Review notes must be between 1 and 2,000 characters.",
+            &request.operation_id,
+        ));
+    }
+    if let Some(line) = request.line_number {
+        if !(1..=1_000_000).contains(&line) {
+            return Err(terminal_error(
+                "invalid_comment_line",
+                "Line number must be a positive integer.",
+                &request.operation_id,
+            ));
+        }
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    let review_id = ensure_workspace_review_id(&pool, &root, &request.operation_id).await?;
+    let now = now_ms();
+    let id = format!(
+        "cmt-{}-{}",
+        now,
+        EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    sqlx::query(
+        "INSERT INTO review_comments (id, change_id, file_path, line_number, body, resolved, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+    )
+    .bind(&id)
+    .bind(&review_id)
+    .bind(&request.file_path)
+    .bind(request.line_number)
+    .bind(body)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .map_err(|_| {
+        terminal_error(
+            "comment_write_failed",
+            "The review note could not be saved.",
+            &request.operation_id,
+        )
+    })?;
+    Ok(ReviewComment {
+        id,
+        change_id: review_id,
+        file_path: request.file_path,
+        line_number: request.line_number,
+        body: body.to_owned(),
+        resolved: false,
+        created_at: now,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn revert_workspace_file(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    processes: tauri::State<'_, RookProcesses>,
+    request: RevertFileRequest,
+) -> Result<WorkspaceReviewSnapshot, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_revert_request",
+            "The revert request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    revert_workspace_file_with_pool(
+        &pool,
+        &processes,
+        &root,
+        &request.relative_path,
+        &request.target,
+        &request.operation_id,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn commit_workspace_review(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, DomainDatabase>,
+    processes: tauri::State<'_, RookProcesses>,
+    request: CommitWorkspaceReviewRequest,
+) -> Result<IntegrationAttempt, IpcError> {
+    if request.schema_version != IPC_SCHEMA_VERSION || !validate_operation_id(&request.operation_id)
+    {
+        return Err(terminal_error(
+            "invalid_commit_request",
+            "The commit request is invalid.",
+            &request.operation_id,
+        ));
+    }
+    let root = canonical_git_root(&request.project_id, &request.operation_id)?;
+    let pool = open_domain_database(&app, &db).await?;
+    commit_workspace_review_with_pool(
+        &pool,
+        &processes,
+        &root,
+        &request.selected_paths,
+        &request.commit_message,
+        &request.expected_source_digest,
+        request.allow_unverified,
+        &request.operation_id,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod review_tests {
     use super::*;
@@ -2128,6 +2865,150 @@ mod review_tests {
         .unwrap();
         assert_eq!(inc_pair.original.as_deref(), Some("export const a = 2;\n"));
         assert_eq!(inc_pair.modified.as_deref(), Some("export const a = 3;\n"));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn workspace_review_checkpoint_and_revert_preserves_prior_edits() {
+        let (base, root, pool, _) = setup_fixture().await;
+        let processes = RookProcesses::default();
+
+        // User makes an initial edit
+        fs::write(root.join("app.ts"), "export const a = 2;\n").unwrap();
+        let cp =
+            save_workspace_checkpoint_with_pool(&pool, &root, Some("Before Rook Build"), "op-cp")
+                .await
+                .unwrap();
+        assert_eq!(
+            cp.last_checkpoint_label.as_deref(),
+            Some("Before Rook Build")
+        );
+
+        // Rook Build edits app.ts and creates a new file extra.ts
+        fs::write(root.join("app.ts"), "export const a = 999;\n").unwrap();
+        fs::write(root.join("extra.ts"), "export const extra = true;\n").unwrap();
+
+        let after_rook = get_workspace_review_with_pool(&pool, &root, "op-get")
+            .await
+            .unwrap();
+        assert!(after_rook
+            .changed_since_checkpoint
+            .contains(&"app.ts".to_owned()));
+        assert!(after_rook
+            .changed_since_checkpoint
+            .contains(&"extra.ts".to_owned()));
+
+        // Revert app.ts to checkpoint -> restores user's prior edit (2), NOT HEAD (1)
+        let _ = revert_workspace_file_with_pool(
+            &pool,
+            &processes,
+            &root,
+            "app.ts",
+            "checkpoint",
+            "op-rev-cp",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("app.ts")).unwrap(),
+            "export const a = 2;\n"
+        );
+
+        // Revert untracked extra.ts to checkpoint -> removes it cleanly
+        let _ = revert_workspace_file_with_pool(
+            &pool,
+            &processes,
+            &root,
+            "extra.ts",
+            "checkpoint",
+            "op-rev-extra",
+        )
+        .await
+        .unwrap();
+        assert!(!root.join("extra.ts").exists());
+
+        // Revert app.ts to HEAD -> restores HEAD content (1)
+        let _ = revert_workspace_file_with_pool(
+            &pool,
+            &processes,
+            &root,
+            "app.ts",
+            "head",
+            "op-rev-head",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("app.ts")).unwrap(),
+            "export const version = 1;\n"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn workspace_review_direct_selective_commit_enforces_guards_and_preserves_unselected() {
+        let (base, root, pool, _) = setup_fixture().await;
+        let processes = RookProcesses::default();
+        fs::write(root.join("app.ts"), "export const a = 42;\n").unwrap();
+        fs::write(root.join("other.ts"), "export const other = 7;\n").unwrap();
+
+        let snap = get_workspace_review_with_pool(&pool, &root, "op-ws-1")
+            .await
+            .unwrap();
+
+        // Without fresh check and allow_unverified = false -> blocked
+        let blocked = commit_workspace_review_with_pool(
+            &pool,
+            &processes,
+            &root,
+            &["app.ts".to_owned()],
+            "Update app",
+            &snap.source_digest,
+            false,
+            "op-ws-2",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(blocked.code, "verification_required");
+
+        // Stale digest -> blocked even with allow_unverified = true
+        let stale = commit_workspace_review_with_pool(
+            &pool,
+            &processes,
+            &root,
+            &["app.ts".to_owned()],
+            "Update app",
+            "stale-digest",
+            true,
+            "op-ws-3",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(stale.code, "source_changed_during_review");
+
+        // Valid commit of ONLY app.ts -> succeeds and leaves other.ts uncommitted
+        let committed = commit_workspace_review_with_pool(
+            &pool,
+            &processes,
+            &root,
+            &["app.ts".to_owned()],
+            "Update app only",
+            &snap.source_digest,
+            true,
+            "op-ws-4",
+        )
+        .await
+        .unwrap();
+        assert_eq!(committed.status, "succeeded");
+        assert!(committed.commit_sha.is_some());
+
+        let after = get_workspace_review_with_pool(&pool, &root, "op-ws-5")
+            .await
+            .unwrap();
+        assert_eq!(after.changed_files.len(), 1);
+        assert_eq!(after.changed_files[0].path, "other.ts");
 
         let _ = fs::remove_dir_all(&base);
     }

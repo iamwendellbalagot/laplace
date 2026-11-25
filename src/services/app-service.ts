@@ -34,6 +34,8 @@ import {
   type ExecutionRecord,
   type ProjectRecipeSummary,
   type ChangeReviewSnapshot,
+  type WorkspaceReviewSnapshot,
+  type RevertTarget,
   type GitDiffPair,
   type ReviewComment,
   type ReviewDiffBaseline,
@@ -140,6 +142,29 @@ export interface AppService {
     projectId: string,
     changeId: string,
   ): Promise<ChangeReviewSnapshot>;
+  getWorkspaceReview(projectId: string): Promise<WorkspaceReviewSnapshot>;
+  saveWorkspaceCheckpoint(
+    projectId: string,
+    label?: string,
+  ): Promise<WorkspaceReviewSnapshot>;
+  addWorkspaceReviewComment(
+    projectId: string,
+    filePath: string,
+    body: string,
+    lineNumber?: number,
+  ): Promise<ReviewComment>;
+  revertWorkspaceFile(
+    projectId: string,
+    relativePath: string,
+    target: RevertTarget,
+  ): Promise<WorkspaceReviewSnapshot>;
+  commitWorkspaceReview(
+    projectId: string,
+    selectedPaths: string[],
+    commitMessage: string,
+    expectedSourceDigest: string,
+    allowUnverified: boolean,
+  ): Promise<IntegrationAttempt>;
   readGitFileDiffPair(
     projectId: string,
     relativePath: string,
@@ -414,6 +439,102 @@ export class TauriAppService implements AppService {
     };
     try {
       return await invoke<ChangeReviewSnapshot>("get_change_review", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async getWorkspaceReview(
+    projectId: string,
+  ): Promise<WorkspaceReviewSnapshot> {
+    const request = this.workspaceRequest(projectId);
+    try {
+      return await invoke<WorkspaceReviewSnapshot>("get_workspace_review", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async saveWorkspaceCheckpoint(
+    projectId: string,
+    label?: string,
+  ): Promise<WorkspaceReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      label: label ?? null,
+    };
+    try {
+      return await invoke<WorkspaceReviewSnapshot>(
+        "save_workspace_checkpoint",
+        {
+          request,
+        },
+      );
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async addWorkspaceReviewComment(
+    projectId: string,
+    filePath: string,
+    body: string,
+    lineNumber?: number,
+  ): Promise<ReviewComment> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      filePath,
+      lineNumber: lineNumber ?? null,
+      body,
+    };
+    try {
+      return await invoke<ReviewComment>("add_workspace_review_comment", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async revertWorkspaceFile(
+    projectId: string,
+    relativePath: string,
+    target: RevertTarget,
+  ): Promise<WorkspaceReviewSnapshot> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      relativePath,
+      target,
+    };
+    try {
+      return await invoke<WorkspaceReviewSnapshot>("revert_workspace_file", {
+        request,
+      });
+    } catch (error) {
+      throw normalizeError(error, request.operationId);
+    }
+  }
+
+  async commitWorkspaceReview(
+    projectId: string,
+    selectedPaths: string[],
+    commitMessage: string,
+    expectedSourceDigest: string,
+    allowUnverified: boolean,
+  ): Promise<IntegrationAttempt> {
+    const request = {
+      ...this.workspaceRequest(projectId),
+      selectedPaths,
+      commitMessage,
+      expectedSourceDigest,
+      allowUnverified,
+    };
+    try {
+      return await invoke<IntegrationAttempt>("commit_workspace_review", {
         request,
       });
     } catch (error) {

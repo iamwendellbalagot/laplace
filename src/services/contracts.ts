@@ -276,6 +276,24 @@ export interface ChangeReviewSnapshot {
 
 export type ReviewDiffBaseline = "head" | "last_review";
 
+export type RevertTarget = "head" | "checkpoint";
+
+export interface WorkspaceReviewSnapshot {
+  reviewId: string;
+  branch: string | null;
+  headRevision: string;
+  sourceDigest: string;
+  changedFiles: GitFileStatus[];
+  gitOperationInProgress: boolean;
+  hasFreshPassingCheck: boolean;
+  comments: ReviewComment[];
+  lastCheckpointDigest: string | null;
+  lastCheckpointLabel: string | null;
+  lastCheckpointAt: number | null;
+  changedSinceCheckpoint: string[];
+  lastCommitSha: string | null;
+}
+
 export interface WorkspaceLayoutInfo {
   packageManager: "pnpm" | "npm" | "yarn" | null;
   layout:

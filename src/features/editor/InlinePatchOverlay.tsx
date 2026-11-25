@@ -64,7 +64,7 @@ export function InlinePatchOverlay({
             disabled={saving}
             onClick={() => void onPromoteToChange(draft)}
           >
-            Promote to Change
+            Save &amp; Review ↗
           </button>
           <button
             type="button"

@@ -688,4 +688,82 @@ describe("TauriAppService", () => {
       },
     });
   });
+
+  it("invokes zero-ceremony workspace review, checkpoint, revert, and commit commands", async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({
+        reviewId: "ws-rev-123",
+        branch: "main",
+        headRevision: "abc",
+        sourceDigest: "dig",
+        changedFiles: [],
+        gitOperationInProgress: false,
+        hasFreshPassingCheck: true,
+        comments: [],
+        lastCheckpointDigest: null,
+        lastCheckpointLabel: null,
+        lastCheckpointAt: null,
+        changedSinceCheckpoint: [],
+        lastCommitSha: null,
+      })
+      .mockResolvedValueOnce({ reviewId: "ws-rev-123" })
+      .mockResolvedValueOnce({ reviewId: "ws-rev-123" })
+      .mockResolvedValueOnce({ id: "int-1", status: "succeeded" });
+    const service = new TauriAppService();
+
+    await service.getWorkspaceReview("/work/project");
+    await service.saveWorkspaceCheckpoint("/work/project", "Before Rook Build");
+    await service.revertWorkspaceFile(
+      "/work/project",
+      "src/a.ts",
+      "checkpoint",
+    );
+    await service.commitWorkspaceReview(
+      "/work/project",
+      ["src/a.ts"],
+      "Fix bug",
+      "dig",
+      false,
+    );
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "get_workspace_review", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(
+      2,
+      "save_workspace_checkpoint",
+      {
+        request: {
+          schemaVersion: 1,
+          operationId: expect.any(String),
+          projectId: "/work/project",
+          label: "Before Rook Build",
+        },
+      },
+    );
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, "revert_workspace_file", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        relativePath: "src/a.ts",
+        target: "checkpoint",
+      },
+    });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(4, "commit_workspace_review", {
+      request: {
+        schemaVersion: 1,
+        operationId: expect.any(String),
+        projectId: "/work/project",
+        selectedPaths: ["src/a.ts"],
+        commitMessage: "Fix bug",
+        expectedSourceDigest: "dig",
+        allowUnverified: false,
+      },
+    });
+  });
 });
